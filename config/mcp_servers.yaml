@@ -1,0 +1,10 @@
+servers:
+  market-data-mcp:
+    module: mcp_servers.market_data_server
+  technical-factor-mcp:
+    module: mcp_servers.technical_factor_server
+  industry-knowledge-mcp:
+    module: mcp_servers.industry_knowledge_server
+  portfolio-risk-mcp:
+    module: mcp_servers.portfolio_risk_server
+

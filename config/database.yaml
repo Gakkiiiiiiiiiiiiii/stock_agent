@@ -1,0 +1,5 @@
+database:
+  echo: false
+  pool_pre_ping: true
+  create_schema_on_startup: true
+

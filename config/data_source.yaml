@@ -1,0 +1,8 @@
+market_data:
+  provider: local_csv
+  local_csv_dir: data/market
+  default_adjust: qfq
+news:
+  provider: local
+  local_dir: data/news
+

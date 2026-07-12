@@ -1,0 +1,8 @@
+position:
+  max_single_symbol_weight: 0.2
+  max_theme_weight: 0.4
+  default_stop_loss_pct: 0.08
+market:
+  high_risk_drawdown_pct: 0.12
+  min_daily_amount: 100000000
+

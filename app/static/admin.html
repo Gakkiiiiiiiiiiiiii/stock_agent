@@ -1,0 +1,2301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Knowledge, Skills & Agent Console</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1117;
+      --panel: #151a22;
+      --panel-2: #1b2230;
+      --panel-3: #0f141c;
+      --line: #2a3444;
+      --text: #e7edf7;
+      --muted: #94a3b8;
+      --accent: #4f8cff;
+      --accent-soft: rgba(79, 140, 255, 0.14);
+      --success: #2db67c;
+      --warn: #ffb020;
+      --danger: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Segoe UI", Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: 220px 1fr;
+      min-height: 100vh;
+    }
+    .sidebar {
+      background: #0b0f15;
+      border-right: 1px solid var(--line);
+      padding: 18px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .title {
+      font-size: 19px;
+      font-weight: 700;
+    }
+    .tabs {
+      display: grid;
+      gap: 8px;
+    }
+    .tab, button, input, textarea, select {
+      font: inherit;
+    }
+    .tab, button {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      border-radius: 6px;
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    .tab.active, button.primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+    }
+    .tab {
+      text-align: left;
+    }
+    .content {
+      padding: 18px;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 14px;
+      min-height: 100vh;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .actions.hidden {
+      display: none;
+    }
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .status.ok { color: var(--success); }
+    .status.warn { color: var(--warn); }
+    .workspace {
+      min-height: 0;
+      display: grid;
+      grid-template-columns: 300px 1fr;
+      gap: 14px;
+    }
+    .agent-workspace {
+      grid-template-columns: 260px minmax(0, 1.65fr) 360px;
+      align-items: stretch;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel-header {
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--line);
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .panel-body {
+      padding: 14px;
+      height: calc(100% - 46px);
+      overflow: auto;
+    }
+    .item-list, .session-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .item, .session-item {
+      border: 1px solid var(--line);
+      background: #131924;
+      border-radius: 6px;
+      padding: 10px;
+      cursor: pointer;
+    }
+    .item.active, .session-item.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+    .item-title, .session-title {
+      font-size: 14px;
+      font-weight: 600;
+      line-height: 1.35;
+    }
+    .item-meta, .session-meta {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.4;
+    }
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      min-width: 0;
+    }
+    .field.full {
+      grid-column: 1 / -1;
+    }
+    label {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    input, textarea, select {
+      width: 100%;
+      border-radius: 6px;
+      border: 1px solid var(--line);
+      background: var(--panel-3);
+      color: var(--text);
+      padding: 9px 10px;
+    }
+    textarea {
+      min-height: 96px;
+      resize: vertical;
+      line-height: 1.45;
+    }
+    .stock-table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    .stock-table th, .stock-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 6px 4px;
+      vertical-align: top;
+    }
+    .stock-table input {
+      padding: 6px;
+    }
+    .hidden { display: none; }
+    .hint {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .mono {
+      font-family: Consolas, "Courier New", monospace;
+      word-break: break-word;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      background: #11161f;
+      border-radius: 999px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .pill.busy {
+      color: var(--warn);
+      border-color: rgba(255, 176, 32, 0.4);
+      background: rgba(255, 176, 32, 0.08);
+    }
+    .pill.ok {
+      color: var(--success);
+      border-color: rgba(45, 182, 124, 0.35);
+      background: rgba(45, 182, 124, 0.08);
+    }
+    .pill.warn {
+      color: var(--danger);
+      border-color: rgba(255, 107, 107, 0.35);
+      background: rgba(255, 107, 107, 0.08);
+    }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .session-shell, .agent-shell, .trace-shell {
+      display: grid;
+      gap: 12px;
+      height: 100%;
+      min-height: 0;
+    }
+    .session-shell {
+      grid-template-rows: auto auto 1fr;
+    }
+    .agent-shell {
+      grid-template-rows: auto 1fr auto;
+    }
+    .trace-shell {
+      grid-template-rows: auto auto auto 1fr;
+    }
+    .agent-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 280px) 1fr auto;
+      gap: 12px;
+      align-items: end;
+    }
+    .chat-log {
+      min-height: 0;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f141c;
+      padding: 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .message {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-width: 86%;
+    }
+    .message.user {
+      align-self: flex-end;
+    }
+    .message.assistant {
+      align-self: stretch;
+      max-width: 100%;
+    }
+    .message-role {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .message-body {
+      white-space: pre-wrap;
+      line-height: 1.55;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #161d29;
+      padding: 11px 12px;
+    }
+    .message.user .message-body {
+      background: var(--accent-soft);
+      border-color: rgba(79, 140, 255, 0.4);
+    }
+    .message.assistant .message-body {
+      width: 100%;
+    }
+    .assistant-trace {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101621;
+      overflow: hidden;
+      width: 100%;
+    }
+    .assistant-trace-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(42, 52, 68, 0.7);
+      flex-wrap: wrap;
+    }
+    .assistant-trace-title {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .assistant-trace-meta {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .assistant-trace-body {
+      padding: 10px 12px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .assistant-trace-empty {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .composer {
+      display: grid;
+      gap: 10px;
+    }
+    .composer textarea {
+      min-height: 128px;
+    }
+    .composer-actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .inline-actions {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .meta-card, .trace-step, .tool-card, .summary-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #121925;
+      padding: 10px;
+      min-width: 0;
+    }
+    .meta-card.span {
+      grid-column: 1 / -1;
+    }
+    .meta-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    .meta-value {
+      margin-top: 6px;
+      line-height: 1.45;
+    }
+    .section {
+      min-height: 0;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 8px;
+    }
+    .section-title {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .trace-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding-bottom: 4px;
+      border-bottom: 1px solid rgba(42, 52, 68, 0.7);
+    }
+    .trace-toolbar-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .trace-heading {
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .count-badge {
+      min-width: 18px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: #1b2332;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .trace-action {
+      padding: 7px 10px;
+      font-size: 12px;
+    }
+    .trace-feed-shell {
+      min-height: 0;
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 2px;
+    }
+    .trace-summary-strip {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .summary-label {
+      font-size: 11px;
+      color: var(--muted);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+    .summary-value {
+      line-height: 1.45;
+    }
+    .trace-card-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      align-items: flex-start;
+    }
+    .trace-card-index {
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+    .trace-feed {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .trace-event {
+      margin-top: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #121925;
+      overflow: hidden;
+    }
+    .trace-event[open] {
+      border-color: rgba(79, 140, 255, 0.35);
+      background: #141c28;
+    }
+    .trace-event summary {
+      list-style: none;
+      margin: 0;
+      padding: 10px 12px;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+      color: inherit;
+      font-size: inherit;
+    }
+    .trace-event summary::-webkit-details-marker {
+      display: none;
+    }
+    .trace-event-main {
+      min-width: 0;
+      display: flex;
+      gap: 10px;
+      align-items: flex-start;
+      flex: 1;
+    }
+    .trace-event-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      margin-top: 5px;
+      flex: 0 0 auto;
+      background: var(--muted);
+      box-shadow: 0 0 0 4px rgba(148, 163, 184, 0.12);
+    }
+    .trace-event.selection .trace-event-dot {
+      background: #60a5fa;
+      box-shadow: 0 0 0 4px rgba(96, 165, 250, 0.14);
+    }
+    .trace-event.thinking .trace-event-dot {
+      background: #f59e0b;
+      box-shadow: 0 0 0 4px rgba(245, 158, 11, 0.14);
+    }
+    .trace-event.tool .trace-event-dot {
+      background: #34d399;
+      box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.14);
+    }
+    .trace-event.report .trace-event-dot {
+      background: #a78bfa;
+      box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.14);
+    }
+    .trace-event.warn .trace-event-dot,
+    .trace-event.error .trace-event-dot {
+      background: #fb7185;
+      box-shadow: 0 0 0 4px rgba(251, 113, 133, 0.14);
+    }
+    .trace-event-body {
+      min-width: 0;
+      flex: 1;
+    }
+    .trace-event-topline {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-bottom: 4px;
+    }
+    .trace-event-kind {
+      font-size: 10px;
+      color: var(--muted);
+      text-transform: uppercase;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 2px 6px;
+      background: #101621;
+    }
+    .trace-event-title {
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+    .trace-event-preview {
+      font-size: 12px;
+      color: var(--muted);
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      white-space: normal;
+    }
+    .trace-event-status {
+      flex: 0 0 auto;
+      font-size: 11px;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 8px;
+      background: #101621;
+    }
+    .trace-event.running .trace-event-status {
+      color: var(--warn);
+      border-color: rgba(255, 176, 32, 0.35);
+    }
+    .trace-event.done .trace-event-status {
+      color: var(--success);
+      border-color: rgba(45, 182, 124, 0.35);
+    }
+    .trace-event.warn .trace-event-status,
+    .trace-event.error .trace-event-status {
+      color: var(--danger);
+      border-color: rgba(255, 107, 107, 0.35);
+    }
+    .trace-event-detail {
+      padding: 0 12px 12px 32px;
+      display: grid;
+      gap: 8px;
+    }
+    .trace-event-detail-text {
+      white-space: pre-wrap;
+      line-height: 1.55;
+      font-size: 12px;
+    }
+    .content-preview {
+      white-space: pre-wrap;
+      line-height: 1.5;
+      color: var(--text);
+      display: -webkit-box;
+      -webkit-line-clamp: 4;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .content-preview.compact {
+      -webkit-line-clamp: 3;
+    }
+    .frame-gallery {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .frame-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #121925;
+      overflow: hidden;
+    }
+    .frame-image {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      object-fit: cover;
+      display: block;
+      background: #0d131b;
+      border-bottom: 1px solid var(--line);
+    }
+    .frame-body {
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+    }
+    .frame-meta {
+      font-size: 11px;
+      color: var(--muted);
+    }
+    .frame-text {
+      white-space: pre-wrap;
+      line-height: 1.5;
+      font-size: 12px;
+    }
+    .analysis-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 12px;
+      margin-top: 14px;
+    }
+    .analysis-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #121925;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+    }
+    .analysis-card h4 {
+      margin: 0;
+      font-size: 13px;
+    }
+    .analysis-list {
+      display: grid;
+      gap: 8px;
+      max-height: 360px;
+      overflow: auto;
+    }
+    .analysis-item {
+      border: 1px solid rgba(255,255,255,0.06);
+      border-radius: 8px;
+      background: #0f151e;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+    }
+    .analysis-item-title {
+      font-size: 12px;
+      font-weight: 600;
+      line-height: 1.45;
+    }
+    .analysis-item-meta {
+      font-size: 11px;
+      color: var(--muted);
+      line-height: 1.45;
+    }
+    .trace-empty {
+      padding: 12px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: #101621;
+    }
+    .trace-list, .tool-list {
+      overflow: auto;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      padding-right: 2px;
+    }
+    .trace-type {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .trace-title, .tool-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+    details {
+      margin-top: 8px;
+    }
+    summary {
+      cursor: pointer;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    pre {
+      margin: 8px 0 0;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 12px;
+      line-height: 1.45;
+      background: #0d131b;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 10px;
+      overflow: auto;
+    }
+    @media (max-width: 1440px) {
+      .agent-workspace {
+        grid-template-columns: 240px minmax(0, 1fr) 340px;
+      }
+    }
+    @media (max-width: 1280px) {
+      .agent-workspace {
+        grid-template-columns: 1fr;
+      }
+      .trace-shell {
+        grid-template-rows: auto auto auto minmax(260px, 1fr);
+      }
+    }
+    @media (max-width: 980px) {
+      .layout, .workspace, .form-grid, .meta-grid, .agent-toolbar, .trace-summary-strip {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        border-right: none;
+        border-bottom: 1px solid var(--line);
+      }
+      .content {
+        grid-template-rows: auto 1fr;
+      }
+      .message {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="title">Admin Console</div>
+      <div class="tabs">
+        <button class="tab active" data-tab="themes">Themes</button>
+        <button class="tab" data-tab="docs">Docs</button>
+        <button class="tab" data-tab="videos">Videos</button>
+        <button class="tab" data-tab="skills">Skills</button>
+        <button class="tab" data-tab="agent">Agent</button>
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="actions" id="globalActions">
+        <button class="primary" id="saveButton">保存</button>
+        <button id="reloadButton">刷新</button>
+        <button id="createButton">新建</button>
+        <button id="deleteButton" class="hidden">删除</button>
+        <span class="status" id="statusText">Ready</span>
+      </div>
+
+      <div id="themesView" class="workspace">
+        <section class="panel">
+          <div class="panel-header">Theme Library</div>
+          <div class="panel-body"><div class="item-list" id="themeList"></div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">Theme Editor</div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="field"><label>主题名</label><input id="themeName" /></div>
+              <div class="field"><label>别名（每行一个）</label><textarea id="themeAliases"></textarea></div>
+              <div class="field full"><label>核心逻辑</label><textarea id="themeThesis"></textarea></div>
+              <div class="field"><label>产业链（每行一个）</label><textarea id="themeIndustry"></textarea></div>
+              <div class="field"><label>催化因素（每行一个）</label><textarea id="themeCatalysts"></textarea></div>
+              <div class="field"><label>监控关键词（每行一个）</label><textarea id="themeKeywords"></textarea></div>
+              <div class="field"><label>触发规则（每行一个）</label><textarea id="themeTriggers"></textarea></div>
+              <div class="field"><label>证伪条件（每行一个）</label><textarea id="themeInvalidations"></textarea></div>
+              <div class="field full"><label>风险因素（每行一个）</label><textarea id="themeRisks"></textarea></div>
+              <div class="field full">
+                <label>相关标的</label>
+                <table class="stock-table">
+                  <thead><tr><th>代码</th><th>名称</th><th>关联</th><th>弹性</th><th>确定性</th><th></th></tr></thead>
+                  <tbody id="stocksBody"></tbody>
+                </table>
+                <div class="inline-actions" style="margin-top:8px;"><button type="button" id="addStockButton">新增标的</button></div>
+              </div>
+              <div class="field full"><label>生成的 Markdown 预览</label><textarea id="themeMarkdown" readonly></textarea></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="docsView" class="workspace hidden">
+        <section class="panel">
+          <div class="panel-header">Knowledge Docs</div>
+          <div class="panel-body"><div class="item-list" id="docList"></div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">Markdown Editor</div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="field full"><label>文档路径</label><input id="docPath" /></div>
+              <div class="field full"><label>内容</label><textarea id="docContent" style="min-height:560px;"></textarea></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="videosView" class="workspace hidden">
+        <section class="panel">
+          <div class="panel-header">Video Summaries</div>
+          <div class="panel-body">
+            <div class="toolbar">
+              <button id="deleteVideoSummaryButton" disabled>删除总结</button>
+            </div>
+            <div class="hint" style="margin-top:10px;">这里展示已经完成解析的视频及其总结文档。</div>
+            <div class="item-list" id="videoList" style="margin-top:12px;"></div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">Summary Document</div>
+          <div class="panel-body">
+            <div class="meta-grid" id="videoMetaGrid"></div>
+            <div class="form-grid" style="margin-top:12px;">
+              <div class="field full"><label>Markdown 路径</label><input id="videoSummaryPath" readonly /></div>
+              <div class="field full"><label>总结文档</label><textarea id="videoSummaryContent" readonly style="min-height:560px;"></textarea></div>
+            </div>
+            <div class="analysis-grid">
+              <div class="analysis-card">
+                <h4>Chapter Chunks</h4>
+                <div id="videoChunkList" class="analysis-list"></div>
+              </div>
+              <div class="analysis-card">
+                <h4>Event Timeline</h4>
+                <div id="videoEventTimeline" class="analysis-list"></div>
+              </div>
+              <div class="analysis-card">
+                <h4>Financial Events</h4>
+                <div id="videoEventList" class="analysis-list"></div>
+              </div>
+            </div>
+            <div class="section" style="margin-top:16px;">
+              <div class="section-title">Visual Frames</div>
+              <div id="videoFrameGallery" class="frame-gallery"></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="skillsView" class="workspace hidden">
+        <section class="panel">
+          <div class="panel-header">Skills</div>
+          <div class="panel-body"><div class="item-list" id="skillList"></div></div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">Skill Editor</div>
+          <div class="panel-body">
+            <div class="form-grid">
+              <div class="field"><label>Slug</label><input id="skillSlug" /></div>
+              <div class="field"><label>Name</label><input id="skillName" /></div>
+              <div class="field full"><label>Description</label><textarea id="skillDescription"></textarea></div>
+              <div class="field full"><label>Content</label><textarea id="skillContent" style="min-height:520px;"></textarea></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div id="agentView" class="workspace agent-workspace hidden">
+        <section class="panel">
+          <div class="panel-header">Conversation History</div>
+          <div class="panel-body">
+            <div class="session-shell">
+              <div class="toolbar">
+                <button class="primary" id="newSessionButton">新建会话</button>
+                <button id="deleteSessionButton">删除</button>
+              </div>
+              <div class="hint">选择历史会话后，可直接在中间对话区继续追问。</div>
+              <div class="session-list" id="sessionList"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">Investment Agent Chat</div>
+          <div class="panel-body">
+            <div class="agent-shell">
+              <div class="agent-toolbar">
+                <div class="field">
+                  <label>执行 Skill</label>
+                  <select id="agentSkill"><option value="">Auto Select</option></select>
+                </div>
+                <div class="field">
+                  <label>当前会话</label>
+                  <div class="hint" id="activeSessionTitle">未选择会话，发送时会自动创建。</div>
+                </div>
+                <div class="field">
+                  <label>运行状态</label>
+                  <div class="pill" id="agentRunState">Idle</div>
+                </div>
+              </div>
+
+              <div id="chatLog" class="chat-log"></div>
+
+              <div class="composer">
+                <textarea id="agentInput" placeholder="例如：延续上一次结论，明天盘中最先验证哪些信号？如果黄金走弱，备选方向是什么？"></textarea>
+                <div class="composer-actions">
+                  <div class="inline-actions">
+                    <button class="primary" id="agentSendButton">发送</button>
+                    <button id="agentClearButton">清空当前窗口</button>
+                  </div>
+                  <div class="hint">Ctrl+Enter 发送</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">Run Summary</div>
+          <div class="panel-body">
+            <div class="trace-shell">
+              <div class="meta-grid">
+                <div class="meta-card"><div class="meta-label">Orchestration</div><div class="meta-value mono" id="agentOrchestration">-</div></div>
+                <div class="meta-card"><div class="meta-label">Selected Skill</div><div class="meta-value mono" id="agentSelectedSkill">-</div></div>
+                <div class="meta-card span"><div class="meta-label">Selection Reason</div><div class="meta-value" id="agentSelectionReason">-</div></div>
+              </div>
+              <div class="meta-card"><div class="meta-label">Runtime</div><div class="meta-value" id="agentRuntimeHint">发送问题后，这里会实时显示当前执行状态。</div></div>
+              <div class="trace-feed-shell">
+                <div class="trace-summary-strip" id="traceSummary"></div>
+                <div class="hint">详细执行事件流已嵌入当前 assistant 回复下方。</div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const state = {
+      tab: "themes",
+      activeTheme: null,
+      activeDoc: null,
+      activeVideoKey: null,
+      activeVideoId: null,
+      activeVideoDocPath: null,
+      activeVideoItem: null,
+      activeVideoDetail: null,
+      activeVideoDocument: null,
+      videoList: [],
+      activeSkill: null,
+      agent: {
+        skillOptionsLoaded: false,
+        messages: [],
+        lastResponse: null,
+        running: false,
+        runtimeHint: "等待提问",
+        sessionList: [],
+        currentSessionId: null,
+        currentSessionTitle: "",
+        traceExpanded: false,
+        traceFeed: [],
+      },
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    document.querySelectorAll(".tab").forEach((button) => button.addEventListener("click", () => switchTab(button.dataset.tab)));
+    $("reloadButton").addEventListener("click", () => loadActiveTab(true));
+    $("createButton").addEventListener("click", createItem);
+    $("deleteButton").addEventListener("click", deleteActiveItem);
+    $("saveButton").addEventListener("click", saveActiveItem);
+    $("addStockButton").addEventListener("click", () => appendStockRow());
+    $("deleteVideoSummaryButton").addEventListener("click", deleteActiveVideoSummary);
+    $("agentSendButton").addEventListener("click", sendAgentQuery);
+    $("agentClearButton").addEventListener("click", clearAgentWindow);
+    $("newSessionButton").addEventListener("click", createAgentSession);
+    $("deleteSessionButton").addEventListener("click", deleteCurrentSession);
+    $("agentInput").addEventListener("keydown", (event) => {
+      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+        event.preventDefault();
+        sendAgentQuery();
+      }
+    });
+    syncGlobalActions();
+
+    function switchTab(tab) {
+      state.tab = tab;
+      document.querySelectorAll(".tab").forEach((el) => el.classList.toggle("active", el.dataset.tab === tab));
+      $("themesView").classList.toggle("hidden", tab !== "themes");
+      $("docsView").classList.toggle("hidden", tab !== "docs");
+      $("videosView").classList.toggle("hidden", tab !== "videos");
+      $("skillsView").classList.toggle("hidden", tab !== "skills");
+      $("agentView").classList.toggle("hidden", tab !== "agent");
+      syncGlobalActions();
+      loadActiveTab();
+    }
+
+    function syncGlobalActions() {
+      const isAgentTab = state.tab === "agent";
+      const isVideoTab = state.tab === "videos";
+      const isDocsVideoSummary = state.tab === "docs" && typeof state.activeDoc === "string" && state.activeDoc.startsWith("video_summaries/");
+      $("globalActions").classList.toggle("hidden", isAgentTab);
+      $("saveButton").classList.toggle("hidden", isVideoTab);
+      $("createButton").classList.toggle("hidden", isVideoTab);
+      $("deleteButton").classList.toggle("hidden", !(isVideoTab || isDocsVideoSummary));
+      $("reloadButton").textContent = isVideoTab ? "刷新视频" : "刷新";
+      $("deleteButton").textContent = isVideoTab ? "删除总结" : "删除文档";
+    }
+
+    async function loadActiveTab(force = false) {
+      setStatus("Loading...");
+      if (state.tab === "themes") return loadThemes();
+      if (state.tab === "docs") return loadDocs();
+      if (state.tab === "videos") return loadVideos(force);
+      if (state.tab === "skills") return loadSkills();
+      return loadAgentConsole(force);
+    }
+
+    async function loadThemes() {
+      const res = await fetch("/api/v1/admin/themes");
+      const data = await res.json();
+      $("themeList").innerHTML = "";
+      data.items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "item" + (item.theme_name === state.activeTheme ? " active" : "");
+        card.innerHTML = `<div class="item-title">${escapeHtml(item.theme_name)}</div><div class="item-meta">${item.related_stock_count} stocks · ${item.catalyst_count} catalysts</div>`;
+        card.onclick = () => loadThemeDetail(item.theme_name);
+        $("themeList").appendChild(card);
+      });
+      if (!state.activeTheme && data.items.length) return loadThemeDetail(data.items[0].theme_name);
+      setStatus("Themes loaded", true);
+    }
+
+    async function loadThemeDetail(themeName) {
+      const res = await fetch(`/api/v1/admin/themes/${encodeURIComponent(themeName)}`);
+      const data = await res.json();
+      state.activeTheme = data.theme_name;
+      $("themeName").value = data.theme_name || "";
+      $("themeAliases").value = (data.aliases || []).join("\n");
+      $("themeThesis").value = data.core_thesis || "";
+      $("themeIndustry").value = (data.industry_chain || []).join("\n");
+      $("themeCatalysts").value = (data.catalysts || []).join("\n");
+      $("themeKeywords").value = (data.monitor_keywords || []).join("\n");
+      $("themeTriggers").value = (data.trigger_rules || []).join("\n");
+      $("themeInvalidations").value = (data.invalidation_rules || []).join("\n");
+      $("themeRisks").value = (data.risks || []).join("\n");
+      $("themeMarkdown").value = data.markdown_content || "";
+      renderStocks(data.related_stocks || []);
+      await loadThemes();
+    }
+
+    function renderStocks(stocks) {
+      $("stocksBody").innerHTML = "";
+      stocks.forEach((stock) => appendStockRow(stock));
+    }
+
+    function appendStockRow(stock = {}) {
+      const row = document.createElement("tr");
+      row.innerHTML = `
+        <td><input data-key="symbol" value="${escapeHtml(stock.symbol || "")}" /></td>
+        <td><input data-key="name" value="${escapeHtml(stock.name || "")}" /></td>
+        <td><input data-key="relation" value="${escapeHtml(stock.relation || "")}" /></td>
+        <td><input data-key="sensitivity_score" type="number" step="1" value="${escapeHtml(String(stock.sensitivity_score ?? 50))}" /></td>
+        <td><input data-key="certainty_score" type="number" step="1" value="${escapeHtml(String(stock.certainty_score ?? 50))}" /></td>
+        <td><button type="button">删</button></td>`;
+      row.querySelector("button").onclick = () => row.remove();
+      $("stocksBody").appendChild(row);
+    }
+
+    async function loadDocs() {
+      const res = await fetch("/api/v1/admin/docs");
+      const data = await res.json();
+      $("docList").innerHTML = "";
+      data.items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "item" + (item.path === state.activeDoc ? " active" : "");
+        card.innerHTML = `<div class="item-title">${escapeHtml(item.title)}</div><div class="item-meta mono">${escapeHtml(item.path)}</div>`;
+        card.onclick = () => loadDocDetail(item.path);
+        $("docList").appendChild(card);
+      });
+      if (!state.activeDoc && data.items.length) return loadDocDetail(data.items[0].path);
+      syncGlobalActions();
+      setStatus("Docs loaded", true);
+    }
+
+    async function loadDocDetail(path) {
+      const res = await fetch(`/api/v1/admin/docs/content?path=${encodeURIComponent(path)}`);
+      const data = await res.json();
+      state.activeDoc = data.path;
+      $("docPath").value = data.path;
+      $("docContent").value = data.content || "";
+      syncGlobalActions();
+      await loadDocs();
+    }
+
+    async function loadVideos(force = false) {
+      const res = await fetch("/api/v1/content/videos?summary_mode=investment&limit=50");
+      await ensureOk(res);
+      const data = await res.json();
+      state.videoList = data.items || [];
+      renderVideoList();
+
+      if (!state.videoList.length) {
+        state.activeVideoKey = null;
+        state.activeVideoId = null;
+        state.activeVideoDocPath = null;
+        state.activeVideoItem = null;
+        state.activeVideoDetail = null;
+        state.activeVideoDocument = null;
+        renderVideoDetail();
+        setStatus("暂无已解析视频", true);
+        return;
+      }
+
+      const activeExists = state.videoList.some((item) => getVideoItemKey(item) === state.activeVideoKey);
+      const targetItem = activeExists ? state.videoList.find((item) => getVideoItemKey(item) === state.activeVideoKey) : state.videoList[0];
+      if (!targetItem) {
+        setStatus("Videos loaded", true);
+        return;
+      }
+      await loadVideoDetail(targetItem);
+    }
+
+    async function loadVideoDetail(itemOrVideoId) {
+      const item = typeof itemOrVideoId === "object"
+        ? itemOrVideoId
+        : state.videoList.find((candidate) => candidate.video_id === itemOrVideoId) || null;
+      if (!item) {
+        setStatus("未找到视频总结", false, true);
+        return;
+      }
+
+      let detail = null;
+      let documentPayload = null;
+      if (item.video_id != null) {
+        const [detailRes, documentRes] = await Promise.all([
+          fetch(`/api/v1/content/videos/${item.video_id}?summary_mode=investment`),
+          fetch(`/api/v1/content/videos/${item.video_id}/summary-document?summary_mode=investment`),
+        ]);
+        await ensureOk(detailRes);
+        detail = await detailRes.json();
+        if (documentRes.status !== 404) {
+          await ensureOk(documentRes);
+          documentPayload = await documentRes.json();
+        }
+      } else if (item.summary_doc_path) {
+        const docRes = await fetch(`/api/v1/admin/docs/content?path=${encodeURIComponent(item.summary_doc_path)}`);
+        await ensureOk(docRes);
+        const doc = await docRes.json();
+        documentPayload = {
+          path: item.summary_export_path || item.summary_doc_path,
+          content: doc.content || "",
+          source: item.summary_source || "markdown_only",
+        };
+        detail = {
+          video: {
+            id: null,
+            title: item.title,
+            bvid: item.bvid,
+            author_name: item.author_name,
+            publish_time: item.publish_time,
+            duration_seconds: item.duration_seconds,
+            asr_model: item.asr_model,
+          },
+          summary: {
+            llm_model: item.summary_model,
+            confidence_score: item.summary_confidence,
+            core_summary: "",
+            themes: [],
+            symbols: [],
+          },
+          summary_export_path: item.summary_export_path || item.summary_doc_path,
+        };
+      }
+      state.activeVideoKey = getVideoItemKey(item);
+      state.activeVideoId = item.video_id;
+      state.activeVideoDocPath = item.summary_doc_path || null;
+      state.activeVideoItem = item;
+      state.activeVideoDetail = detail;
+      state.activeVideoDocument = documentPayload;
+      renderVideoList();
+      renderVideoDetail();
+      setStatus("视频总结已加载", true);
+    }
+
+    function renderVideoList() {
+      const list = $("videoList");
+      list.innerHTML = "";
+      if (!state.videoList.length) {
+        const empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "还没有可展示的视频总结。";
+        list.appendChild(empty);
+        return;
+      }
+      state.videoList.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "item" + (getVideoItemKey(item) === state.activeVideoKey ? " active" : "");
+        card.innerHTML = `
+          <div class="item-title">${escapeHtml(item.title || "未命名视频")}</div>
+          <div class="item-meta">${escapeHtml(item.publish_time || "未知时间")} · ${escapeHtml(item.author_name || "未知作者")}</div>
+          <div class="item-meta mono">${escapeHtml(item.bvid || "")}</div>
+          <div class="item-meta">ASR: ${escapeHtml(item.asr_model || "unknown")} · Summary: ${escapeHtml(item.summary_model || "pending")} · ${escapeHtml(item.summary_source || "database")}</div>
+        `;
+        card.onclick = () => loadVideoDetail(item);
+        list.appendChild(card);
+      });
+    }
+
+    function renderVideoDetail() {
+      const detail = state.activeVideoDetail;
+      const documentPayload = state.activeVideoDocument;
+      const metaGrid = $("videoMetaGrid");
+      if (!detail) {
+        metaGrid.innerHTML = `<div class="meta-card span"><div class="meta-label">Video Summary</div><div class="meta-value">选择左侧视频后，这里会展示总结文档与元信息。</div></div>`;
+        $("videoSummaryPath").value = "";
+        $("videoSummaryContent").value = "";
+        $("videoFrameGallery").innerHTML = "";
+        $("videoChunkList").innerHTML = "";
+        $("videoEventTimeline").innerHTML = "";
+        $("videoEventList").innerHTML = "";
+        $("deleteVideoSummaryButton").disabled = true;
+        return;
+      }
+      $("deleteVideoSummaryButton").disabled = false;
+
+      const video = detail.video || {};
+      const summary = detail.summary || {};
+      metaGrid.innerHTML = `
+        <div class="meta-card"><div class="meta-label">标题</div><div class="meta-value">${escapeHtml(video.title || "-")}</div></div>
+        <div class="meta-card"><div class="meta-label">BV / 发布</div><div class="meta-value mono">${escapeHtml(video.bvid || "-")} · ${escapeHtml(video.publish_time || "-")}</div></div>
+        <div class="meta-card"><div class="meta-label">作者 / 时长</div><div class="meta-value">${escapeHtml(video.author_name || "-")} · ${escapeHtml(formatDuration(video.duration_seconds))}</div></div>
+        <div class="meta-card"><div class="meta-label">转写 / 总结模型</div><div class="meta-value">${escapeHtml(video.asr_model || "-")} · ${escapeHtml(summary.llm_model || "-")}</div></div>
+        <div class="meta-card"><div class="meta-label">视频类型 / 事件数</div><div class="meta-value">${escapeHtml(detail.video_type || summary.video_type || "-")} · ${escapeHtml(String((detail.events || []).length || 0))}</div></div>
+        <div class="meta-card"><div class="meta-label">主题</div><div class="meta-value">${escapeHtml((summary.themes || []).join("、") || "未提取")}</div></div>
+        <div class="meta-card"><div class="meta-label">标的</div><div class="meta-value">${escapeHtml((summary.symbols || []).join("、") || "未提取")}</div></div>
+        <div class="meta-card"><div class="meta-label">置信度 / 文档来源</div><div class="meta-value">${escapeHtml(String(summary.confidence_score ?? "-"))} · ${escapeHtml(documentPayload?.source || "summary_payload")}</div></div>
+        <div class="meta-card"><div class="meta-label">摘要状态</div><div class="meta-value">${escapeHtml(summary.core_summary || "暂无核心摘要")}</div></div>
+      `;
+      $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || "";
+      $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || "";
+      renderVideoChunks(detail.chunks || []);
+      renderVideoTimeline(detail.event_timeline || []);
+      renderVideoEvents(detail.events || []);
+      renderVideoFrames(detail.visual_frames || [], video.id);
+    }
+
+    async function deleteActiveVideoSummary() {
+      if (!state.activeVideoId && !state.activeVideoDocPath) {
+        setStatus("当前没有可删除的总结", false, true);
+        return;
+      }
+      const title = state.activeVideoDetail?.video?.title || "该视频";
+      if (!window.confirm(`确认删除《${title}》的总结文档吗？这会同时删除 Markdown 和向量知识。`)) {
+        return;
+      }
+      try {
+        const url = state.activeVideoId != null
+          ? `/api/v1/content/videos/${state.activeVideoId}/summary?summary_mode=investment`
+          : `/api/v1/admin/docs/content?path=${encodeURIComponent(state.activeVideoDocPath)}&summary_mode=investment`;
+        const res = await fetch(url, { method: "DELETE" });
+        await ensureOk(res);
+        state.activeVideoKey = null;
+        state.activeVideoId = null;
+        state.activeVideoDocPath = null;
+        state.activeVideoItem = null;
+        state.activeVideoDetail = null;
+        state.activeVideoDocument = null;
+        await loadVideos(true);
+        setStatus("视频总结已删除", true);
+      } catch (error) {
+        setStatus(error.message || "删除失败", false, true);
+      }
+    }
+
+    function getVideoItemKey(item) {
+      return item?.video_id != null ? `video:${item.video_id}` : `doc:${item?.summary_doc_path || item?.summary_export_path || item?.title || ""}`;
+    }
+
+    function renderVideoFrames(frames, videoId) {
+      const gallery = $("videoFrameGallery");
+      gallery.innerHTML = "";
+      if (!frames.length || videoId == null) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = videoId == null ? "当前是 Markdown-only 总结，暂无可回放的视觉帧。" : "当前视频还没有提取到视觉帧。";
+        gallery.appendChild(empty);
+        return;
+      }
+      frames.forEach((frame) => {
+        const card = document.createElement("div");
+        card.className = "frame-card";
+        const imageUrl = `/api/v1/content/videos/${videoId}/frames/${frame.frame_index}/image`;
+        card.innerHTML = `
+          <img class="frame-image" src="${imageUrl}" alt="frame ${frame.frame_index}" />
+          <div class="frame-body">
+            <div class="frame-meta mono">${escapeHtml(formatTimestampMs(frame.timestamp_ms))} · ${escapeHtml(frame.trigger_source || "frame")} · confidence ${escapeHtml(String(frame.confidence_score ?? "-"))}</div>
+            <div class="frame-text">${escapeHtml(frame.visual_summary || "暂无视觉摘要")}</div>
+            <div class="frame-text"><strong>OCR</strong>\n${escapeHtml(frame.ocr_text || "未识别到文本")}</div>
+            <div class="frame-text"><strong>关联口播</strong>\n${escapeHtml(frame.related_text || "未找到相关口播")}</div>
+          </div>
+        `;
+        gallery.appendChild(card);
+      });
+    }
+
+    function renderVideoChunks(chunks) {
+      const container = $("videoChunkList");
+      container.innerHTML = "";
+      if (!chunks.length) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = "当前视频还没有章节切片。";
+        container.appendChild(empty);
+        return;
+      }
+      chunks.forEach((chunk) => {
+        const card = document.createElement("div");
+        card.className = "analysis-item";
+        card.innerHTML = `
+          <div class="analysis-item-title">${escapeHtml(chunk.topic || `章节 ${Number(chunk.chunk_index || 0) + 1}`)}</div>
+          <div class="analysis-item-meta mono">${escapeHtml(formatTimestampMs(chunk.start_ms))} - ${escapeHtml(formatTimestampMs(chunk.end_ms))} · confidence ${escapeHtml(String(chunk.confidence_score ?? "-"))}</div>
+          <div class="frame-text">${escapeHtml(chunk.transcript_text || "暂无口播")}</div>
+          <div class="analysis-item-meta">OCR: ${escapeHtml(chunk.ocr_text || "无")}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function renderVideoTimeline(items) {
+      const container = $("videoEventTimeline");
+      container.innerHTML = "";
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = "当前视频还没有事件时间线。";
+        container.appendChild(empty);
+        return;
+      }
+      items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "analysis-item";
+        card.innerHTML = `
+          <div class="analysis-item-title">${escapeHtml(item.statement || "未命名事件")}</div>
+          <div class="analysis-item-meta mono">${escapeHtml(formatTimestampMs(item.start_ms))} - ${escapeHtml(formatTimestampMs(item.end_ms))} · ${escapeHtml(item.event_type || "-")} · ${escapeHtml(item.sentiment || "-")}</div>
+          <div class="analysis-item-meta">状态: ${escapeHtml(item.conflict_status || "active")} · 条件: ${escapeHtml(item.condition_text || "无")} · 证伪: ${escapeHtml(item.invalidation_text || "无")}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    function renderVideoEvents(events) {
+      const container = $("videoEventList");
+      container.innerHTML = "";
+      if (!events.length) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = "当前视频还没有抽取到结构化金融事件。";
+        container.appendChild(empty);
+        return;
+      }
+      events.forEach((event) => {
+        const entities = (event.entities || []).map((item) => item.ticker || item.name).filter(Boolean).join("、");
+        const evidence = (event.evidence || []).map((item) => item.source_type).filter(Boolean).join(" + ");
+        const card = document.createElement("div");
+        card.className = "analysis-item";
+        card.innerHTML = `
+          <div class="analysis-item-title">${escapeHtml(event.statement || "未命名事件")}</div>
+          <div class="analysis-item-meta mono">${escapeHtml(event.event_type || "-")} / ${escapeHtml(event.claim_type || "-")} / ${escapeHtml(event.sentiment || "-")} · ${escapeHtml(formatTimestampMs(event.start_ms))}</div>
+          <div class="analysis-item-meta">实体: ${escapeHtml(entities || "未识别")} · 证据: ${escapeHtml(evidence || "无")} · 状态: ${escapeHtml(event.conflict_status || "active")}</div>
+          <div class="analysis-item-meta">条件: ${escapeHtml(event.condition_text || "无")} · 证伪: ${escapeHtml(event.invalidation_text || "无")}</div>
+        `;
+        container.appendChild(card);
+      });
+    }
+
+    async function loadSkills() {
+      const res = await fetch("/api/v1/admin/skills");
+      const data = await res.json();
+      $("skillList").innerHTML = "";
+      data.items.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "item" + (item.slug === state.activeSkill ? " active" : "");
+        card.innerHTML = `<div class="item-title">${escapeHtml(item.name)}</div><div class="item-meta mono">${escapeHtml(item.slug)}</div>`;
+        card.onclick = () => loadSkillDetail(item.slug);
+        $("skillList").appendChild(card);
+      });
+      if (!state.activeSkill && data.items.length) return loadSkillDetail(data.items[0].slug);
+      setStatus("Skills loaded", true);
+    }
+
+    async function loadSkillDetail(slug) {
+      const res = await fetch(`/api/v1/admin/skills/${encodeURIComponent(slug)}`);
+      const data = await res.json();
+      state.activeSkill = data.slug;
+      $("skillSlug").value = data.slug || "";
+      $("skillName").value = data.name || "";
+      $("skillDescription").value = data.description || "";
+      $("skillContent").value = data.content || "";
+      await loadSkills();
+    }
+
+    async function loadAgentConsole(force = false) {
+      if (!state.agent.skillOptionsLoaded || force) {
+        const res = await fetch("/api/v1/admin/skills");
+        const data = await res.json();
+        const select = $("agentSkill");
+        select.innerHTML = `<option value="">Auto Select</option>`;
+        data.items.forEach((item) => {
+          const option = document.createElement("option");
+          option.value = item.slug;
+          option.textContent = `${item.name} (${item.slug})`;
+          select.appendChild(option);
+        });
+        state.agent.skillOptionsLoaded = true;
+      }
+      await loadAgentSessions(force);
+      renderSessionList();
+      renderChatLog();
+      renderTrace(state.agent.lastResponse);
+      setAgentRuntime(state.agent.runtimeHint, state.agent.running ? "busy" : "");
+      syncActiveSessionTitle();
+      setStatus("Agent console ready", true);
+    }
+
+    async function loadAgentSessions(force = false) {
+      const res = await fetch("/api/v1/agent/sessions");
+      const data = await res.json();
+      state.agent.sessionList = data.items || [];
+      if (!state.agent.currentSessionId && state.agent.sessionList.length && force) {
+        await openAgentSession(state.agent.sessionList[0].session_id);
+      }
+    }
+
+    async function createAgentSession() {
+      const res = await fetch("/api/v1/agent/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: "New Conversation" }),
+      });
+      await ensureOk(res);
+      const created = await res.json();
+      state.agent.currentSessionId = created.session_id;
+      state.agent.currentSessionTitle = created.title || "New Conversation";
+      state.agent.messages = [];
+      state.agent.lastResponse = null;
+      state.agent.runtimeHint = "新会话已创建";
+      state.agent.traceFeed = [];
+      await loadAgentSessions();
+      renderSessionList();
+      renderChatLog();
+      renderTrace(null);
+      syncActiveSessionTitle();
+      setAgentRuntime("Idle", "");
+      setStatus("Session created", true);
+    }
+
+    async function openAgentSession(sessionId) {
+      const res = await fetch(`/api/v1/agent/sessions/${encodeURIComponent(sessionId)}`);
+      await ensureOk(res);
+      const data = await res.json();
+      state.agent.currentSessionId = data.session_id;
+      state.agent.currentSessionTitle = data.title || "New Conversation";
+      state.agent.messages = (data.messages || []).map((item) => ({ role: item.role, content: item.content }));
+      state.agent.lastResponse = normalizeAgentResponse(data.last_response);
+      state.agent.runtimeHint = "已加载历史会话";
+      state.agent.traceFeed = state.agent.lastResponse?.trace_feed?.slice() || [];
+      renderSessionList();
+      renderChatLog();
+      renderTrace(state.agent.lastResponse);
+      syncActiveSessionTitle();
+      setAgentRuntime("Loaded", "ok");
+      setStatus("Session loaded", true);
+    }
+
+    async function deleteCurrentSession() {
+      if (!state.agent.currentSessionId) {
+        setStatus("当前没有可删除的会话", false, true);
+        return;
+      }
+      const sessionId = state.agent.currentSessionId;
+      const res = await fetch(`/api/v1/agent/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+      await ensureOk(res);
+      state.agent.currentSessionId = null;
+      state.agent.currentSessionTitle = "";
+      state.agent.messages = [];
+      state.agent.lastResponse = null;
+      state.agent.runtimeHint = "会话已删除";
+      state.agent.traceFeed = [];
+      await loadAgentSessions();
+      renderSessionList();
+      renderChatLog();
+      renderTrace(null);
+      syncActiveSessionTitle();
+      setAgentRuntime("Idle", "");
+      setStatus("Session deleted", true);
+    }
+
+    function renderSessionList() {
+      const list = $("sessionList");
+      list.innerHTML = "";
+      if (!state.agent.sessionList.length) {
+        const empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "还没有历史会话。发送第一条问题后会自动保存。";
+        list.appendChild(empty);
+        return;
+      }
+      state.agent.sessionList.forEach((item) => {
+        const card = document.createElement("div");
+        card.className = "session-item" + (item.session_id === state.agent.currentSessionId ? " active" : "");
+        card.innerHTML = `
+          <div class="session-title">${escapeHtml(item.title || "New Conversation")}</div>
+          <div class="session-meta">${escapeHtml(item.updated_at || "")}</div>
+          <div class="session-meta">${escapeHtml(item.last_message_preview || "No messages yet")}</div>
+        `;
+        card.onclick = () => openAgentSession(item.session_id);
+        list.appendChild(card);
+      });
+    }
+
+    function syncActiveSessionTitle() {
+      const active = state.agent.sessionList.find((item) => item.session_id === state.agent.currentSessionId);
+      if (active) {
+        state.agent.currentSessionTitle = active.title || state.agent.currentSessionTitle;
+        $("activeSessionTitle").textContent = `${active.title} · ${active.updated_at || ""}`;
+        return;
+      }
+      if (state.agent.currentSessionId && state.agent.currentSessionTitle) {
+        $("activeSessionTitle").textContent = `${state.agent.currentSessionTitle} · syncing...`;
+        return;
+      }
+      $("activeSessionTitle").textContent = "未选择会话，发送时会自动创建。";
+    }
+
+    function createItem() {
+      if (state.tab === "themes") {
+        state.activeTheme = null;
+        $("themeName").value = "";
+        $("themeAliases").value = "";
+        $("themeThesis").value = "";
+        $("themeIndustry").value = "";
+        $("themeCatalysts").value = "";
+        $("themeKeywords").value = "";
+        $("themeTriggers").value = "";
+        $("themeInvalidations").value = "";
+        $("themeRisks").value = "";
+        $("themeMarkdown").value = "";
+        renderStocks([]);
+        setStatus("New theme");
+        return;
+      }
+      if (state.tab === "docs") {
+        state.activeDoc = null;
+        $("docPath").value = "strategies/new-doc.md";
+        $("docContent").value = "# New Doc\n";
+        setStatus("New doc");
+        return;
+      }
+      if (state.tab === "videos") {
+        loadVideos(true);
+        return;
+      }
+      if (state.tab === "skills") {
+        state.activeSkill = null;
+        $("skillSlug").value = "";
+        $("skillName").value = "";
+        $("skillDescription").value = "";
+        $("skillContent").value = "# New Skill\n";
+        setStatus("New skill");
+        return;
+      }
+      createAgentSession();
+    }
+
+    async function deleteActiveItem() {
+      try {
+        if (state.tab === "videos") return deleteActiveVideoSummary();
+        if (state.tab === "docs" && state.activeDoc && state.activeDoc.startsWith("video_summaries/")) {
+          return deleteActiveDocSummary();
+        }
+        setStatus("当前页面没有可删除的总结文档", false, true);
+      } catch (error) {
+        setStatus(error.message || "Delete failed", false, true);
+      }
+    }
+
+    async function saveActiveItem() {
+      try {
+        if (state.tab === "themes") return saveTheme();
+        if (state.tab === "docs") return saveDoc();
+        if (state.tab === "videos") return loadVideos(true);
+        if (state.tab === "skills") return saveSkill();
+        return sendAgentQuery();
+      } catch (error) {
+        setStatus(error.message || "Operation failed", false, true);
+      }
+    }
+
+    async function saveTheme() {
+      const payload = {
+        theme_name: $("themeName").value.trim(),
+        aliases: lines($("themeAliases").value),
+        core_thesis: $("themeThesis").value.trim(),
+        industry_chain: lines($("themeIndustry").value),
+        catalysts: lines($("themeCatalysts").value),
+        monitor_keywords: lines($("themeKeywords").value),
+        trigger_rules: lines($("themeTriggers").value),
+        invalidation_rules: lines($("themeInvalidations").value),
+        risks: lines($("themeRisks").value),
+        related_stocks: collectStocks(),
+      };
+      const res = await fetch(`/api/v1/admin/themes/${encodeURIComponent(payload.theme_name)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await ensureOk(res);
+      setStatus("Theme saved", true);
+      state.activeTheme = payload.theme_name;
+      return loadThemeDetail(payload.theme_name);
+    }
+
+    async function saveDoc() {
+      const payload = { path: $("docPath").value.trim(), content: $("docContent").value };
+      const res = await fetch("/api/v1/admin/docs/content", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await ensureOk(res);
+      setStatus("Doc saved", true);
+      state.activeDoc = payload.path;
+      return loadDocs();
+    }
+
+    async function deleteActiveDocSummary() {
+      const path = state.activeDoc || $("docPath").value.trim();
+      if (!path) {
+        setStatus("当前没有可删除的文档", false, true);
+        return;
+      }
+      if (!window.confirm(`确认删除 ${path} 吗？这会同时删除 Markdown 和对应向量知识。`)) {
+        return;
+      }
+      const res = await fetch(`/api/v1/admin/docs/content?path=${encodeURIComponent(path)}&summary_mode=investment`, {
+        method: "DELETE",
+      });
+      await ensureOk(res);
+      state.activeDoc = null;
+      $("docPath").value = "";
+      $("docContent").value = "";
+      syncGlobalActions();
+      await loadDocs();
+      setStatus("总结文档已删除", true);
+    }
+
+    async function saveSkill() {
+      const payload = {
+        slug: $("skillSlug").value.trim(),
+        name: $("skillName").value.trim(),
+        description: $("skillDescription").value.trim(),
+        content: $("skillContent").value,
+      };
+      const res = await fetch(`/api/v1/admin/skills/${encodeURIComponent(payload.slug)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      await ensureOk(res);
+      setStatus("Skill saved", true);
+      state.activeSkill = payload.slug;
+      state.agent.skillOptionsLoaded = false;
+      return loadSkills();
+    }
+
+    async function sendAgentQuery() {
+      if (state.agent.running) return;
+      const query = $("agentInput").value.trim();
+      if (!query) {
+        setStatus("请输入问题", false, true);
+        return;
+      }
+
+      state.agent.running = true;
+      state.agent.runtimeHint = "请求已发出，等待 agent 返回事件流";
+      setAgentRuntime("Connecting...", "busy");
+      $("agentSendButton").disabled = true;
+
+      const priorMessages = state.agent.messages.map((item) => ({ role: item.role, content: item.content }));
+      state.agent.messages.push({ role: "user", content: query });
+      state.agent.lastResponse = createEmptyAgentResponse();
+      state.agent.traceFeed = [];
+      const assistantMessage = { role: "assistant", content: "" };
+      state.agent.messages.push(assistantMessage);
+      renderChatLog();
+      renderTrace(state.agent.lastResponse);
+      $("agentInput").value = "";
+      setStatus("Agent stream opened...");
+
+      const payload = {
+        query,
+        skill: $("agentSkill").value || null,
+        session_id: state.agent.currentSessionId,
+        context: {
+          chat_history: priorMessages,
+          visible_trace: true,
+        },
+      };
+
+      try {
+        const res = await fetch("/api/v1/agent/run/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!res.ok || !res.body) {
+          const text = await res.text().catch(() => "");
+          throw new Error(text || `Request failed: ${res.status}`);
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split(/\r?\n\r?\n/);
+          buffer = blocks.pop() || "";
+          for (const block of blocks) {
+            const parsed = parseSseBlock(block);
+            if (parsed) applyStreamEvent(parsed.event, parsed.payload, assistantMessage);
+          }
+        }
+        if (buffer.trim()) {
+          const parsed = parseSseBlock(buffer);
+          if (parsed) applyStreamEvent(parsed.event, parsed.payload, assistantMessage);
+        }
+        await loadAgentSessions();
+        renderSessionList();
+        syncActiveSessionTitle();
+        setStatus("Agent stream completed", true);
+      } catch (error) {
+        assistantMessage.content = `请求失败: ${error.message || "unknown error"}`;
+        state.agent.runtimeHint = "请求失败";
+        setAgentRuntime("Failed", "warn");
+        renderChatLog();
+        renderTrace(state.agent.lastResponse);
+        setStatus(error.message || "Agent request failed", false, true);
+      } finally {
+        state.agent.running = false;
+        $("agentSendButton").disabled = false;
+      }
+    }
+
+    function applyStreamEvent(eventName, payload, assistantMessage) {
+      if (!state.agent.lastResponse) state.agent.lastResponse = createEmptyAgentResponse();
+
+      if (eventName === "session") {
+        state.agent.currentSessionId = payload.session_id || state.agent.currentSessionId;
+        state.agent.currentSessionTitle = payload.title || state.agent.currentSessionTitle || "New Conversation";
+        syncActiveSessionTitle();
+      } else if (eventName === "status") {
+        state.agent.runtimeHint = payload.message || "Running";
+        setAgentRuntime(payload.message || "Running", "busy");
+        setStatus(payload.message || "Running");
+      } else if (eventName === "selection") {
+        state.agent.lastResponse.orchestration = payload.orchestration || state.agent.lastResponse.orchestration;
+        state.agent.lastResponse.selected_skill = payload.selected_skill || "";
+        state.agent.lastResponse.selection_reason = payload.selection_reason || "";
+        state.agent.lastResponse.trace.selection_reason = payload.selection_reason || "";
+        upsertTraceFeedEvent({
+          id: "selection",
+          kind: "selection",
+          status: "done",
+          title: payload.selected_skill ? `已选择 ${payload.selected_skill}` : "已完成技能选择",
+          preview: payload.selection_reason || "已完成路由与技能选择。",
+          detail: payload.selection_reason || "",
+          data: {
+            orchestration: payload.orchestration || state.agent.lastResponse.orchestration,
+            selected_skill: payload.selected_skill || "",
+            selection_reason: payload.selection_reason || "",
+          },
+        });
+      } else if (eventName === "trace") {
+        if (payload.step) {
+          state.agent.lastResponse.trace.steps.push(payload.step);
+          upsertTraceFeedEvent({
+            id: `step-${state.agent.lastResponse.trace.steps.length}`,
+            kind: "thinking",
+            status: "done",
+            title: payload.step.title || payload.step.type || "Step",
+            preview: payload.step.content || "",
+            detail: payload.step.content || "",
+            data: payload.step.data || null,
+          });
+        }
+      } else if (eventName === "tool_call") {
+        const existing = state.agent.lastResponse.tool_calls.find((item) => item.call_id === payload.call_id);
+        if (!existing) {
+          state.agent.lastResponse.tool_calls.push({ call_id: payload.call_id, name: payload.name, input: payload.input, output: null });
+        }
+        upsertTraceFeedEvent({
+          id: `tool-${payload.call_id}`,
+          kind: "tool",
+          status: "running",
+          title: payload.name || "tool_call",
+          preview: summarizeValue(payload.input, "工具调用已发出"),
+          detail: "工具调用已发出，等待返回结果。",
+          data: { input: payload.input, output: null },
+        });
+        state.agent.runtimeHint = `Calling tool: ${payload.name}`;
+        setAgentRuntime(`Tool: ${payload.name}`, "busy");
+      } else if (eventName === "tool_result") {
+        let target = state.agent.lastResponse.tool_calls.find((item) => item.call_id === payload.call_id);
+        if (!target) {
+          target = { call_id: payload.call_id, name: payload.name, input: null, output: null };
+          state.agent.lastResponse.tool_calls.push(target);
+        }
+        target.output = payload.output;
+        upsertTraceFeedEvent({
+          id: `tool-${payload.call_id}`,
+          kind: "tool",
+          status: "done",
+          title: payload.name || target.name || "tool_result",
+          preview: summarizeValue(payload.output, "工具已返回结果"),
+          detail: summarizeValue(payload.output, "工具已返回结果"),
+          data: { input: target.input, output: payload.output },
+        });
+        state.agent.runtimeHint = `Tool returned: ${payload.name}`;
+        setAgentRuntime(`Tool returned: ${payload.name}`, "busy");
+      } else if (eventName === "report_delta") {
+        const delta = payload.delta || "";
+        state.agent.lastResponse.report += delta;
+        assistantMessage.content += delta;
+        upsertTraceFeedEvent({
+          id: "report",
+          kind: "report",
+          status: "running",
+          title: "正在生成最终回答",
+          preview: summarizeValue(state.agent.lastResponse.report, "开始生成回答"),
+          detail: state.agent.lastResponse.report || "",
+          data: null,
+        });
+        state.agent.runtimeHint = "Streaming final answer";
+        setAgentRuntime("Streaming answer...", "busy");
+      } else if (eventName === "warning") {
+        state.agent.lastResponse.warning = payload.message || "";
+        if (!assistantMessage.content) assistantMessage.content = payload.message || "";
+        upsertTraceFeedEvent({
+          id: "warning",
+          kind: "warn",
+          status: "warn",
+          title: "执行警告",
+          preview: payload.message || "Warning",
+          detail: payload.message || "",
+          data: null,
+        });
+        state.agent.runtimeHint = payload.message || "Warning";
+        setAgentRuntime("Warning", "warn");
+      } else if (eventName === "done") {
+        state.agent.lastResponse = normalizeAgentResponse({ ...state.agent.lastResponse, ...payload });
+        if (state.agent.lastResponse.report || state.agent.lastResponse.warning) {
+          upsertTraceFeedEvent({
+            id: "report",
+            kind: state.agent.lastResponse.warning ? "warn" : "report",
+            status: state.agent.lastResponse.warning ? "warn" : "done",
+            title: state.agent.lastResponse.warning ? "本轮执行结束，带警告" : "最终回答已生成",
+            preview: summarizeValue(state.agent.lastResponse.warning || state.agent.lastResponse.report),
+            detail: state.agent.lastResponse.warning || state.agent.lastResponse.report,
+            data: null,
+          });
+        }
+        if (payload.session_id) state.agent.currentSessionId = payload.session_id;
+        if (state.agent.lastResponse.report) assistantMessage.content = state.agent.lastResponse.report;
+        else if (state.agent.lastResponse.warning) assistantMessage.content = state.agent.lastResponse.warning;
+        state.agent.runtimeHint = "Completed";
+        setAgentRuntime("Completed", "ok");
+      } else if (eventName === "error") {
+        assistantMessage.content = `请求失败: ${payload.message || "unknown error"}`;
+        state.agent.runtimeHint = payload.message || "Error";
+        upsertTraceFeedEvent({
+          id: "error",
+          kind: "error",
+          status: "error",
+          title: "执行失败",
+          preview: payload.message || "unknown error",
+          detail: payload.message || "",
+          data: null,
+        });
+        setAgentRuntime("Error", "warn");
+      }
+
+      $("agentRuntimeHint").textContent = state.agent.runtimeHint;
+      renderChatLog();
+      renderTrace(state.agent.lastResponse);
+      syncActiveSessionTitle();
+    }
+
+    function clearAgentWindow() {
+      state.agent.messages = [];
+      state.agent.lastResponse = null;
+      state.agent.runtimeHint = "等待提问";
+      state.agent.traceFeed = [];
+      $("agentInput").value = "";
+      renderChatLog();
+      renderTrace(null);
+      setAgentRuntime("Idle", "");
+      setStatus("Current window cleared");
+    }
+
+    function renderChatLog() {
+      const log = $("chatLog");
+      log.innerHTML = "";
+      if (!state.agent.messages.length) {
+        const empty = document.createElement("div");
+        empty.className = "hint";
+        empty.textContent = "选择一条历史会话继续提问，或直接发起新问题。";
+        log.appendChild(empty);
+        return;
+      }
+      const lastAssistantIndex = [...state.agent.messages].map((item) => item.role).lastIndexOf("assistant");
+      const normalized = normalizeAgentResponse(state.agent.lastResponse);
+      const feed = getCurrentTraceFeed();
+      const steps = normalized?.trace?.steps || [];
+      const tools = normalized?.tool_calls || [];
+      state.agent.messages.forEach((message, index) => {
+        const block = document.createElement("div");
+        block.className = `message ${message.role}`;
+        const role = document.createElement("div");
+        role.className = "message-role";
+        role.textContent = message.role === "user" ? "You" : "Agent";
+        const body = document.createElement("div");
+        body.className = "message-body";
+        body.textContent = message.content || (message.role === "assistant" ? "..." : "");
+        block.appendChild(role);
+        block.appendChild(body);
+        if (message.role === "assistant" && index === lastAssistantIndex) {
+          block.appendChild(buildAssistantTrace(feed, steps.length, tools.length));
+        }
+        log.appendChild(block);
+      });
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderTrace(response) {
+      const normalized = normalizeAgentResponse(response);
+      $("agentOrchestration").textContent = normalized?.orchestration || "-";
+      $("agentSelectedSkill").textContent = normalized?.selected_skill || "-";
+      $("agentSelectionReason").textContent = normalized?.selection_reason || normalized?.trace?.selection_reason || "-";
+      $("agentRuntimeHint").textContent = state.agent.runtimeHint;
+
+      const steps = normalized?.trace?.steps || [];
+      const tools = normalized?.tool_calls || [];
+      const feed = getCurrentTraceFeed();
+      renderTraceSummary(normalized, steps, tools, feed);
+    }
+
+    function renderTraceSummary(normalized, steps, tools, feed) {
+      const summary = $("traceSummary");
+      summary.innerHTML = "";
+      if (!normalized) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = "发送问题后，这里会以事件流方式显示技能选择、思考步骤、工具调用和最终生成。";
+        summary.appendChild(empty);
+        return;
+      }
+
+      const overview = document.createElement("div");
+      overview.className = "trace-summary-strip";
+      overview.innerHTML = `
+        <div class="summary-card">
+          <div class="summary-label">最近事件</div>
+          <div class="summary-value">${escapeHtml(feed[feed.length - 1]?.title || "等待新事件")}</div>
+        </div>
+        <div class="summary-card">
+          <div class="summary-label">进度</div>
+          <div class="summary-value mono">${steps.length} steps · ${tools.length} tools</div>
+        </div>
+      `;
+      summary.appendChild(overview);
+      const statusCard = document.createElement("div");
+      statusCard.className = "summary-card";
+      statusCard.innerHTML = `
+        <div class="summary-label">当前状态</div>
+        <div class="summary-value">${escapeHtml(state.agent.runtimeHint)}</div>
+      `;
+      summary.appendChild(statusCard);
+    }
+
+    function createEmptyAgentResponse() {
+      return { orchestration: "claude-style-agent", selected_skill: "", selection_reason: "", report: "", warning: "", tool_calls: [], trace_feed: [], trace: { selection_reason: "", steps: [] } };
+    }
+
+    function normalizeAgentResponse(response) {
+      if (!response) return null;
+      return {
+        orchestration: response.orchestration || "claude-style-agent",
+        selected_skill: response.selected_skill || "",
+        selection_reason: response.selection_reason || response.trace?.selection_reason || "",
+        report: response.report || "",
+        warning: response.warning || "",
+        tool_calls: Array.isArray(response.tool_calls) ? response.tool_calls : [],
+        trace_feed: Array.isArray(response.trace_feed) ? response.trace_feed : [],
+        trace: { selection_reason: response.trace?.selection_reason || response.selection_reason || "", steps: Array.isArray(response.trace?.steps) ? response.trace.steps : [] },
+      };
+    }
+
+    function buildTraceFeed(normalized) {
+      if (!normalized) return [];
+      const events = [];
+      if (normalized.selected_skill || normalized.selection_reason) {
+        events.push({
+          id: "selection",
+          kind: "selection",
+          status: "done",
+          title: normalized.selected_skill ? `已选择 ${normalized.selected_skill}` : "已完成技能选择",
+          preview: normalized.selection_reason || "已完成路由与技能选择。",
+          detail: normalized.selection_reason || "",
+          data: {
+            orchestration: normalized.orchestration,
+            selected_skill: normalized.selected_skill,
+            selection_reason: normalized.selection_reason,
+          },
+        });
+      }
+      (normalized.trace?.steps || []).forEach((step, index) => {
+        events.push({
+          id: `step-${index + 1}`,
+          kind: "thinking",
+          status: "done",
+          title: step.title || step.type || "Step",
+          preview: step.content || "",
+          detail: step.content || "",
+          data: step.data || null,
+        });
+      });
+      (normalized.tool_calls || []).forEach((tool, index) => {
+        events.push({
+          id: `tool-${tool.call_id || index}`,
+          kind: "tool",
+          status: tool.output ? "done" : "running",
+          title: tool.name || "tool_call",
+          preview: summarizeValue(tool.output || tool.input, tool.output ? "工具已返回结果" : "工具调用已发出"),
+          detail: tool.output ? summarizeValue(tool.output, "工具已返回结果") : "工具调用已发出，等待返回结果。",
+          data: { input: tool.input, output: tool.output },
+        });
+      });
+      if (normalized.warning) {
+        events.push({
+          id: "warning",
+          kind: "warn",
+          status: "warn",
+          title: "执行警告",
+          preview: normalized.warning,
+          detail: normalized.warning,
+          data: null,
+        });
+      } else if (normalized.report) {
+        events.push({
+          id: "report",
+          kind: "report",
+          status: "done",
+          title: "最终回答已生成",
+          preview: normalized.report,
+          detail: normalized.report,
+          data: null,
+        });
+      }
+      return events;
+    }
+
+    function getCurrentTraceFeed() {
+      if (state.agent.traceFeed.length) return state.agent.traceFeed;
+      const normalized = normalizeAgentResponse(state.agent.lastResponse);
+      const feed = buildTraceFeed(normalized);
+      if (feed.length) state.agent.traceFeed = feed.slice();
+      return feed;
+    }
+
+    function buildAssistantTrace(feed, stepCount, toolCount) {
+      const shell = document.createElement("div");
+      shell.className = "assistant-trace";
+
+      const header = document.createElement("div");
+      header.className = "assistant-trace-header";
+      header.innerHTML = `
+        <div class="assistant-trace-meta">
+          <div class="assistant-trace-title">执行过程</div>
+          <span class="count-badge">${stepCount} 步</span>
+          <span class="count-badge">${toolCount} 工具</span>
+        </div>
+      `;
+
+      if (feed.length > 6) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "trace-action";
+        toggle.textContent = state.agent.traceExpanded ? "仅看最近" : "查看全部";
+        toggle.addEventListener("click", () => {
+          state.agent.traceExpanded = !state.agent.traceExpanded;
+          renderChatLog();
+        });
+        header.appendChild(toggle);
+      }
+
+      const body = document.createElement("div");
+      body.className = "assistant-trace-body";
+      if (!feed.length) {
+        const empty = document.createElement("div");
+        empty.className = "assistant-trace-empty";
+        empty.textContent = "等待 agent 写入执行事件。";
+        body.appendChild(empty);
+      } else {
+        appendTraceEvents(body, feed);
+      }
+
+      shell.appendChild(header);
+      shell.appendChild(body);
+      return shell;
+    }
+
+    function appendTraceEvents(target, feed) {
+      const visibleFeed = state.agent.traceExpanded ? feed : feed.slice(-6);
+      visibleFeed.forEach((event, offset) => {
+        const details = document.createElement("details");
+        details.className = `trace-event ${event.kind || "thinking"} ${event.status || ""}`;
+        details.open = event.status === "running" || offset === visibleFeed.length - 1;
+
+        const summary = document.createElement("summary");
+        summary.innerHTML = `
+          <div class="trace-event-main">
+            <div class="trace-event-dot"></div>
+            <div class="trace-event-body">
+              <div class="trace-event-topline">
+                <span class="trace-event-kind">${escapeHtml(eventLabel(event.kind))}</span>
+                <span class="trace-event-title">${escapeHtml(event.title || "事件")}</span>
+              </div>
+              <div class="trace-event-preview">${escapeHtml(event.preview || "")}</div>
+            </div>
+          </div>
+          <div class="trace-event-status">${escapeHtml(eventStatusLabel(event.status))}</div>
+        `;
+        details.appendChild(summary);
+
+        if (event.detail || event.data) {
+          const body = document.createElement("div");
+          body.className = "trace-event-detail";
+          if (event.detail) {
+            const text = document.createElement("div");
+            text.className = "trace-event-detail-text";
+            text.textContent = event.detail;
+            body.appendChild(text);
+          }
+          if (event.data) {
+            const pre = document.createElement("pre");
+            pre.textContent = safeJson(event.data);
+            body.appendChild(pre);
+          }
+          details.appendChild(body);
+        }
+
+        target.appendChild(details);
+      });
+    }
+
+    function upsertTraceFeedEvent(event) {
+      const index = state.agent.traceFeed.findIndex((item) => item.id === event.id);
+      const merged = { ...(index >= 0 ? state.agent.traceFeed[index] : {}), ...event };
+      if (index >= 0) state.agent.traceFeed.splice(index, 1, merged);
+      else state.agent.traceFeed.push(merged);
+      if (state.agent.lastResponse) state.agent.lastResponse.trace_feed = state.agent.traceFeed.slice();
+    }
+
+    function eventLabel(kind) {
+      if (kind === "selection") return "Skill";
+      if (kind === "thinking") return "Step";
+      if (kind === "tool") return "Tool";
+      if (kind === "report") return "Answer";
+      if (kind === "warn") return "Warning";
+      if (kind === "error") return "Error";
+      return "Event";
+    }
+
+    function eventStatusLabel(status) {
+      if (status === "running") return "运行中";
+      if (status === "done") return "完成";
+      if (status === "warn") return "警告";
+      if (status === "error") return "失败";
+      return "已记录";
+    }
+
+    function summarizeValue(value, fallback = "") {
+      if (value == null) return fallback;
+      const text = typeof value === "string" ? value : safeJson(value);
+      const normalized = String(text).replace(/\s+/g, " ").trim();
+      if (!normalized) return fallback;
+      return normalized.length > 160 ? `${normalized.slice(0, 160)}...` : normalized;
+    }
+
+    function setAgentRuntime(text, mode = "") {
+      const el = $("agentRunState");
+      el.textContent = text;
+      el.className = "pill" + (mode ? ` ${mode}` : "");
+    }
+
+    function parseSseBlock(block) {
+      const lines = block.split(/\r?\n/);
+      let event = "message";
+      const dataLines = [];
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
+        if (!line) continue;
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
+      }
+      if (!dataLines.length) return null;
+      try {
+        return { event, payload: JSON.parse(dataLines.join("\n")) };
+      } catch (_) {
+        return { event, payload: { message: dataLines.join("\n") } };
+      }
+    }
+
+    function collectStocks() {
+      return Array.from($("stocksBody").querySelectorAll("tr")).map((row) => {
+        const fields = {};
+        row.querySelectorAll("input").forEach((input) => {
+          const key = input.dataset.key;
+          const value = input.value.trim();
+          fields[key] = ["sensitivity_score", "certainty_score"].includes(key) ? Number(value || 0) : value;
+        });
+        return fields;
+      }).filter((item) => item.symbol || item.name);
+    }
+
+    function lines(value) {
+      return value.split("\n").map((item) => item.trim()).filter(Boolean);
+    }
+
+    function formatDuration(totalSeconds) {
+      const seconds = Number(totalSeconds || 0);
+      if (!seconds) return "-";
+      const hours = Math.floor(seconds / 3600);
+      const minutes = Math.floor((seconds % 3600) / 60);
+      const remain = Math.floor(seconds % 60);
+      if (hours > 0) return `${hours}:${String(minutes).padStart(2, "0")}:${String(remain).padStart(2, "0")}`;
+      return `${minutes}:${String(remain).padStart(2, "0")}`;
+    }
+
+    function formatTimestampMs(totalMs) {
+      const totalSeconds = Math.floor(Number(totalMs || 0) / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+    }
+
+    async function ensureOk(res) {
+      if (res.ok) return;
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.detail || `Request failed: ${res.status}`);
+    }
+
+    function setStatus(text, ok = false, warn = false) {
+      const el = $("statusText");
+      el.textContent = text;
+      el.className = "status" + (ok ? " ok" : "") + (warn ? " warn" : "");
+    }
+
+    function escapeHtml(value) {
+      return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    }
+
+    function safeJson(value) {
+      try { return JSON.stringify(value, null, 2); } catch (_) { return String(value); }
+    }
+
+    loadActiveTab();
+  </script>
+</body>
+</html>

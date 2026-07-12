@@ -1,0 +1,33 @@
+{
+  "session_id": "9409504764ad4e60bbbf9149d3c4f68d",
+  "title": "分析黄金主题",
+  "created_at": "2026-07-11T23:52:44",
+  "updated_at": "2026-07-11T23:52:44",
+  "messages": [
+    {
+      "role": "user",
+      "content": "分析黄金主题",
+      "created_at": "2026-07-11T23:52:44"
+    },
+    {
+      "role": "assistant",
+      "content": "主模型未配置，当前无法运行 Claude-style Agent。请配置 AGENT_MODEL_* 或 ANALYSIS_MODEL_* 为 DeepSeek/OpenAI-compatible 模型。",
+      "created_at": "2026-07-11T23:52:44"
+    }
+  ],
+  "last_response": {
+    "orchestration": "local-fallback",
+    "warning": "主模型未配置，当前无法运行 Claude-style Agent。请配置 AGENT_MODEL_* 或 ANALYSIS_MODEL_* 为 DeepSeek/OpenAI-compatible 模型。",
+    "trace": {
+      "selection_reason": "Primary agent model is unavailable.",
+      "steps": [
+        {
+          "type": "warning",
+          "title": "Model unavailable",
+          "content": "AGENT_MODEL_* or ANALYSIS_MODEL_* is not configured, so the chat agent could not start."
+        }
+      ]
+    },
+    "session_id": "9409504764ad4e60bbbf9149d3c4f68d"
+  }
+}

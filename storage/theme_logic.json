@@ -1,0 +1,474 @@
+{
+  "黄金": {
+    "theme_name": "黄金",
+    "core_thesis": "黄金的核心定价变量是实际利率方向；当美元体系下真实无风险收益下降，或市场担心美元购买力和信用稳定性时，黄金配置价值上升。",
+    "industry_chain": [
+      "黄金现货和期货",
+      "黄金 ETF",
+      "金矿企业",
+      "黄金珠宝与回收"
+    ],
+    "catalysts": [
+      "实际利率下行",
+      "美元走弱",
+      "通胀预期有韧性",
+      "降息预期升温",
+      "地缘风险上升",
+      "央行持续购金"
+    ],
+    "monitor_keywords": [
+      "TIPS",
+      "实际利率",
+      "美元指数",
+      "降息预期",
+      "央行购金",
+      "地缘风险"
+    ],
+    "trigger_rules": [
+      "美国 10 年期实际利率趋势下行",
+      "通胀预期上行快于名义利率",
+      "黄金 ETF 或期货资金持续流入"
+    ],
+    "invalidation_rules": [
+      "实际利率趋势性上行",
+      "美元持续走强",
+      "通胀预期快速回落",
+      "美联储预期转鹰"
+    ],
+    "risks": [
+      "宏观数据超预期",
+      "美元流动性冲击",
+      "避险交易退潮"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "黄金ETF",
+        "name": "黄金ETF",
+        "relation": "跟踪金价",
+        "sensitivity_score": 70,
+        "certainty_score": 85
+      }
+    ]
+  },
+  "高股息": {
+    "theme_name": "高股息",
+    "aliases": [
+      "红利资产",
+      "高分红",
+      "中特估红利"
+    ],
+    "core_thesis": "高股息资产在低增长、低利率和风险偏好偏弱阶段具备稳定现金流与分红溢价，适合作为防守底仓与绝对收益增强工具。",
+    "industry_chain": [
+      "银行",
+      "电力公用事业",
+      "电信运营商",
+      "煤炭能源"
+    ],
+    "catalysts": [
+      "无风险利率下行",
+      "红利指数持续跑赢",
+      "险资和年金增配",
+      "国企分红政策强化"
+    ],
+    "monitor_keywords": [
+      "股息率",
+      "10年国债收益率",
+      "险资配置",
+      "国企分红",
+      "红利指数"
+    ],
+    "trigger_rules": [
+      "10 年国债收益率下行",
+      "红利指数相对沪深300走强",
+      "分红政策与回购政策强化"
+    ],
+    "invalidation_rules": [
+      "无风险利率快速上行",
+      "高股息板块抱团估值过高",
+      "分红兑现不及预期"
+    ],
+    "risks": [
+      "风格切换至高弹性成长",
+      "政策约束现金分红",
+      "周期股盈利下滑拖累分红"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "600900",
+        "name": "长江电力",
+        "relation": "水电高分红核心资产",
+        "sensitivity_score": 72.0,
+        "certainty_score": 90.0
+      },
+      {
+        "symbol": "601088",
+        "name": "中国神华",
+        "relation": "煤炭高股息龙头",
+        "sensitivity_score": 75.0,
+        "certainty_score": 86.0
+      },
+      {
+        "symbol": "601398",
+        "name": "工商银行",
+        "relation": "银行红利核心标的",
+        "sensitivity_score": 65.0,
+        "certainty_score": 92.0
+      },
+      {
+        "symbol": "600941",
+        "name": "中国移动",
+        "relation": "电信高分红核心资产",
+        "sensitivity_score": 68.0,
+        "certainty_score": 91.0
+      }
+    ]
+  },
+  "公用事业": {
+    "theme_name": "公用事业",
+    "aliases": [
+      "电力公用事业",
+      "防御电力",
+      "水电火电"
+    ],
+    "core_thesis": "公用事业板块以稳现金流、低波动和高分红见长，在市场震荡或利率下行阶段具备防守属性；水电与核电资产确定性更强。",
+    "industry_chain": [
+      "发电运营",
+      "电网与配售电",
+      "燃气与供热",
+      "环保水务"
+    ],
+    "catalysts": [
+      "来水改善",
+      "煤价回落",
+      "容量电价与辅助服务机制优化",
+      "利率下行带来估值修复"
+    ],
+    "monitor_keywords": [
+      "来水",
+      "煤价",
+      "容量电价",
+      "电量电价",
+      "分红率"
+    ],
+    "trigger_rules": [
+      "煤价回落带来火电利润修复",
+      "水电来水显著改善",
+      "红利风格继续占优"
+    ],
+    "invalidation_rules": [
+      "来水不及预期",
+      "煤价再度上行",
+      "防御风格显著退潮"
+    ],
+    "risks": [
+      "电价政策扰动",
+      "极端天气影响发电量",
+      "市场风格切向高弹性成长"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "600900",
+        "name": "长江电力",
+        "relation": "水电龙头",
+        "sensitivity_score": 70.0,
+        "certainty_score": 93.0
+      },
+      {
+        "symbol": "600023",
+        "name": "浙能电力",
+        "relation": "火电运营龙头之一",
+        "sensitivity_score": 62.0,
+        "certainty_score": 78.0
+      },
+      {
+        "symbol": "003816",
+        "name": "中国广核",
+        "relation": "核电稳定现金流资产",
+        "sensitivity_score": 58.0,
+        "certainty_score": 88.0
+      }
+    ]
+  },
+  "电信运营": {
+    "theme_name": "电信运营",
+    "aliases": [
+      "运营商",
+      "通信红利",
+      "三大运营商"
+    ],
+    "core_thesis": "电信运营商具备高分红、低估值和算力资本开支外溢受益的双重属性，是红利与数字基建的交叉方向。",
+    "industry_chain": [
+      "移动通信服务",
+      "宽带与云服务",
+      "算力与IDC",
+      "企业数字化服务"
+    ],
+    "catalysts": [
+      "高分红政策延续",
+      "算力与云业务增长",
+      "运营效率持续提升",
+      "中特估资金回流"
+    ],
+    "monitor_keywords": [
+      "ARPU",
+      "资本开支",
+      "云收入",
+      "算力投资",
+      "分红率"
+    ],
+    "trigger_rules": [
+      "资本开支增速可控而云收入提速",
+      "红利风格维持强势",
+      "估值折价继续修复"
+    ],
+    "invalidation_rules": [
+      "资费竞争恶化",
+      "资本开支失控挤压现金流",
+      "红利风格大幅退潮"
+    ],
+    "risks": [
+      "政策监管",
+      "云业务竞争加剧",
+      "高股息抱团回撤"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "600941",
+        "name": "中国移动",
+        "relation": "运营商龙头",
+        "sensitivity_score": 68.0,
+        "certainty_score": 92.0
+      },
+      {
+        "symbol": "601728",
+        "name": "中国电信",
+        "relation": "云与政企业务受益",
+        "sensitivity_score": 64.0,
+        "certainty_score": 88.0
+      },
+      {
+        "symbol": "600050",
+        "name": "中国联通",
+        "relation": "政企业务与算力协同",
+        "sensitivity_score": 66.0,
+        "certainty_score": 84.0
+      }
+    ]
+  },
+  "AI机房液冷": {
+    "theme_name": "AI机房液冷",
+    "aliases": [
+      "液冷",
+      "算力液冷",
+      "AIDC液冷"
+    ],
+    "core_thesis": "大模型训练和推理推升 AI 服务器功耗密度，液冷方案成为 AIDC 降本增效的重要基础设施，核心受益方向包括液冷设备、温控与高速互联。",
+    "industry_chain": [
+      "GPU 服务器",
+      "液冷机柜与冷板",
+      "温控系统",
+      "高速光模块与交换机",
+      "IDC 机房"
+    ],
+    "catalysts": [
+      "海外算力资本开支上修",
+      "国内智算中心招标落地",
+      "液冷渗透率提升",
+      "高速光模块量价齐升"
+    ],
+    "monitor_keywords": [
+      "CAPEX",
+      "液冷渗透率",
+      "800G",
+      "GPU 交付",
+      "AIDC 招标"
+    ],
+    "trigger_rules": [
+      "北美云厂商资本开支超预期",
+      "国内智算中心订单释放",
+      "行业龙头业绩持续上修"
+    ],
+    "invalidation_rules": [
+      "算力资本开支放缓",
+      "液冷渗透率提升不及预期",
+      "估值过热后业绩无法消化"
+    ],
+    "risks": [
+      "高估值回撤",
+      "海外客户采购节奏波动",
+      "技术路线替代"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "300308",
+        "name": "中际旭创",
+        "relation": "高速光模块龙头",
+        "sensitivity_score": 92.0,
+        "certainty_score": 82.0
+      },
+      {
+        "symbol": "300502",
+        "name": "新易盛",
+        "relation": "光模块核心受益",
+        "sensitivity_score": 90.0,
+        "certainty_score": 80.0
+      },
+      {
+        "symbol": "603912",
+        "name": "佳力图",
+        "relation": "机房温控与液冷",
+        "sensitivity_score": 78.0,
+        "certainty_score": 66.0
+      },
+      {
+        "symbol": "301018",
+        "name": "申菱环境",
+        "relation": "机房温控液冷设备",
+        "sensitivity_score": 84.0,
+        "certainty_score": 70.0
+      },
+      {
+        "symbol": "601138",
+        "name": "工业富联",
+        "relation": "AI 服务器代工与配套",
+        "sensitivity_score": 75.0,
+        "certainty_score": 82.0
+      }
+    ]
+  },
+  "创新药": {
+    "theme_name": "创新药",
+    "aliases": [
+      "CXO创新药",
+      "医药创新",
+      "创新药出海"
+    ],
+    "core_thesis": "创新药板块的核心驱动来自产品放量、BD 授权出海、医保支付改善与全球研发周期复苏，重点关注真正具备临床价值和商业化能力的平台公司。",
+    "industry_chain": [
+      "创新药研发",
+      "CXO 服务",
+      "临床试验",
+      "商业化推广",
+      "海外授权"
+    ],
+    "catalysts": [
+      "BD 授权金额超预期",
+      "核心产品临床里程碑",
+      "医保谈判边际改善",
+      "美联储降息改善成长估值"
+    ],
+    "monitor_keywords": [
+      "BD",
+      "临床三期",
+      "NDA",
+      "医保谈判",
+      "ASCO",
+      "AACR"
+    ],
+    "trigger_rules": [
+      "核心公司持续披露临床与出海进展",
+      "创新药指数相对医药板块转强",
+      "政策环境边际改善"
+    ],
+    "invalidation_rules": [
+      "临床失败",
+      "医保压价超预期",
+      "海外融资环境恶化"
+    ],
+    "risks": [
+      "研发失败风险",
+      "监管审批不确定性",
+      "海外市场竞争激烈"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "600276",
+        "name": "恒瑞医药",
+        "relation": "国内创新药龙头",
+        "sensitivity_score": 82.0,
+        "certainty_score": 84.0
+      },
+      {
+        "symbol": "603259",
+        "name": "药明康德",
+        "relation": "CXO 与创新研发生态核心",
+        "sensitivity_score": 76.0,
+        "certainty_score": 78.0
+      },
+      {
+        "symbol": "300760",
+        "name": "迈瑞医疗",
+        "relation": "医药器械龙头，防守型医药资产",
+        "sensitivity_score": 58.0,
+        "certainty_score": 90.0
+      }
+    ]
+  },
+  "铜": {
+    "theme_name": "铜",
+    "aliases": [
+      "工业金属",
+      "铜资源",
+      "铜价上涨"
+    ],
+    "core_thesis": "铜是电网投资、AI 用电扩张和新能源电气化共同受益的核心工业金属，供给受矿山扰动和资本开支约束，景气上行时价格弹性较强。",
+    "industry_chain": [
+      "铜矿开采",
+      "冶炼加工",
+      "电网与电力设备",
+      "新能源用铜",
+      "出口贸易"
+    ],
+    "catalysts": [
+      "海外矿山扰动",
+      "全球制造业复苏",
+      "电网投资加速",
+      "新能源与 AI 用电扩张"
+    ],
+    "monitor_keywords": [
+      "LME铜",
+      "TC/RC",
+      "铜矿扰动",
+      "电网投资",
+      "PMI"
+    ],
+    "trigger_rules": [
+      "LME 铜价突破关键平台",
+      "矿山供给扰动扩大",
+      "国内电网投资订单加速"
+    ],
+    "invalidation_rules": [
+      "全球需求转弱",
+      "铜价高位回落",
+      "供给释放超预期"
+    ],
+    "risks": [
+      "海外衰退导致需求回落",
+      "美元走强压制商品价格",
+      "政策调控风险"
+    ],
+    "related_stocks": [
+      {
+        "symbol": "603993",
+        "name": "洛阳钼业",
+        "relation": "铜钴资源龙头",
+        "sensitivity_score": 86.0,
+        "certainty_score": 79.0
+      },
+      {
+        "symbol": "600362",
+        "name": "江西铜业",
+        "relation": "铜冶炼与资源一体化",
+        "sensitivity_score": 80.0,
+        "certainty_score": 83.0
+      },
+      {
+        "symbol": "000878",
+        "name": "云南铜业",
+        "relation": "铜产业链核心公司",
+        "sensitivity_score": 78.0,
+        "certainty_score": 76.0
+      }
+    ]
+  }
+}

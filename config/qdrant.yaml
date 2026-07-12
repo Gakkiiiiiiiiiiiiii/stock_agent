@@ -1,0 +1,27 @@
+qdrant:
+  url: ${QDRANT_URL}
+  api_key: ${QDRANT_API_KEY}
+  collections:
+    financial_knowledge:
+      vector_size: 64
+      distance: Cosine
+    financial_memory:
+      vector_size: 64
+      distance: Cosine
+    financial_decision_trace:
+      vector_size: 64
+      distance: Cosine
+  payload_indexes:
+    - postgres_table
+    - postgres_id
+    - memory_type
+    - related_regime
+    - related_strategy
+    - related_theme
+    - related_symbol
+    - status
+    - importance
+    - source_type
+    - source_date
+    - is_deleted
+

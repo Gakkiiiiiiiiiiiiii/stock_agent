@@ -1,0 +1,17 @@
+.conda-env/
+.idea/
+.pytest_cache/
+.pytest-tmp/
+__pycache__/
+*.py[cod]
+
+.env
+
+financial_agent.db
+data/
+stock_agent.egg-info/
+
+storage/content/
+knowledge_base/video_summaries/
+
+summary.md

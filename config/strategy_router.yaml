@@ -1,0 +1,66 @@
+regimes:
+  crowding_market:
+    name: 抱团行情
+    preferred_strategies:
+      RPS: 0.3
+      B2: 0.25
+      B3: 0.25
+      B1: 0.1
+      MACD_TRIPLE_GOLDEN: 0.05
+      DEFENSIVE: 0.05
+    max_total_position: 0.8
+    max_single_stock: 0.1
+    max_single_theme: 0.3
+    rule: 只参与主线核心，不买弱股便宜
+  rotation_market:
+    name: 轮动行情
+    preferred_strategies:
+      B1: 0.35
+      BOX_TRADING: 0.2
+      RPS: 0.15
+      B2: 0.1
+      B3: 0.05
+      MACD_TRIPLE_GOLDEN: 0.05
+      DEFENSIVE: 0.1
+    max_total_position: 0.65
+    max_single_stock: 0.08
+    max_single_theme: 0.25
+    rule: 缩量回踩买，涨多了卖
+  downtrend_market:
+    name: 单边下跌
+    preferred_strategies:
+      DEFENSIVE: 0.45
+      CASH: 0.5
+      BOX_TRADING: 0.05
+    max_total_position: 0.3
+    max_single_stock: 0.05
+    max_single_theme: 0.15
+    rule: 降低仓位，保留现金
+  range_market:
+    name: 震荡箱体
+    preferred_strategies:
+      BOX_TRADING: 0.45
+      B1: 0.25
+      RPS: 0.1
+      MACD_TRIPLE_GOLDEN: 0.05
+      DEFENSIVE: 0.1
+      B2: 0.05
+    max_total_position: 0.6
+    max_single_stock: 0.08
+    max_single_theme: 0.2
+    rule: 箱体底部买，顶部卖
+  high_position_retreat:
+    name: 高位退潮
+    preferred_strategies:
+      DEFENSIVE: 0.35
+      CASH: 0.25
+      BOX_TRADING: 0.15
+      B1: 0.1
+      RPS: 0.05
+      B2: 0.05
+      MACD_TRIPLE_GOLDEN: 0.05
+    max_total_position: 0.4
+    max_single_stock: 0.05
+    max_single_theme: 0.15
+    rule: 禁止高位补票，降低趋势股暴露
+

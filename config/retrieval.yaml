@@ -1,0 +1,24 @@
+retrieval:
+  default_top_n: 20
+  default_top_k: 5
+  collections:
+    knowledge: financial_knowledge
+    memory: financial_memory
+    decision_trace: financial_decision_trace
+  status_weight:
+    approved: 1.0
+    validated: 1.0
+    testing: 0.7
+    candidate: 0.4
+    archived: 0.2
+    rejected: 0.0
+  memory_score_weight:
+    rerank_score: 0.5
+    status_score: 0.2
+    confidence: 0.15
+    recency: 0.1
+    importance: 0.05
+  filters:
+    exclude_deleted: true
+    exclude_rejected: true
+

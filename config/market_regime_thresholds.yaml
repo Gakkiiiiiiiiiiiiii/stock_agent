@@ -1,0 +1,15 @@
+market_regime:
+  crowding:
+    min_top_theme_strength: 75
+    min_limit_up_count: 35
+  rotation:
+    min_breadth: 0.45
+    max_top_theme_strength: 80
+  downtrend:
+    max_breadth: 0.35
+    min_drawdown_risk: 0.6
+  range:
+    min_breadth: 0.35
+    max_breadth: 0.6
+  high_position_retreat:
+    min_retreat_score: 0.65
