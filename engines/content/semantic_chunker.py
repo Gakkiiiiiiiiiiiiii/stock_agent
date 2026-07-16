@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import re
 
+from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
+
 
 TOPIC_SHIFT_MARKERS = (
     "接下来",
@@ -145,6 +147,9 @@ class SemanticChunker:
         match = re.search(r"([A-Za-z0-9\.\-]{4,12}\.(?:HK|US)|\d{6}|上证指数|深证成指|创业板|恒生科技|黄金|原油|美联储|半导体|AI)", source, re.IGNORECASE)
         if match:
             return str(match.group(1)).strip()
+        company_names = FinancialEntityNormalizer.extract_company_names(source)
+        if company_names:
+            return company_names[0]
         for marker in ("支撑", "压力", "突破", "反弹", "下跌", "风险", "催化", "业绩", "估值"):
             if marker in source:
                 return marker
@@ -173,6 +178,7 @@ class SemanticChunker:
         entities.extend(str(item).strip() for item in frame.get("symbols") or [] if str(item).strip())
         ocr_text = str(frame.get("ocr_text") or "")
         entities.extend(re.findall(r"\b\d{4}\.HK\b|\b\d{6}\b", ocr_text, flags=re.IGNORECASE))
+        entities.extend(FinancialEntityNormalizer.extract_company_names(ocr_text))
         return entities
 
     @staticmethod

@@ -636,6 +636,186 @@
       line-height: 1.5;
       font-size: 12px;
     }
+    .segmented {
+      display: inline-flex;
+      align-items: center;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: #0f151e;
+    }
+    .segmented button {
+      border: none;
+      border-right: 1px solid var(--line);
+      border-radius: 0;
+      background: transparent;
+      padding: 7px 12px;
+      min-width: 80px;
+    }
+    .segmented button:last-child {
+      border-right: none;
+    }
+    .segmented button.active {
+      background: var(--accent-soft);
+      color: white;
+    }
+    .markdown-shell {
+      display: grid;
+      gap: 12px;
+    }
+    .markdown-preview {
+      min-height: 560px;
+      max-height: 860px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f151e;
+      padding: 18px 20px 24px;
+      line-height: 1.7;
+    }
+    .markdown-preview.empty {
+      color: var(--muted);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .markdown-preview img {
+      max-width: 100%;
+      height: auto;
+      display: block;
+      margin: 12px auto;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      box-shadow: 0 12px 28px rgba(0,0,0,0.25);
+      background: #0b1017;
+    }
+    .markdown-preview figure {
+      margin: 16px 0 20px;
+    }
+    .markdown-preview figcaption {
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      margin-top: 8px;
+    }
+    .markdown-preview h1,
+    .markdown-preview h2,
+    .markdown-preview h3,
+    .markdown-preview h4,
+    .markdown-preview h5,
+    .markdown-preview h6 {
+      line-height: 1.3;
+      margin: 1.1em 0 0.55em;
+      color: #f8fbff;
+    }
+    .markdown-preview h1 {
+      font-size: 28px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .markdown-preview h2 {
+      font-size: 22px;
+      margin-top: 1.4em;
+    }
+    .markdown-preview h3 {
+      font-size: 18px;
+    }
+    .markdown-preview p {
+      margin: 0.65em 0;
+      white-space: normal;
+    }
+    .markdown-preview ul,
+    .markdown-preview ol {
+      margin: 0.7em 0;
+      padding-left: 1.5em;
+    }
+    .markdown-preview li {
+      margin: 0.35em 0;
+    }
+    .markdown-preview li .md-subline {
+      display: block;
+      color: var(--muted);
+      margin-top: 4px;
+      white-space: pre-wrap;
+    }
+    .markdown-preview blockquote {
+      margin: 1em 0;
+      padding: 10px 14px;
+      border-left: 4px solid var(--accent);
+      background: rgba(79, 140, 255, 0.08);
+      color: #dbe8ff;
+      border-radius: 0 8px 8px 0;
+    }
+    .markdown-preview code {
+      font-family: Consolas, "Courier New", monospace;
+      font-size: 0.92em;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      padding: 0.1em 0.4em;
+    }
+    .markdown-preview pre {
+      margin: 1em 0;
+      padding: 14px 16px;
+      background: #0b1017;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      overflow: auto;
+    }
+    .markdown-preview pre code {
+      background: transparent;
+      border: none;
+      padding: 0;
+      font-size: 12px;
+      line-height: 1.6;
+    }
+    .markdown-preview hr {
+      border: none;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      margin: 1.5em 0;
+    }
+    .markdown-preview a {
+      color: #8bb8ff;
+      text-decoration: none;
+    }
+    .markdown-preview a:hover {
+      text-decoration: underline;
+    }
+    .markdown-preview table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 1em 0;
+      overflow: hidden;
+      border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+    .markdown-preview th,
+    .markdown-preview td {
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      text-align: left;
+      vertical-align: top;
+    }
+    .markdown-preview th {
+      background: rgba(255,255,255,0.04);
+      color: #f3f7ff;
+      font-weight: 600;
+    }
+    .markdown-preview tr:last-child td {
+      border-bottom: none;
+    }
+    .markdown-dedupe-note {
+      margin-bottom: 14px;
+      padding: 9px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(79, 140, 255, 0.18);
+      background: rgba(79, 140, 255, 0.08);
+      color: #d9e6ff;
+      font-size: 12px;
+      line-height: 1.5;
+    }
     .analysis-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
@@ -840,7 +1020,20 @@
             <div class="meta-grid" id="videoMetaGrid"></div>
             <div class="form-grid" style="margin-top:12px;">
               <div class="field full"><label>Markdown 路径</label><input id="videoSummaryPath" readonly /></div>
-              <div class="field full"><label>总结文档</label><textarea id="videoSummaryContent" readonly style="min-height:560px;"></textarea></div>
+              <div class="field full">
+                <label>总结文档</label>
+                <div class="markdown-shell">
+                  <div class="toolbar">
+                    <div class="segmented">
+                      <button id="videoSummaryPreviewTab" type="button" class="active">预览</button>
+                      <button id="videoSummarySourceTab" type="button">源码</button>
+                    </div>
+                    <span class="hint">预览模式会渲染 Markdown，并尝试把关键帧文件名映射成真实图片。</span>
+                  </div>
+                  <div id="videoSummaryPreview" class="markdown-preview empty">选择视频后，这里会渲染 Markdown 预览。</div>
+                  <textarea id="videoSummaryContent" readonly class="hidden" style="min-height:560px;"></textarea>
+                </div>
+              </div>
             </div>
             <div class="analysis-grid">
               <div class="analysis-card">
@@ -964,6 +1157,7 @@
       activeVideoItem: null,
       activeVideoDetail: null,
       activeVideoDocument: null,
+      videoSummaryView: "preview",
       videoList: [],
       activeSkill: null,
       agent: {
@@ -989,6 +1183,8 @@
     $("saveButton").addEventListener("click", saveActiveItem);
     $("addStockButton").addEventListener("click", () => appendStockRow());
     $("deleteVideoSummaryButton").addEventListener("click", deleteActiveVideoSummary);
+    $("videoSummaryPreviewTab").addEventListener("click", () => setVideoSummaryView("preview"));
+    $("videoSummarySourceTab").addEventListener("click", () => setVideoSummaryView("source"));
     $("agentSendButton").addEventListener("click", sendAgentQuery);
     $("agentClearButton").addEventListener("click", clearAgentWindow);
     $("newSessionButton").addEventListener("click", createAgentSession);
@@ -1233,6 +1429,9 @@
         metaGrid.innerHTML = `<div class="meta-card span"><div class="meta-label">Video Summary</div><div class="meta-value">选择左侧视频后，这里会展示总结文档与元信息。</div></div>`;
         $("videoSummaryPath").value = "";
         $("videoSummaryContent").value = "";
+        $("videoSummaryPreview").innerHTML = "选择视频后，这里会渲染 Markdown 预览。";
+        $("videoSummaryPreview").classList.add("empty");
+        setVideoSummaryView(state.videoSummaryView || "preview");
         $("videoFrameGallery").innerHTML = "";
         $("videoChunkList").innerHTML = "";
         $("videoEventTimeline").innerHTML = "";
@@ -1257,6 +1456,8 @@
       `;
       $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || "";
       $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || "";
+      renderVideoSummaryMarkdownPreview(detail, documentPayload);
+      setVideoSummaryView(state.videoSummaryView || "preview");
       renderVideoChunks(detail.chunks || []);
       renderVideoTimeline(detail.event_timeline || []);
       renderVideoEvents(detail.events || []);
@@ -1320,6 +1521,397 @@
         `;
         gallery.appendChild(card);
       });
+    }
+
+    function setVideoSummaryView(view) {
+      const normalizedView = view === "source" ? "source" : "preview";
+      state.videoSummaryView = normalizedView;
+      $("videoSummaryPreviewTab").classList.toggle("active", normalizedView === "preview");
+      $("videoSummarySourceTab").classList.toggle("active", normalizedView === "source");
+      $("videoSummaryPreview").classList.toggle("hidden", normalizedView !== "preview");
+      $("videoSummaryContent").classList.toggle("hidden", normalizedView !== "source");
+    }
+
+    function renderVideoSummaryMarkdownPreview(detail, documentPayload) {
+      const preview = $("videoSummaryPreview");
+      const summary = detail?.summary || {};
+      const rawMarkdown = documentPayload?.content || summary.summary_markdown || "";
+      if (!rawMarkdown.trim()) {
+        preview.innerHTML = "当前没有可展示的 Markdown 总结。";
+        preview.classList.add("empty");
+        return;
+      }
+      const frameContext = buildVideoFrameContext(detail);
+      const normalizedMarkdown = preprocessVideoSummaryMarkdown(rawMarkdown, frameContext);
+      preview.innerHTML = renderMarkdownToHtml(normalizedMarkdown, frameContext);
+      preview.classList.remove("empty");
+      window.requestAnimationFrame(() => {
+        dedupeRenderedMarkdownImages(preview);
+      });
+    }
+
+    function buildVideoFrameContext(detail) {
+      const frameMap = new Map();
+      const videoId = detail?.video?.id;
+      const bvid = String(detail?.video?.bvid || detail?.video?.platform_video_id || "").trim();
+      for (const frame of detail?.visual_frames || []) {
+        if (videoId == null || frame?.frame_index == null) continue;
+        const imageUrl = `/api/v1/content/videos/${videoId}/frames/${frame.frame_index}/image`;
+        const rawPath = String(frame.image_path || "").trim();
+        const fileName = basenameFromPath(rawPath);
+        if (fileName) {
+          frameMap.set(fileName, imageUrl);
+          frameMap.set(fileName.toLowerCase(), imageUrl);
+        }
+      }
+      return { frameMap, bvid };
+    }
+
+    function preprocessVideoSummaryMarkdown(markdown, frameContext) {
+      return normalizeMarkdown(markdown).split("\n").map((line) => {
+        const match = line.match(/^(\s*)图像(?:证据)?：\s*(.+?)\s*$/);
+        if (!match) return line;
+        const indent = match[1] || "";
+        const originalTarget = match[2] || "";
+        const resolvedUrl = resolveMarkdownImageUrl(originalTarget, frameContext);
+        if (!resolvedUrl || resolvedUrl === originalTarget) return line;
+        const alt = basenameFromPath(originalTarget) || "关键帧";
+        return `${indent}![${alt}](${resolvedUrl})`;
+      }).join("\n");
+    }
+
+    function renderMarkdownToHtml(markdown, context = {}) {
+      const lines = normalizeMarkdown(markdown).split("\n");
+      const blocks = [];
+      let paragraph = [];
+      let blockquote = [];
+      let codeFence = null;
+      let codeLines = [];
+      let list = null;
+      let table = null;
+
+      function flushParagraph() {
+        if (!paragraph.length) return;
+        blocks.push(`<p>${renderInlineMarkdown(paragraph.join("\n"), context).replace(/\n/g, "<br />")}</p>`);
+        paragraph = [];
+      }
+
+      function flushBlockquote() {
+        if (!blockquote.length) return;
+        const content = blockquote.map((line) => renderInlineMarkdown(line, context)).join("<br />");
+        blocks.push(`<blockquote>${content}</blockquote>`);
+        blockquote = [];
+      }
+
+      function flushCodeFence() {
+        if (codeFence === null) return;
+        const languageClass = codeFence ? ` class="language-${escapeHtml(codeFence)}"` : "";
+        blocks.push(`<pre><code${languageClass}>${escapeHtml(codeLines.join("\n"))}</code></pre>`);
+        codeFence = null;
+        codeLines = [];
+      }
+
+      function flushList() {
+        if (!list || !list.items.length) {
+          list = null;
+          return;
+        }
+        const itemsHtml = list.items.map((item) => {
+          const parts = [`<div>${renderInlineMarkdown(item.main, context)}</div>`];
+          item.extra.forEach((line) => {
+            parts.push(`<span class="md-subline">${renderInlineMarkdown(line, context).replace(/\n/g, "<br />")}</span>`);
+          });
+          return `<li>${parts.join("")}</li>`;
+        }).join("");
+        blocks.push(`<${list.type}>${itemsHtml}</${list.type}>`);
+        list = null;
+      }
+
+      function flushTable() {
+        if (!table || !table.headers.length) {
+          table = null;
+          return;
+        }
+        const headerHtml = table.headers.map((cell) => `<th>${renderInlineMarkdown(cell, context)}</th>`).join("");
+        const rowHtml = table.rows.map((row) => {
+          const cells = row.map((cell) => `<td>${renderInlineMarkdown(cell, context)}</td>`).join("");
+          return `<tr>${cells}</tr>`;
+        }).join("");
+        blocks.push(`<table><thead><tr>${headerHtml}</tr></thead><tbody>${rowHtml}</tbody></table>`);
+        table = null;
+      }
+
+      for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const trimmed = line.trim();
+
+        if (codeFence !== null) {
+          if (/^```/.test(trimmed)) {
+            flushCodeFence();
+          } else {
+            codeLines.push(line);
+          }
+          continue;
+        }
+
+        if (table && isTableRow(line)) {
+          table.rows.push(parseTableRow(line));
+          continue;
+        }
+        if (table && !trimmed) {
+          flushTable();
+          continue;
+        }
+        if (table && !isTableRow(line)) {
+          flushTable();
+        }
+
+        if (!trimmed) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          continue;
+        }
+
+        const codeMatch = trimmed.match(/^```(\w+)?\s*$/);
+        if (codeMatch) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          codeFence = codeMatch[1] || "";
+          codeLines = [];
+          continue;
+        }
+
+        if (isTableHeaderAt(lines, index)) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          table = { headers: parseTableRow(line), rows: [] };
+          index += 1;
+          continue;
+        }
+
+        if (/^#{1,6}\s+/.test(trimmed)) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          const level = Math.min(6, trimmed.match(/^#+/)[0].length);
+          const content = trimmed.replace(/^#{1,6}\s+/, "");
+          blocks.push(`<h${level}>${renderInlineMarkdown(content, context)}</h${level}>`);
+          continue;
+        }
+
+        if (/^([-*_])(?:\s*\1){2,}\s*$/.test(trimmed)) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          blocks.push("<hr />");
+          continue;
+        }
+
+        if (isStandaloneImageLine(trimmed)) {
+          flushParagraph();
+          flushBlockquote();
+          flushList();
+          const image = parseImageSyntax(trimmed, context);
+          if (image) {
+            blocks.push(`<figure><img src="${escapeHtml(image.src)}" alt="${escapeHtml(image.alt)}" loading="lazy" /><figcaption>${escapeHtml(image.alt)}</figcaption></figure>`);
+          } else {
+            paragraph.push(line);
+          }
+          continue;
+        }
+
+        if (/^>\s?/.test(trimmed)) {
+          flushParagraph();
+          flushList();
+          blockquote.push(trimmed.replace(/^>\s?/, ""));
+          continue;
+        }
+
+        const listMatch = line.match(/^(\s*)([-+*]|\d+\.)\s+(.*)$/);
+        if (listMatch) {
+          flushParagraph();
+          flushBlockquote();
+          const type = /\d+\./.test(listMatch[2]) ? "ol" : "ul";
+          if (!list || list.type !== type) {
+            flushList();
+            list = { type, items: [] };
+          }
+          list.items.push({ main: listMatch[3] || "", extra: [] });
+          continue;
+        }
+
+        if (list && list.items.length) {
+          list.items[list.items.length - 1].extra.push(trimmed);
+          continue;
+        }
+
+        paragraph.push(line);
+      }
+
+      flushParagraph();
+      flushBlockquote();
+      flushList();
+      flushTable();
+      flushCodeFence();
+
+      return blocks.join("");
+    }
+
+    function renderInlineMarkdown(text, context = {}) {
+      const placeholders = [];
+      let working = String(text || "");
+
+      working = working.replace(/`([^`]+)`/g, (_, code) => {
+        const token = `@@INLINE_CODE_${placeholders.length}@@`;
+        placeholders.push(`<code>${escapeHtml(code)}</code>`);
+        return token;
+      });
+
+      working = escapeHtml(working);
+      working = working.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, (_, alt, url) => {
+        const resolvedUrl = resolveMarkdownImageUrl(url, context);
+        return `<img src="${escapeHtml(resolvedUrl)}" alt="${escapeHtml(alt || "image")}" loading="lazy" />`;
+      });
+      working = working.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
+        return `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${label}</a>`;
+      });
+      working = working.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      working = working.replace(/(^|[^\*])\*([^*]+)\*(?!\*)/g, "$1<em>$2</em>");
+      working = working.replace(/(^|[^_])_([^_]+)_(?!_)/g, "$1<em>$2</em>");
+
+      placeholders.forEach((html, index) => {
+        working = working.replace(`@@INLINE_CODE_${index}@@`, html);
+      });
+      return working;
+    }
+
+    function normalizeMarkdown(value) {
+      return String(value || "").replace(/\r\n?/g, "\n");
+    }
+
+    function basenameFromPath(value) {
+      const normalized = String(value || "").trim().replace(/^['"]|['"]$/g, "");
+      if (!normalized) return "";
+      return normalized.split(/[\\/]/).pop() || normalized;
+    }
+
+    function resolveMarkdownImageUrl(value, context = {}) {
+      const normalized = String(value || "").trim().replace(/^<|>$/g, "").replace(/^['"]|['"]$/g, "");
+      if (!normalized) return "";
+      if (/^(https?:|data:|blob:)/i.test(normalized) || normalized.startsWith("/")) return normalized;
+      const fileName = basenameFromPath(normalized);
+      const mapped = context.frameMap?.get(normalized)
+        || context.frameMap?.get(normalized.toLowerCase())
+        || context.frameMap?.get(fileName)
+        || context.frameMap?.get(fileName.toLowerCase())
+        || null;
+      if (mapped) return mapped;
+      const inferredBvid = extractBvidFromFilename(fileName) || String(context.bvid || "").trim();
+      if (inferredBvid && fileName) {
+        return `/api/v1/content/video-frames/${encodeURIComponent(inferredBvid)}/${encodeURIComponent(fileName)}`;
+      }
+      return normalized;
+    }
+
+    function isStandaloneImageLine(line) {
+      return /^!\[[^\]]*\]\([^)]+\)\s*$/.test(line || "");
+    }
+
+    function parseImageSyntax(line, context = {}) {
+      const match = String(line || "").trim().match(/^!\[([^\]]*)\]\(([^)]+)\)\s*$/);
+      if (!match) return null;
+      return {
+        alt: match[1] || "image",
+        src: resolveMarkdownImageUrl(match[2], context),
+      };
+    }
+
+    function isTableHeaderAt(lines, index) {
+      if (index < 0 || index + 1 >= lines.length) return false;
+      return isTableRow(lines[index]) && /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(lines[index + 1] || "");
+    }
+
+    function isTableRow(line) {
+      return /^\s*\|?.+\|.+\|?\s*$/.test(line || "");
+    }
+
+    function parseTableRow(line) {
+      const trimmed = String(line || "").trim().replace(/^\|/, "").replace(/\|$/, "");
+      return trimmed.split("|").map((cell) => cell.trim());
+    }
+
+    function extractBvidFromFilename(value) {
+      const match = String(value || "").match(/(BV[0-9A-Za-z]+)/i);
+      return match ? match[1] : "";
+    }
+
+    async function dedupeRenderedMarkdownImages(preview) {
+      if (!preview) return;
+      preview.querySelectorAll(".markdown-dedupe-note").forEach((node) => node.remove());
+      const images = Array.from(preview.querySelectorAll("img"));
+      if (!images.length) return;
+      const seen = [];
+      let hiddenCount = 0;
+      for (const image of images) {
+        const signature = await computeRenderedImageSignature(image);
+        if (signature == null) continue;
+        const duplicate = seen.find((item) => hammingDistanceBigInt(item.signature, signature) <= 6n);
+        if (!duplicate) {
+          seen.push({ signature, image });
+          continue;
+        }
+        const wrapper = image.closest("figure, .md-subline, p, div") || image;
+        wrapper.classList.add("hidden");
+        hiddenCount += 1;
+      }
+      if (!hiddenCount) return;
+      const note = document.createElement("div");
+      note.className = "markdown-dedupe-note";
+      note.textContent = `已自动折叠 ${hiddenCount} 张仅字幕变化、主画面高度相似的关键帧。`;
+      preview.prepend(note);
+    }
+
+    async function computeRenderedImageSignature(image) {
+      try {
+        if (!image.complete) await image.decode();
+      } catch (_) {
+        return null;
+      }
+      const width = image.naturalWidth || image.width;
+      const height = image.naturalHeight || image.height;
+      if (!width || !height) return null;
+      const canvas = document.createElement("canvas");
+      canvas.width = 8;
+      canvas.height = 8;
+      const context = canvas.getContext("2d", { willReadFrequently: true });
+      if (!context) return null;
+      const cropHeight = Math.max(1, Math.floor(height * 0.78));
+      context.drawImage(image, 0, 0, width, cropHeight, 0, 0, 8, 8);
+      const { data } = context.getImageData(0, 0, 8, 8);
+      const luminance = [];
+      for (let index = 0; index < data.length; index += 4) {
+        luminance.push(Math.round((data[index] + data[index + 1] + data[index + 2]) / 3));
+      }
+      if (!luminance.length) return null;
+      const average = luminance.reduce((sum, value) => sum + value, 0) / luminance.length;
+      let signature = 0n;
+      luminance.forEach((value) => {
+        signature = (signature << 1n) | (value >= average ? 1n : 0n);
+      });
+      return signature;
+    }
+
+    function hammingDistanceBigInt(left, right) {
+      let value = (left ?? 0n) ^ (right ?? 0n);
+      let count = 0n;
+      while (value) {
+        count += value & 1n;
+        value >>= 1n;
+      }
+      return count;
     }
 
     function renderVideoChunks(chunks) {

@@ -33,6 +33,9 @@ services:
     command: uvicorn workers.reranker_api:app --host 0.0.0.0 --port 8010
     env_file:
       - .env
+    environment:
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      FFPROBE_BIN: /usr/bin/ffprobe
     ports:
       - "8010:8010"
     volumes:
@@ -42,6 +45,7 @@ services:
       - ./engines:/app/engines
       - ./financial_agent:/app/financial_agent
       - ./mcp_servers:/app/mcp_servers
+      - ./scripts:/app/scripts
       - ./workers:/app/workers
       - ./storage:/app/storage
       - ./pyproject.toml:/app/pyproject.toml:ro
@@ -54,6 +58,17 @@ services:
     container_name: financial_agent_api
     env_file:
       - .env
+    environment:
+      ASR_DEVICE: cuda
+      ASR_COMPUTE_TYPE: float16
+      ASR_USE_BATCHED: "true"
+      ASR_BATCH_SIZE: "8"
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      FFPROBE_BIN: /usr/bin/ffprobe
+      VIDEO_OCR_DEVICE: gpu:0
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    gpus: all
     ports:
       - "8000:8000"
     volumes:
@@ -64,6 +79,7 @@ services:
       - ./financial_agent:/app/financial_agent
       - ./knowledge_base:/app/knowledge_base
       - ./mcp_servers:/app/mcp_servers
+      - ./scripts:/app/scripts
       - ./skills:/app/skills
       - ./storage:/app/storage
       - ./workers:/app/workers
@@ -81,6 +97,13 @@ services:
     command: python workers/vector_index_worker.py
     env_file:
       - .env
+    environment:
+      ASR_DEVICE: cuda
+      ASR_COMPUTE_TYPE: float16
+      ASR_USE_BATCHED: "true"
+      ASR_BATCH_SIZE: "8"
+      FFMPEG_BIN: /usr/bin/ffmpeg
+      FFPROBE_BIN: /usr/bin/ffprobe
     volumes:
       - ./app:/app/app
       - ./agent:/app/agent
@@ -89,6 +112,7 @@ services:
       - ./financial_agent:/app/financial_agent
       - ./knowledge_base:/app/knowledge_base
       - ./mcp_servers:/app/mcp_servers
+      - ./scripts:/app/scripts
       - ./skills:/app/skills
       - ./storage:/app/storage
       - ./workers:/app/workers

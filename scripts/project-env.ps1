@@ -7,6 +7,7 @@ $script:CondaEnvPath = Join-Path $script:ProjectRoot ".conda-env"
 $script:PythonExe = Join-Path $script:CondaEnvPath "python.exe"
 $script:ScriptsDir = Join-Path $script:CondaEnvPath "Scripts"
 $script:LibraryBin = Join-Path $script:CondaEnvPath "Library\bin"
+$script:NvidiaSitePackages = Join-Path $script:CondaEnvPath "Lib\site-packages\nvidia"
 $script:TesseractExe = Join-Path $script:LibraryBin "tesseract.exe"
 $script:TessdataDir = Join-Path $script:CondaEnvPath "share\tessdata"
 $script:DotEnvPath = Join-Path $script:ProjectRoot ".env"
@@ -29,6 +30,26 @@ function Get-BilibiliCookieFilePath {
 
 function Set-ProjectRuntimeEnv {
     $env:PATH = "$script:ScriptsDir;$script:LibraryBin;$env:PATH"
+    if (Test-Path $script:NvidiaSitePackages) {
+        $nvidiaBinCandidates = @(
+            (Join-Path $script:NvidiaSitePackages "cu12\bin"),
+            (Join-Path $script:NvidiaSitePackages "cu12\bin\x86_64"),
+            (Join-Path $script:NvidiaSitePackages "cu13\bin"),
+            (Join-Path $script:NvidiaSitePackages "cu13\bin\x86_64"),
+            (Join-Path $script:NvidiaSitePackages "cuda_runtime\bin"),
+            (Join-Path $script:NvidiaSitePackages "cuda_runtime\bin\x86_64"),
+            (Join-Path $script:NvidiaSitePackages "cuda_nvrtc\bin"),
+            (Join-Path $script:NvidiaSitePackages "cuda_nvrtc\bin\x86_64"),
+            (Join-Path $script:NvidiaSitePackages "cublas\bin"),
+            (Join-Path $script:NvidiaSitePackages "cublas\bin\x86_64"),
+            (Join-Path $script:NvidiaSitePackages "cudnn\bin")
+        )
+        foreach ($binDir in $nvidiaBinCandidates) {
+            if ((Test-Path $binDir) -and (-not (($env:PATH -split ';') -contains $binDir))) {
+                $env:PATH = "$binDir;$env:PATH"
+            }
+        }
+    }
     $env:FFMPEG_BIN = Join-Path $script:LibraryBin "ffmpeg.exe"
     $env:FFPROBE_BIN = Join-Path $script:LibraryBin "ffprobe.exe"
     $env:YT_DLP_BIN = Join-Path $script:ScriptsDir "yt-dlp.exe"
@@ -99,7 +120,13 @@ function Set-ProjectRuntimeEnv {
                 "BILIBILI_COOKIES_FROM_BROWSER",
                 "BILIBILI_COOKIES_BROWSER_PROFILE",
                 "TESSERACT_BIN",
+                "VIDEO_OCR_BACKEND",
                 "VIDEO_OCR_LANGUAGE",
+                "VIDEO_OCR_PADDLE_LANG",
+                "VIDEO_OCR_DEVICE",
+                "VIDEO_OCR_SCORE_THRESH",
+                "VIDEO_OCR_DET_MODEL_NAME",
+                "VIDEO_OCR_REC_MODEL_NAME",
                 "VIDEO_FRAME_INTERVAL_SECONDS",
                 "VIDEO_MAX_FRAMES",
                 "VIDEO_VISUAL_CUE_WINDOW_SECONDS",
@@ -144,5 +171,12 @@ function New-ProjectCondaEnv {
     }
     & $condaExe create -p $script:CondaEnvPath python=3.11 -y
     & (Join-Path $script:CondaEnvPath "python.exe") -m pip install -e ".[dev]"
+    & (Join-Path $script:CondaEnvPath "python.exe") -m pip install `
+        nvidia-cublas-cu12==12.9.2.10 `
+        nvidia-cudnn-cu12==9.24.0.43 `
+        nvidia-cuda-runtime-cu12==12.9.79 `
+        nvidia-cuda-nvrtc-cu12==12.9.86 `
+        -i https://pypi.tuna.tsinghua.edu.cn/simple
+    & (Join-Path $script:CondaEnvPath "python.exe") -m pip install paddlepaddle-gpu==3.3.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu130/
     & $condaExe install -p $script:CondaEnvPath -c conda-forge ffmpeg -y
 }

@@ -1,0 +1,486 @@
+{
+  "video": {
+    "title": "【直播回放】早8点15直播，135专属直播 2026年07月08日08点场",
+    "author_name": "鹰眼看盘",
+    "publish_time": "20260708",
+    "duration_seconds": 3361
+  },
+  "video_type": "EQUITY_TECHNICAL_ANALYSIS",
+  "summary": {
+    "id": 3,
+    "video_id": 4,
+    "summary_mode": "investment",
+    "summary_markdown": "# 【直播回放】早8点15直播，135专属直播 2026年07月08日08点场\n\n市场处于弱反弹阶段，反弹力度小，资金如惊弓之鸟，易受扰动。中报季业绩利好常被提前兑现，科技股高位放量下跌，基金一篮子配置卖出拖累半导体等板块。非科技方向如医药、证券有趋势，但整体缺乏增量资金。美股科技股出现双顶、加速段回吐等负面信号，映射A股科技压力大。消费、医药、石油走强，地缘冲突推高油价。建议均衡持仓，侧重性价比，注意高位业绩兑现风险。",
+    "core_summary": "市场处于弱反弹阶段，反弹力度小，资金如惊弓之鸟，易受扰动。中报季业绩利好常被提前兑现，科技股高位放量下跌，基金一篮子配置卖出拖累半导体等板块。非科技方向如医药、证券有趋势，但整体缺乏增量资金。美股科技股出现双顶、加速段回吐等负面信号，映射A股科技压力大。消费、医药、石油走强，地缘冲突推高油价。建议均衡持仓，侧重性价比，注意高位业绩兑现风险。",
+    "bull_points": [
+      "储能/电信下半年景气度尚可，招标数创新高，未来确定性较好",
+      "消费、医药、石油等防御板块表现较强，美股相关个股持续走强",
+      "部分个股如亿纬锂能业绩亮眼，估值仅十余倍，基本面扎实"
+    ],
+    "bear_points": [
+      "反弹力度弱，仅医药、证券走出一定趋势，其余多为弱反弹，市场情绪脆弱",
+      "AI硬件等科技股虽业绩大增，但股价已涨3-4倍，资金借利好出货成为常态",
+      "基金一篮子配置（半导体、通信设备、电气设备等）同步卖出，导致板块集体下挫",
+      "美股科技股出现英特尔双顶、西部数据加速段回吐等弱势形态，映射A股科技板块日子不好过",
+      "缺乏增量资金，一旦风吹草动，资金立刻离场，市场承接力弱"
+    ],
+    "themes": [
+      "中报季业绩兑现",
+      "科技股高估值回调",
+      "基金配置一篮子卖出",
+      "均衡持仓与性价比",
+      "地缘冲突（美伊）推高油价",
+      "储能/电信景气"
+    ],
+    "symbols": [
+      "宁德时代",
+      "亿纬锂能",
+      "英特尔 (INTC)",
+      "西部数据 (WDC)",
+      "AMD",
+      "应用材料 (AMAT)",
+      "Lumentum (LITE)",
+      "康宁 (GLW)",
+      "Meta (META)",
+      "康菲石油 (COP)",
+      "埃克森美孚 (XOM)",
+      "雪佛龙 (CVX)",
+      "强生 (JNJ)",
+      "辉瑞 (PFE)",
+      "可口可乐 (KO)",
+      "沃尔玛 (WMT)",
+      "麦当劳 (MCD)"
+    ],
+    "catalysts": [
+      "中报业绩陆续公布",
+      "储能/电信招标数据验证",
+      "美伊冲突升级推高油价"
+    ],
+    "risks": [
+      "业绩利好公布后资金兑现压力",
+      "市场无增量资金导致阴跌",
+      "科技股技术形态破位（如AMD跌破支撑位）",
+      "地缘政治不确定性对资源品价格扰动"
+    ],
+    "actionable_view": "建议均衡持仓，回避极高位置品种，即使业绩好也可能被兑现；关注性价比，可适度关注储能/电信等景气方向，但不宜追高。",
+    "evidence_segments": [
+      "反弹5天后回调2天，反弹力度小，方向多为弱反弹 (6670-276620 ms)",
+      "AI硬件业绩增长100%-150%，但股价已涨3-4倍，资金借利好兑现 (6670-276620 ms)",
+      "基金一篮子配置（半导体、通信、电气设备）集体卖出 (260620-451220 ms)",
+      "美股科技股：英特尔双顶、西部数据回吐加速段、应用材料加速段将回吐 (434220-626720 ms)",
+      "AMD 若跌破支撑位将调整一段，不跌破则无虞 (434220-626720 ms)",
+      "美股消费医药石油走强，商业航天大跌 (260620-451220 ms)",
+      "储能/电信下半年景气度好，招标数创新高 (260620-451220 ms)",
+      "市场情绪特别兴奋时往往不是好时点 (434220-626720 ms)"
+    ],
+    "confidence_score": 1.0,
+    "llm_provider": "deepseek",
+    "llm_model": "deepseek-v4-pro",
+    "memory_record_id": 75
+  },
+  "chunks_count": 18,
+  "events_count": 93,
+  "visual_frames_count": 0,
+  "event_timeline_count": 93,
+  "top_events": [
+    {
+      "id": 1,
+      "video_id": 4,
+      "chunk_id": 1,
+      "event_index": 1,
+      "event_type": "TECHNICAL_TREND",
+      "claim_type": "FORECAST",
+      "sentiment": "BULLISH",
+      "subjectivity": "HIGH",
+      "certainty": 0.55,
+      "confidence_score": 0.6,
+      "statement": "hello 早上好 早上好呀 早上好 早上好 早上好 早上好 早上好 早上好 那来到直播间的朋友们 如果有问题的话可以提啊 如果有问题的话可以提 今天的话呢 主要跟大家聊聊天 那 聊天之前呢 首先跟大家来说一下 整个行情的一个变化 就是说 首先呢 对于说 这个行情走到这边 更多的大家可以去看一下 比如说 传言中位数 类似像这个 其实它呢 在这个点是反弹的 就是1 如果这个 碳体回升算的话就12 34 5天 其实它是反弹了5天以后 回调2天 它是这样子的一个节奏 那这个节奏的话呢 主要是什么呢 这个反弹的力度太小了 反弹的那些方向呢 对于说 除了这个医药和证券 它是走出了一定的趋势之外 其他的呢 就 感觉上去更像是一个弱反弹 所以说一旦有一些风吹草动啊 或者怎么样子 整个市场资金还是像惊弓之鸟 它不会说 轻易的去切换 因为作为说现在呢 正好又是中报季 所以说呢 业绩是非常非常重要的 很多人就是去看 业绩 比如说像AI的一些 AI硬件的业绩 你要说他们差吧 那确实是不差 这个是肯定的 业绩肯定是非常好的 但是呢 缺点呢 是什么呢 就这批 股票他们的 缺点就在于说 他们都已经大涨了 有很多很多倍了 这个是个问题 就即便说他给你的业绩说 增长了100% 增长了150% 你看上去确实放到平时呢 确实非常炸裂的一个业绩 但是到现在呢 他已经上去了三倍四倍了 然后再告诉你说 业绩涨了100% 这个时候很多的一些资金啊 他反而不会去选择 在这个点继续做多 他反而会趁一个利好消息 直接给你兑现掉 这个呢 似乎在近期的一些业绩公布里面 都已经成为了一个标配 就是你只要业绩公布出来是好的 立刻给你来 做兑现 因为前面已经涨涨涨 涨到这样子了 然后告诉你业绩好 他直接就这么玩 那所以这是一个 比较恶心的一个事情 那作为另外一个方向 就非科技一类的话呢 因为 其实 不像是科技 他们特别是AI印象 就是有些东西 他的业绩这么的名牌 所以就会变成什么呢 就大家也不敢去买 就买了以后呢 一看这个市场要跌了 赶紧全卖掉再说 啊就变成这个 进来 哎我来了 你打我呀 哎呦 我要走了 你来呀 我打我呀 哎 我也走了 类似像这样子的这种 啊所以这个是 呃比较难受的 有朋友也说一下 要看一下义伟对吧 也可以看一下他 就是把这个缺口补了 这里呢 本来是有个 这个金刃断层的 现在呢 把这个补了 这个呢 其实还是现在市场的一个 风格的一个问题 我个人觉得 因为单论他的业绩的话 是已经是非常漂亮了 就是到这个业绩 他的适应率的话就十来倍啊 实际来说 作为这种电池的 这种制造龙头之一吧 应该是相当不错了 所以说这个点上 呃跳空补不补 我觉得意义也不大吧 就是说他不补 他补掉也不代表说 他就一定是弱了 或者说怎么样子 就是现在这段时间行情都很糟糕嘛 因为有很多的一些 包括说一些基金啊 呃就是你会发现 就有的时候啊 跌起来的时候 就他如果现在暂时还没有 赠量资金 就是市场还没有找到方向的时候 他跌起来的时候他 比如说半导体元器件通信设备 哎这个电器设备啊 他是跟着他们一起跌的 就是他们整个是一篮子 就有很有可能就是 呃有一些基金的一些配置啊 他们比如说 呃就是比如说半导体配的最多 或者说通信设备配的最多",
+      "time_expression": "hello 早上好 早上好呀 早上好 早上好 早上好 早上好 早上好 早上好 那来到直播间的朋友们 如果有问题的话可以提啊 如果有问题的话可以提 今天的话呢 主要跟大家聊聊天 那 聊天之前呢 首先跟大家来说一下 整个行情的一个变化 就是说 首先呢 对于说 这个行情走到这边 更多的大家可以去看一下 比如说 传言中位数 类似像这个 其实它呢 在这个点是反弹的 就是1 如果这个 碳体回升算的话就12 34 5天 其实它是反弹了5天以后 回调2天 它是这样子的一个节奏 那这个节奏的话呢 主要是什么呢 这个反弹的力度太小了 反弹的那些方向呢 对于说 除了这个医药和证券 它是走出了一定的趋势之外 其他的呢 就 感觉上去更像是一个弱反弹 所以说一旦有一些风吹草动啊 或者怎么样子 整个市场资金还是像惊弓之鸟 它不会说 轻易的去切换 因为作为说现在呢 正好又是中报季 所以说呢 业绩是非常非常重要的 很多人就是去看 业绩 比如说像AI的一些 AI硬件的业绩 你要说他们差吧 那确实是不差 这个是肯定的 业绩肯定是非常好的 但是呢 缺点呢 是什么呢 就这批 股票他们的 缺点就在于说 他们都已经大涨了 有很多很多倍了 这个是个问题 就即便说他给你的业绩说 增长了100% 增长了150% 你看上去确实放到平时呢 确实非常炸裂的一个业绩 但是到现在呢 他已经上去了三倍四倍了 然后再告诉你说 业绩涨了100% 这个时候很多的一些资金啊 他反而不会去选择 在这个点继续做多 他反而会趁一个利好消息 直接给你兑现掉 这个呢 似乎在近期的一些业绩公布里面 都已经成为了一个标配 就是你只要业绩公布出来是好的 立刻给你来 做兑现 因为前面已经涨涨涨 涨到这样子了 然后告诉你业绩好 他直接就这么玩 那所以这是一个 比较恶心的一个事情 那作为另外一个方向 就非科技一类的话呢 因为 其实 不像是科技 他们特别是AI印象 就是有些东西 他的业绩这么的名牌 所以就会变成什么呢 就大家也不敢去买 就买了以后呢 一看这个市场要跌了 赶紧全卖掉再说 啊就变成这个 进来 哎我来了 你打我呀 哎呦 我要走了 你来呀 我打我呀 哎 我也走了 类似像这样子的这种 啊所以这个是 呃比较难受的 有朋友也说一下 要看一下义伟对吧 也可以看一下他 就是把这个缺口补了 这里呢 本来是有个 这个金刃断层的 现在呢 把这个补了 这个呢 其实还是现在市场的一个 风格的一个问题 我个人觉得 因为单论他的业绩的话 是已经是非常漂亮了 就是到这个业绩 他的适应率的话就十来倍啊 实际来说 作为这种电池的 这种制造龙头之一吧 应该是相当不错了 所以说这个点上 呃跳空补不补 我觉得意义也不大吧 就是说他不补 他补掉也不代表说 他就一定是弱了 或者说怎么样子 就是现在这段时间行情都很糟糕嘛 因为有很多的一些 包括说一些基金啊 呃就是你会发现 就有的时候啊 跌起来的时候 就他如果现在暂时还没有 赠量资金 就是市场还没有找到方向的时候 他跌起来的时候他 比如说半导体元器件通信设备 哎这个电器设备啊 他是跟着他们一起跌的 就是他们整个是一篮子 就有很有可能就是 呃有一些基金的一些配置啊 他们比如说 呃就是比如说半导体配的最多 或者说通信设备配的最多",
+      "normalized_time_start": "2026-07-08",
+      "normalized_time_end": "2026-07-08",
+      "start_ms": 6670,
+      "end_ms": 276620,
+      "condition_text": "如果有问题的话可以提啊 如果有问题的话可以提 今天的话呢 主要跟大家聊聊天 那 聊天之前呢 首先跟大家来说一下 整个行情的一个变化 就是说 首先呢 对于说 这个行情走到这边 更多的大家可以去看一下 比如说 传言中位数 类似像这个 其实它呢 在这个点是反弹的 就是1 如果这个 碳体回升算的话就12 34 5天 其实它是反弹了5天以后 回调2天 它是这样子的一个节奏 那这个节奏的话呢 主要是什么呢 这个反弹的力度太小了 反弹的那些方向呢 对于说 除了这个医药和证券 它是走出了一定的趋势之外 其他的呢 就 感觉上去更像是一个弱反弹 所以说一旦有一些风吹草动啊 或者怎么样子 整个市场资金还是像惊弓之鸟 它不会说 轻易的去切换 因为作为说现在呢 正好又是中报季 所以说呢 业绩是非常非常重要的 很多人就是去看 业绩 比如说像AI的一些 AI硬件的业绩 你要说他们差吧 那确实是不差 这个是肯定的 业绩肯定是非常好的 但是呢 缺点呢 是什么呢 就这批 股票他们的 缺点就在于说 他们都已经大涨了 有很多很多倍了 这个是个问题 就即便说他给你的业绩说 增长了100% 增长了150% 你看上去确实放到平时呢 确实非常炸裂的一个业绩 但是到现在呢 他已经上去了三倍四倍了 然后再告诉你说 业绩涨了100% 这个时候很多的一些资金啊 他反而不会去选择 在这个点继续做多 他反而会趁一个利好消息 直接给你兑现掉 这个呢 似乎在近期的一些业绩公布里面 都已经成为了一个标配 就是你只要业绩公布出来是好的 立刻给你来 做兑现 因为前面已经涨涨涨 涨到这样子了 然后告诉你业绩好 他直接就这么玩 那所以这是一个 比较恶心的一个事情 那作为另外一个方向 就非科技一类的话呢 因为 其实 不像是科技 他们特别是AI印象 就是有些东西 他的业绩这么的名牌 所以就会变成什么呢 就大家也不敢去买 就买了以后呢 一看这个市场要跌了 赶紧全卖掉再说 啊就变成这个 进来 哎我来了 你打我呀 哎呦 我要走了 你来呀 我打我呀 哎 我也走了 类似像这样子的这种 啊所以这个是 呃比较难受的 有朋友也说一下 要看一下义伟对吧 也可以看一下他 就是把这个缺口补了 这里呢 本来是有个 这个金刃断层的 现在呢 把这个补了 这个呢 其实还是现在市场的一个 风格的一个问题 我个人觉得 因为单论他的业绩的话 是已经是非常漂亮了 就是到这个业绩 他的适应率的话就十来倍啊 实际来说 作为这种电池的 这种制造龙头之一吧 应该是相当不错了 所以说这个点上 呃跳空补不补 我觉得意义也不大吧 就是说他不补 他补掉也不代表说 他就一定是弱了 或者说怎么样子 就是现在这段时间行情都很糟糕嘛 因为有很多的一些 包括说一些基金啊 呃就是你会发现 就有的时候啊 跌起来的时候 就他如果现在暂时还没有 赠量资金 就是市场还没有找到方向的时候 他跌起来的时候他 比如说半导体元器件通信设备 哎这个电器设备啊 他是跟着他们一起跌的 就是他们整个是一篮子 就有很有可能就是 呃有一些基金的一些配置啊 他们比如说 呃就是比如说半导体配的最多 或者说通信设备配的最多",
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        },
+        {
+          "name": "AI",
+          "ticker": "AI",
+          "entity_type": "THEME"
+        },
+        {
+          "name": "HELLO",
+          "ticker": "HELLO",
+          "entity_type": "UNKNOWN"
+        }
+      ],
+      "attributes": {
+        "numbers": [
+          1,
+          12,
+          34,
+          5,
+          5,
+          2
+        ]
+      },
+      "conflict_key": "SEMI::TECHNICAL_TREND",
+      "conflict_status": "active",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 1,
+          "source_type": "ASR",
+          "source_id": "chunk_0",
+          "text": "hello 早上好 早上好呀 早上好 早上好 早上好 早上好 早上好 早上好 那来到直播间的朋友们 如果有问题的话可以提啊 如果有问题的话可以提 今天的话呢 主要跟大家聊聊天 那 聊天之前呢 首先跟大家来说一下 整个行情的一个变化 就是说 首先呢 对于说 这个行情走到这边 更多的大家可以去看一下 比如说 传言中位数 类似像这个 其实它呢 在这个点是反弹的 就是1 如果这个 碳体回升算的话就12 34 5天 其实它是反弹了5天以后 回调2天 它是这样子的一个节奏 那这个节奏的话呢 主要是什么呢 这个反弹的力度太小了 反弹的那些方向呢 对于说 除了这个医药和证券 它是走出了一定的趋势之外 其他的呢 就 感觉上去更像是一个弱反弹 所以说一旦有一些风吹草动啊 或者怎么样子 整个市场资金还是像惊弓之鸟 它不会说 轻易的去切换 因为作为说现在呢 正好又是中报季 所以说呢 业绩是非常非常重要的 很多人就是去看 业绩 比如说像AI的一些 AI硬件的业绩 你要说他们差吧 那确实是不差 这个是肯定的 业绩肯定是非常好的 但是呢 缺点呢 是什么呢 就这批 股票他们的 缺点就在于说 他们都已经大涨了 有很多很多倍了 这个是个问题 就即便说他给你的业绩说 增长了100% 增长了150% 你看上去确实放到平时呢 确实非常炸裂的一个业绩 但是到现在呢 他已经上去了三倍四倍了 然后再告诉你说 业绩涨了100% 这个时候很多的一些资金啊 他反而不会去选择 在这个点继续做多 他反而会趁一个利好消息 直接给你兑现掉 这个呢 似乎在近期的一些业绩公布里面 都已经成为了一个标配 就是你只要业绩公布出来是好的 立刻给你来 做兑现 因为前面已经涨涨涨 涨到这样子了 然后告诉你业绩好 他直接就这么玩 那所以这是一个 比较恶心的一个事情 那作为另外一个方向 就非科技一类的话呢 因为 其实 不像是科技 他们特别是AI印象 就是有些东西 他的业绩这么的名牌 所以就会变成什么呢 就大家也不敢去买 就买了以后呢 一看这个市场要跌了 赶紧全卖掉再说 啊就变成这个 进来 哎我来了 你打我呀 哎呦 我要走了 你来呀 我打我呀 哎 我也走了 类似像这样子的这种 啊所以这个是 呃比较难受的 有朋友也说一下 要看一下义伟对吧 也可以看一下他 就是把这个缺口补了 这里呢 本来是有个 这个金刃断层的 现在呢 把这个补了 这个呢 其实还是现在市场的一个 风格的一个问题 我个人觉得 因为单论他的业绩的话 是已经是非常漂亮了 就是到这个业绩 他的适应率的话就十来倍啊 实际来说 作为这种电池的 这种制造龙头之一吧 应该是相当不错了 所以说这个点上 呃跳空补不补 我觉得意义也不大吧 就是说他不补 他补掉也不代表说 他就一定是弱了 或者说怎么样子 就是现在这段时间行情都很糟糕嘛 因为有很多的一些 包括说一些基金啊 呃就是你会发现 就有的时候啊 跌起来的时候 就他如果现在暂时还没有 赠量资金 就是市场还没有找到方向的时候 他跌起来的时候他 比如说半导体元器件通信设备 哎这个电器设备啊 他是跟着他们一起跌的 就是他们整个是一篮子 就有很有可能就是 呃有一些基金的一些配置啊 他们比如说 呃就是比如说半导体配的最多 或者说通信设备配的最多",
+          "timestamp_ms": 6670,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 2,
+      "event_type": "sector_decline",
+      "claim_type": "attribution",
+      "sentiment": "negative",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.7,
+      "statement": "主持认为半导体元器件、通信设备、电器设备等板块大概率是跟随基金一篮子配置集体卖出而下跌，宁德时代等大票也因国家队卖出影响表现差，一旦缺乏增量资金就容易被砸盘。",
+      "time_expression": "2026年7月8日直播时",
+      "normalized_time_start": "2026-07-08",
+      "normalized_time_end": "2026-07-08",
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": "一旦没有增量资金",
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "sectors": [
+          "半导体",
+          "通信设备",
+          "电器设备",
+          "PCB",
+          "光纤"
+        ],
+        "stocks": [
+          "宁德时代"
+        ],
+        "cause": "基金一篮子出货、国家队砸盘"
+      },
+      "conflict_key": "SEMI::sector_decline",
+      "conflict_status": "active",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 2,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "主持认为半导体元器件、通信设备、电器设备等板块大概率是跟随基金一篮子配置集体卖出而下跌，宁德时代等大票也因国家队卖出影响表现差，一旦缺乏增量资金就容易被砸盘。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 3,
+      "event_type": "stock_performance",
+      "claim_type": "description",
+      "sentiment": "negative",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.9,
+      "statement": "某半导体相关股票成交量放大（绿色柱），在公布业绩好的时候有资金进入，但随后又被大量卖盘砸下去，公司估值并不差。",
+      "time_expression": "此前一段时间",
+      "normalized_time_start": null,
+      "normalized_time_end": null,
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": "只有公布业绩好的时候有一些资金进来，但之后又被砸掉",
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "sector": "半导体（推测）",
+        "visual_cue": "绿色成交量多",
+        "fundamentals": "估值不差"
+      },
+      "conflict_key": "SEMI::stock_performance",
+      "conflict_status": "active",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 3,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "某半导体相关股票成交量放大（绿色柱），在公布业绩好的时候有资金进入，但随后又被大量卖盘砸下去，公司估值并不差。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 4,
+      "event_type": "industry_outlook",
+      "claim_type": "prediction",
+      "sentiment": "positive",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.7,
+      "statement": "从储能（或电信）角度看，下半年的景气度还可以，招标数创新高，未来确定性不错，虽有短期波动但不是什么大问题。",
+      "time_expression": "下半年",
+      "normalized_time_start": null,
+      "normalized_time_end": null,
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": "如果以储能/电信的这个角度来说",
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "sector": "储能（或电信）",
+        "indicator": "招标数创新高",
+        "source": "昨晚消息"
+      },
+      "conflict_key": "SEMI::industry_outlook",
+      "conflict_status": "active",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 4,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "从储能（或电信）角度看，下半年的景气度还可以，招标数创新高，未来确定性不错，虽有短期波动但不是什么大问题。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 5,
+      "event_type": "stock_behavior_generalization",
+      "claim_type": "claim",
+      "sentiment": "neutral",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.6,
+      "statement": "有些股票很难用短期业绩去判断走势；有时股价下跌只是因为有资金砸盘，与业绩好坏无关，时间长了会回到原先的轨道。",
+      "time_expression": "长期",
+      "normalized_time_start": null,
+      "normalized_time_end": null,
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": null,
+      "invalidation_text": "很难以短期业绩去评他（暗示不能将下跌简单归因于业绩差）",
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "generalization": true
+      },
+      "conflict_key": "SEMI::stock_behavior_generalization",
+      "conflict_status": "active",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 5,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "有些股票很难用短期业绩去判断走势；有时股价下跌只是因为有资金砸盘，与业绩好坏无关，时间长了会回到原先的轨道。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 6,
+      "event_type": "sector_performance",
+      "claim_type": "attribution",
+      "sentiment": "positive",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.9,
+      "statement": "昨天美股石油股（康菲石油、埃克森美孚、雪佛龙等）上涨，原因是美国和伊朗再次发生冲突。",
+      "time_expression": "昨晚（2026年7月7日）",
+      "normalized_time_start": "2026-07-07",
+      "normalized_time_end": "2026-07-07",
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": null,
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "stocks": [
+          "康菲石油",
+          "埃克森美孚",
+          "雪佛龙"
+        ],
+        "sector": "石油",
+        "cause": "美伊冲突"
+      },
+      "conflict_key": "SEMI::sector_performance",
+      "conflict_status": "superseded",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 6,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "昨天美股石油股（康菲石油、埃克森美孚、雪佛龙等）上涨，原因是美国和伊朗再次发生冲突。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 7,
+      "event_type": "sector_performance",
+      "claim_type": "observation",
+      "sentiment": "neutral",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.9,
+      "statement": "昨晚美股科技股中只有Meta上涨约2%，其他科技股表现不明显。",
+      "time_expression": "昨晚",
+      "normalized_time_start": null,
+      "normalized_time_end": null,
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": null,
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "stocks": [
+          "Meta"
+        ],
+        "sector": "科技"
+      },
+      "conflict_key": "SEMI::sector_performance",
+      "conflict_status": "superseded",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 7,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "昨晚美股科技股中只有Meta上涨约2%，其他科技股表现不明显。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "video_id": 4,
+      "chunk_id": 2,
+      "event_index": 8,
+      "event_type": "sector_performance",
+      "claim_type": "observation",
+      "sentiment": "positive",
+      "subjectivity": "MEDIUM",
+      "certainty": 0.7,
+      "confidence_score": 0.9,
+      "statement": "昨晚美股消费医药股表现较好，强生、辉瑞（后期上涨）、可乐（一度创新高）、沃尔玛、麦当劳等继续走强。",
+      "time_expression": "昨晚",
+      "normalized_time_start": null,
+      "normalized_time_end": null,
+      "start_ms": 260620,
+      "end_ms": 451220,
+      "condition_text": null,
+      "invalidation_text": null,
+      "entities": [
+        {
+          "name": "半导体",
+          "ticker": "SEMI",
+          "entity_type": "INDUSTRY"
+        }
+      ],
+      "attributes": {
+        "stocks": [
+          "强生",
+          "辉瑞",
+          "可乐",
+          "沃尔玛",
+          "麦当劳"
+        ],
+        "sector": "消费医药"
+      },
+      "conflict_key": "SEMI::sector_performance",
+      "conflict_status": "superseded",
+      "superseded_by_event_id": null,
+      "evidence": [
+        {
+          "id": 8,
+          "source_type": "ASR",
+          "source_id": "chunk_1",
+          "text": "昨晚美股消费医药股表现较好，强生、辉瑞（后期上涨）、可乐（一度创新高）、沃尔玛、麦当劳等继续走强。",
+          "timestamp_ms": 260620,
+          "confidence_score": 0.7,
+          "image_path": null
+        }
+      ]
+    }
+  ]
+}

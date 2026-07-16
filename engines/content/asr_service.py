@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import os
+import shutil
+import subprocess
+import sys
+import ctypes
 from pathlib import Path
 from typing import Any
 
@@ -47,6 +51,7 @@ class AsrService:
         )
 
     def transcribe(self, audio_path: str | Path, language_hint: str | None = None) -> dict:
+        self._ensure_runtime_paths()
         try:
             from faster_whisper import BatchedInferencePipeline, WhisperModel
         except ImportError as exc:
@@ -100,6 +105,12 @@ class AsrService:
             "chunk_length_seconds": self.chunk_length_seconds,
             "beam_size": self.beam_size,
         }
+
+    def _ensure_runtime_paths(self) -> None:
+        if self.device != "cuda":
+            return
+        self._ensure_nvidia_library_path()
+        self._preload_cuda_libraries()
 
     @classmethod
     def _resolve_device(cls, requested_device: str) -> str:
@@ -179,11 +190,80 @@ class AsrService:
 
     @staticmethod
     def _cuda_available() -> bool:
-        try:
-            import ctranslate2
-        except ImportError:
+        cuda_visible = os.getenv("CUDA_VISIBLE_DEVICES")
+        if cuda_visible is not None and str(cuda_visible).strip() in {"", "-1", "none", "None"}:
+            return False
+        nvidia_smi = shutil.which("nvidia-smi")
+        if not nvidia_smi:
             return False
         try:
-            return int(ctranslate2.get_cuda_device_count()) > 0
+            result = subprocess.run(
+                [nvidia_smi, "-L"],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
         except Exception:
             return False
+        return result.returncode == 0 and "GPU" in str(result.stdout or "")
+
+    @staticmethod
+    def _ensure_nvidia_library_path() -> None:
+        if AsrService._is_windows():
+            return
+        candidate_dirs: list[str] = []
+        for root in sys.path:
+            site_root = Path(root)
+            nvidia_root = site_root / "nvidia"
+            if not nvidia_root.exists():
+                continue
+            for relative in (
+                ("cublas", "lib"),
+                ("cudnn", "lib"),
+                ("cuda_runtime", "lib"),
+                ("cuda_nvrtc", "lib"),
+                ("cu13", "lib"),
+            ):
+                path = nvidia_root.joinpath(*relative)
+                if path.is_dir():
+                    candidate_dirs.append(str(path))
+        if not candidate_dirs:
+            return
+        existing = os.environ.get("LD_LIBRARY_PATH", "")
+        ordered: list[str] = []
+        seen: set[str] = set()
+        for path in candidate_dirs + ([entry for entry in existing.split(":") if entry] if existing else []):
+            key = path.strip()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            ordered.append(key)
+        os.environ["LD_LIBRARY_PATH"] = ":".join(ordered)
+
+    @staticmethod
+    def _preload_cuda_libraries() -> None:
+        if AsrService._is_windows():
+            return
+        for root in sys.path:
+            site_root = Path(root)
+            nvidia_root = site_root / "nvidia"
+            if not nvidia_root.exists():
+                continue
+            for library_path in (
+                nvidia_root / "cuda_runtime" / "lib" / "libcudart.so.12",
+                nvidia_root / "cuda_nvrtc" / "lib" / "libnvrtc.so.12",
+                nvidia_root / "cublas" / "lib" / "libcublasLt.so.12",
+                nvidia_root / "cublas" / "lib" / "libcublas.so.12",
+                nvidia_root / "cudnn" / "lib" / "libcudnn.so.9",
+            ):
+                if not library_path.exists():
+                    continue
+                try:
+                    ctypes.CDLL(str(library_path), mode=ctypes.RTLD_GLOBAL)
+                except OSError:
+                    continue
+
+    @staticmethod
+    def _is_windows() -> bool:
+        return os.name == "nt"

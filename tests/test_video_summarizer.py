@@ -87,3 +87,48 @@ def test_video_summarizer_tolerates_non_numeric_confidence():
         mode="investment",
     )
     assert result["confidence_score"] == 0.5
+
+
+def test_collect_symbols_prefers_name_and_ticker_labels():
+    symbols = VideoSummarizer._collect_symbols_from_events(
+        [
+            {
+                "entities": [
+                    {"name": "成都先导", "ticker": "688222", "entity_type": "EQUITY"},
+                    {"name": "XAUUSD", "ticker": "XAUUSD", "entity_type": "COMMODITY"},
+                ]
+            }
+        ]
+    )
+
+    assert "成都先导 (688222)" in symbols
+    assert "XAUUSD" in symbols
+
+
+def test_prepare_chunk_outline_keeps_late_stock_analysis_chunks():
+    chunks = [
+        {"chunk_index": index, "start_ms": index * 1000, "topic": f"topic-{index}", "transcript_text": "普通内容", "ocr_text": "", "visual_focus": ""}
+        for index in range(10)
+    ]
+    chunks.append(
+        {
+            "chunk_index": 10,
+            "start_ms": 10000,
+            "topic": "688222",
+            "transcript_text": "这里是买点，但要注意洗盘风险。",
+            "ocr_text": "KR688222成都先导 成都先导(日线.前复权)",
+            "visual_focus": "K线结构",
+        }
+    )
+
+    outline = VideoSummarizer._prepare_chunk_outline(chunks)
+
+    assert "688222" in outline
+    assert "成都先导" in outline
+
+
+def test_apply_symbol_aliases_replaces_bare_ticker_in_summary_text():
+    text = "医药板块表现相对强势，但部分个股（如688222）存在技术洗盘需求。"
+    updated = VideoSummarizer._apply_symbol_aliases(text, ["成都先导 (688222.SH)"])
+
+    assert "成都先导 (688222.SH)" in updated

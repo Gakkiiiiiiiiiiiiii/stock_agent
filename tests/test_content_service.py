@@ -242,6 +242,12 @@ def test_video_ingest_service_processes_task(monkeypatch):
         assert any(call["payload"]["memory_type"] == "media_viewpoint" for call in memory_calls)
         assert any(call["payload"]["source_type"] == "bilibili_video_viewpoint" for call in memory_calls)
         assert any(call["payload"]["memory_type"] == "media_event" for call in memory_calls)
+
+        rerun = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVTEST123", force_reprocess=True)
+        rerun_detail = service.process_task(rerun["task_id"])
+        assert rerun_detail["video"]["id"] == detail["video"]["id"]
+        assert rerun_detail["task"]["status"] == "success"
+        assert len(rerun_detail["events"]) >= 1
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 

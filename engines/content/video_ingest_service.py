@@ -164,6 +164,8 @@ class VideoIngestService:
             self.task_repo.update(task_id, stage="chunk_and_extract", progress=76)
             chunks = self.semantic_chunker.build(transcript=transcript, frame_insights=frame_insights)
             chunks = self._enrich_chunks(chunks)
+            # Clear event rows first so repeated reprocessing can safely replace chunk rows.
+            self.event_repo.delete_for_video(asset.id)
             self.chunk_repo.replace_for_video(asset.id, chunks)
             video_type, events = self.event_extractor.extract(metadata=metadata, chunks=chunks)
             events = self.conflict_resolver.resolve(events)
@@ -318,6 +320,25 @@ class VideoIngestService:
         if payload is None:
             return None
         return payload.get("image_path")
+
+    def get_video_frame_image_path_by_filename(self, bvid: str, filename: str) -> str | None:
+        normalized_bvid = str(bvid or "").strip()
+        normalized_filename = Path(str(filename or "").strip()).name
+        if not normalized_bvid or not normalized_filename:
+            return None
+        if normalized_filename != str(filename or "").strip():
+            return None
+        if not re.fullmatch(r"BV[0-9A-Za-z]+", normalized_bvid, flags=re.IGNORECASE):
+            return None
+        if not re.fullmatch(r"[0-9A-Za-z._-]+\.(?:jpg|jpeg|png|webp)", normalized_filename, flags=re.IGNORECASE):
+            return None
+        candidate = (self.frame_dir / normalized_bvid / normalized_filename).resolve()
+        parent = (self.frame_dir / normalized_bvid).resolve()
+        if parent not in candidate.parents:
+            return None
+        if not candidate.exists() or not candidate.is_file():
+            return None
+        return str(candidate)
 
     def _build_visual_context(
         self,

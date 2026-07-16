@@ -122,7 +122,14 @@ def health() -> dict:
 
 @app.get("/admin")
 def admin_console() -> FileResponse:
-    return FileResponse(admin_service.root / "app" / "static" / "admin.html")
+    return FileResponse(
+        admin_service.root / "app" / "static" / "admin.html",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "Expires": "0",
+        },
+    )
 
 
 @app.post("/api/v1/analyze/stock")
@@ -324,6 +331,14 @@ def get_content_video_events(video_id: int, summary_mode: str = "investment") ->
 @app.get("/api/v1/content/videos/{video_id}/frames/{frame_index}/image")
 def get_content_video_frame_image(video_id: int, frame_index: int) -> FileResponse:
     image_path = content_ingest_service.get_video_frame_image_path(video_id, frame_index)
+    if image_path is None:
+        raise HTTPException(status_code=404, detail="frame not found")
+    return FileResponse(image_path)
+
+
+@app.get("/api/v1/content/video-frames/{bvid}/{filename}")
+def get_content_video_frame_image_by_filename(bvid: str, filename: str) -> FileResponse:
+    image_path = content_ingest_service.get_video_frame_image_path_by_filename(bvid, filename)
     if image_path is None:
         raise HTTPException(status_code=404, detail="frame not found")
     return FileResponse(image_path)

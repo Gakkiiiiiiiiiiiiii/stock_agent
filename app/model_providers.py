@@ -27,7 +27,7 @@ class AnalysisModelSettings:
 class AnalysisModelClient:
     def __init__(self, settings: AnalysisModelSettings | None = None, http_client: httpx.Client | None = None) -> None:
         self.settings = settings or AnalysisModelSettings.from_env()
-        self.http_client = http_client or httpx.Client(timeout=60)
+        self.http_client = http_client or httpx.Client(timeout=180)
 
     def available(self) -> bool:
         return (

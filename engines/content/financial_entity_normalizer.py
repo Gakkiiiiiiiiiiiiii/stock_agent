@@ -17,6 +17,91 @@ COMMON_ENTITY_ALIASES = {
     "AI": {"entity_type": "THEME", "ticker": "AI"},
 }
 
+NON_COMPANY_NAME_TERMS = {
+    "交易信息",
+    "市场行情",
+    "行情",
+    "资讯",
+    "服务",
+    "前复权",
+    "后复权",
+    "不复权",
+    "日线",
+    "周线",
+    "月线",
+    "季线",
+    "年线",
+    "分时",
+    "分钟",
+    "现价",
+    "今开",
+    "涨跌",
+    "涨幅",
+    "总收入",
+    "净利润",
+    "总量",
+    "总额",
+    "总笔",
+    "市值",
+    "流通",
+    "换手",
+    "主力净额",
+    "闭市阶段",
+}
+
+COMPANY_NAME_SUFFIXES = (
+    "网络",
+    "科技",
+    "电子",
+    "通信",
+    "股份",
+    "集团",
+    "能源",
+    "电气",
+    "光电",
+    "信息",
+    "软件",
+    "医疗",
+    "药业",
+    "生物",
+    "材料",
+    "数通",
+    "电力",
+    "环境",
+    "制造",
+    "智控",
+    "智能",
+    "资本",
+)
+
+COMPANY_NAME_LEADING_FILLERS = (
+    "这里",
+    "这页",
+    "这个",
+    "那个",
+    "主要",
+    "关于",
+    "在讲",
+    "讲的",
+    "看看",
+    "再看",
+    "比如",
+    "就是",
+    "一下",
+    "来看",
+    "说到",
+    "提到",
+)
+
+COMPANY_NAME_PATTERN = re.compile(
+    rf"([\u4e00-\u9fff]{{2,4}}(?:{'|'.join(COMPANY_NAME_SUFFIXES)}))"
+)
+
+CODE_NAME_PATTERNS = (
+    re.compile(r"(?:[A-Z]{0,3})?(\d{6})\s*([\u4e00-\u9fff]{2,8})"),
+    re.compile(r"([\u4e00-\u9fff]{2,8})\s*(?:\(|（)?(?:[A-Z]{0,3})?(\d{6})"),
+)
+
 
 class FinancialEntityNormalizer:
     def extract_entities(self, *texts: str) -> list[dict]:
@@ -37,6 +122,18 @@ class FinancialEntityNormalizer:
                 }
             )
             seen.add(entity_id)
+        for ticker, company_name in self._extract_code_name_pairs(joined):
+            if ticker in seen or company_name in seen:
+                continue
+            results.append(
+                {
+                    "name": company_name,
+                    "ticker": ticker,
+                    "entity_type": "EQUITY",
+                }
+            )
+            seen.add(ticker)
+            seen.add(company_name)
         for code in re.findall(r"\b\d{6}\b|\b\d{4}\.HK\b|\b[A-Z]{1,5}\b", joined, flags=re.IGNORECASE):
             normalized = code.upper()
             if normalized in seen:
@@ -51,6 +148,17 @@ class FinancialEntityNormalizer:
                 }
             )
             seen.add(normalized)
+        for company_name in self._extract_company_names(joined):
+            if company_name in seen:
+                continue
+            results.append(
+                {
+                    "name": company_name,
+                    "ticker": company_name,
+                    "entity_type": "EQUITY",
+                }
+            )
+            seen.add(company_name)
         return results
 
     def normalize_time_expression(self, text: str, publish_time: str | None) -> dict[str, str | None]:
@@ -123,6 +231,10 @@ class FinancialEntityNormalizer:
         return candidates
 
     @staticmethod
+    def extract_company_names(text: str) -> list[str]:
+        return FinancialEntityNormalizer._extract_company_names(text)
+
+    @staticmethod
     def _infer_entity_type(value: str) -> str:
         if re.fullmatch(r"\d{4}\.HK", value):
             return "EQUITY"
@@ -131,6 +243,65 @@ class FinancialEntityNormalizer:
         if value in {"FED", "SEMI", "AI"}:
             return "THEME"
         return "UNKNOWN"
+
+    @staticmethod
+    def _extract_company_names(text: str) -> list[str]:
+        results: list[str] = []
+        seen: set[str] = set()
+        for match in COMPANY_NAME_PATTERN.finditer(str(text or "")):
+            name = FinancialEntityNormalizer._strip_company_leading_fillers(match.group(1).strip())
+            if not FinancialEntityNormalizer._is_likely_company_name(name) or name in seen:
+                continue
+            seen.add(name)
+            results.append(name)
+        return results
+
+    @staticmethod
+    def _extract_code_name_pairs(text: str) -> list[tuple[str, str]]:
+        results: list[tuple[str, str]] = []
+        seen: set[str] = set()
+        source = str(text or "")
+        for pattern in CODE_NAME_PATTERNS:
+            for match in pattern.finditer(source):
+                if pattern.pattern.startswith("(?:"):
+                    ticker = match.group(1).strip()
+                    raw_name = match.group(2).strip()
+                else:
+                    raw_name = match.group(1).strip()
+                    ticker = match.group(2).strip()
+                company_name = FinancialEntityNormalizer._strip_company_leading_fillers(raw_name)
+                company_name = re.sub(r"[（(].*$", "", company_name).strip()
+                if not FinancialEntityNormalizer._is_likely_company_name(company_name):
+                    continue
+                key = f"{ticker}:{company_name}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                results.append((ticker, company_name))
+        return results
+
+    @staticmethod
+    def _strip_company_leading_fillers(value: str) -> str:
+        name = str(value or "").strip()
+        changed = True
+        while changed and name:
+            changed = False
+            for filler in COMPANY_NAME_LEADING_FILLERS:
+                if name.startswith(filler) and len(name) > len(filler) + 1:
+                    name = name[len(filler):].strip()
+                    changed = True
+        return name
+
+    @staticmethod
+    def _is_likely_company_name(value: str) -> bool:
+        name = re.sub(r"[^\u4e00-\u9fff]", "", str(value or "").strip())
+        if len(name) < 3 or len(name) > 8:
+            return False
+        if name in NON_COMPANY_NAME_TERMS:
+            return False
+        if name.endswith(("阶段", "指标", "策略", "市场", "行情", "资讯", "服务")):
+            return False
+        return True
 
     @staticmethod
     def _parse_publish_date(raw_value: str | None) -> datetime | None:

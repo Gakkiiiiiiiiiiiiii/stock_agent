@@ -28,40 +28,43 @@ class VideoSummarizer:
         if not text:
             raise ValueError("transcript text is empty")
         if self.model_client.available():
-            prompt = self._build_prompt(
-                metadata=metadata,
-                transcript=transcript,
-                mode=mode,
-                visual_context=visual_context,
-                chunks=chunks or [],
-                events=events or [],
-                video_type=video_type,
-            )
-            response = self.model_client.complete(
-                prompt=prompt,
-                system=(
-                    "You summarize Bilibili financial videos into structured JSON. "
-                    "Prefer structured financial events over raw transcript. "
-                    "Keep facts, opinions, forecasts, conditions, and invalidations separate. "
-                    "Return valid JSON only."
-                ),
-                temperature=0.2,
-            )
-            content = (response.get("content") or "").strip()
-            payload = self._parse_json(content)
-            return self._normalize_summary(
-                payload,
-                metadata=metadata,
-                transcript=transcript,
-                mode=mode,
-                visual_context=visual_context,
-                events=events or [],
-                chunks=chunks or [],
-                video_type=video_type,
-            ) | {
-                "llm_provider": response.get("provider"),
-                "llm_model": response.get("model"),
-            }
+            try:
+                prompt = self._build_prompt(
+                    metadata=metadata,
+                    transcript=transcript,
+                    mode=mode,
+                    visual_context=visual_context,
+                    chunks=chunks or [],
+                    events=events or [],
+                    video_type=video_type,
+                )
+                response = self.model_client.complete(
+                    prompt=prompt,
+                    system=(
+                        "You summarize Bilibili financial videos into structured JSON. "
+                        "Prefer structured financial events over raw transcript. "
+                        "Keep facts, opinions, forecasts, conditions, and invalidations separate. "
+                        "Return valid JSON only."
+                    ),
+                    temperature=0.2,
+                )
+                content = (response.get("content") or "").strip()
+                payload = self._parse_json(content)
+                return self._normalize_summary(
+                    payload,
+                    metadata=metadata,
+                    transcript=transcript,
+                    mode=mode,
+                    visual_context=visual_context,
+                    events=events or [],
+                    chunks=chunks or [],
+                    video_type=video_type,
+                ) | {
+                    "llm_provider": response.get("provider"),
+                    "llm_model": response.get("model"),
+                }
+            except Exception:
+                pass
         return self._fallback_summary(
             metadata=metadata,
             transcript=transcript,
@@ -213,25 +216,37 @@ class VideoSummarizer:
         symbols = self._ensure_string_list(payload.get("symbols"))
         if not symbols and events:
             symbols = self._collect_symbols_from_events(events)
+        core_summary = self._apply_symbol_aliases(core_summary, symbols)
+        bull_points = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("bull_points")), symbols)
+        bear_points = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("bear_points")), symbols)
+        catalysts = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("catalysts")), symbols)
+        risks = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("risks")), symbols)
+        fact_points = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("fact_points")), symbols)
+        forecast_points = self._apply_symbol_aliases_to_list(self._ensure_string_list(payload.get("forecast_points")), symbols)
+        invalidation_conditions = self._apply_symbol_aliases_to_list(
+            self._ensure_string_list(payload.get("invalidation_conditions")),
+            symbols,
+        )
+        selected_chunks = self._select_representative_chunks(chunks or [], limit=6)
         return {
             "summary_mode": mode,
             "summary_markdown": summary_markdown,
             "core_summary": core_summary,
-            "bull_points": self._ensure_string_list(payload.get("bull_points")),
-            "bear_points": self._ensure_string_list(payload.get("bear_points")),
+            "bull_points": bull_points,
+            "bear_points": bear_points,
             "themes": themes,
             "symbols": symbols,
-            "catalysts": self._ensure_string_list(payload.get("catalysts")),
-            "risks": self._ensure_string_list(payload.get("risks")),
+            "catalysts": catalysts,
+            "risks": risks,
             "actionable_view": str(payload.get("actionable_view") or "").strip(),
             "evidence_segments": evidence,
             "confidence_score": self._coerce_confidence_score(payload.get("confidence_score")),
-            "fact_points": self._ensure_string_list(payload.get("fact_points")),
-            "forecast_points": self._ensure_string_list(payload.get("forecast_points")),
-            "invalidation_conditions": self._ensure_string_list(payload.get("invalidation_conditions")),
+            "fact_points": fact_points,
+            "forecast_points": forecast_points,
+            "invalidation_conditions": invalidation_conditions,
             "video_type": video_type or payload.get("video_type") or "GENERAL_FINANCE",
             "chapter_summaries": payload.get("chapter_summaries") if isinstance(payload.get("chapter_summaries"), list) else [
-                self._render_chunk_chapter(chunk) for chunk in (chunks or [])[:6]
+                self._render_chunk_chapter(chunk) for chunk in selected_chunks
             ],
         }
 
@@ -279,9 +294,9 @@ class VideoSummarizer:
         lines = []
         for event in events[:18]:
             entities = ", ".join(
-                str(item.get("ticker") or item.get("name"))
+                VideoSummarizer._format_entity_label(item)
                 for item in event.get("entities") or []
-                if isinstance(item, dict)
+                if isinstance(item, dict) and VideoSummarizer._format_entity_label(item)
             )
             lines.append(
                 "\n".join(
@@ -302,7 +317,8 @@ class VideoSummarizer:
     def _prepare_chunk_outline(chunks: list[dict]) -> str:
         if not chunks:
             return ""
-        return "\n\n".join(VideoSummarizer._render_chunk_chapter(chunk) for chunk in chunks[:8])
+        selected_chunks = VideoSummarizer._select_representative_chunks(chunks, limit=8)
+        return "\n\n".join(VideoSummarizer._render_chunk_chapter(chunk) for chunk in selected_chunks)
 
     @staticmethod
     def _render_chunk_chapter(chunk: dict) -> str:
@@ -315,6 +331,81 @@ class VideoSummarizer:
                 f"视觉：{str(chunk.get('visual_focus') or '')[:180] or '无'}",
             ]
         )
+
+    @staticmethod
+    def _select_representative_chunks(chunks: list[dict], limit: int = 8) -> list[dict]:
+        if len(chunks) <= limit:
+            return chunks
+        head_count = min(4, limit)
+        selected = list(chunks[:head_count])
+        selected_keys = {VideoSummarizer._chunk_key(chunk) for chunk in selected}
+        ranked_tail = sorted(
+            (chunk for chunk in chunks[head_count:] if VideoSummarizer._chunk_key(chunk) not in selected_keys),
+            key=VideoSummarizer._score_chunk,
+            reverse=True,
+        )
+        for chunk in ranked_tail:
+            if len(selected) >= limit:
+                break
+            selected.append(chunk)
+            selected_keys.add(VideoSummarizer._chunk_key(chunk))
+        return sorted(selected, key=lambda item: (int(item.get("start_ms") or 0), int(item.get("chunk_index") or 0)))
+
+    @staticmethod
+    def _chunk_key(chunk: dict) -> tuple[int, int]:
+        return (int(chunk.get("chunk_index") or 0), int(chunk.get("start_ms") or 0))
+
+    @staticmethod
+    def _score_chunk(chunk: dict) -> float:
+        transcript_text = str(chunk.get("transcript_text") or "")
+        ocr_text = str(chunk.get("ocr_text") or "")
+        topic = str(chunk.get("topic") or "")
+        visual_focus = str(chunk.get("visual_focus") or "")
+        merged = " ".join([topic, transcript_text, ocr_text, visual_focus])
+        score = 0.0
+        if ocr_text:
+            score += 3.0
+        if visual_focus:
+            score += 1.0
+        if re.search(r"\b\d{6}\b", merged):
+            score += 5.0
+        if re.search(r"[\u4e00-\u9fff]{2,8}", topic) and topic not in {"未分类", "GENERAL_FINANCE"}:
+            score += 1.0
+        for token in ("买点", "洗盘", "压力", "突破", "反弹", "风险", "止跌", "成都先导"):
+            if token in merged:
+                score += 1.5
+        score += min(int(chunk.get("start_ms") or 0) / 1_000_000.0, 2.0)
+        return score
+
+    @staticmethod
+    def _format_entity_label(entity: dict) -> str:
+        name = str(entity.get("name") or "").strip()
+        ticker = str(entity.get("ticker") or "").strip()
+        if name and ticker and name != ticker:
+            return f"{name} ({ticker})"
+        return ticker or name
+
+    @staticmethod
+    def _apply_symbol_aliases(text: str, symbols: list[str]) -> str:
+        result = str(text or "")
+        for symbol in symbols:
+            match = re.match(r"(.+?) \(([^()]+)\)$", str(symbol).strip())
+            if not match:
+                continue
+            name = match.group(1).strip()
+            ticker = match.group(2).strip()
+            bare_ticker = ticker.split(".")[0]
+            if bare_ticker and bare_ticker in result and name not in result:
+                result = re.sub(
+                    rf"(?<![0-9A-Za-z]){re.escape(bare_ticker)}(?:\.(?:SH|SZ))?(?![0-9A-Za-z])",
+                    f"{name} ({ticker})",
+                    result,
+                )
+        return result
+
+    @staticmethod
+    def _apply_symbol_aliases_to_list(items: list[str], symbols: list[str]) -> list[str]:
+        return [VideoSummarizer._apply_symbol_aliases(item, symbols) for item in items]
 
     @staticmethod
     def _collect_themes_from_events(events: list[dict]) -> list[str]:
@@ -336,10 +427,10 @@ class VideoSummarizer:
             for entity in event.get("entities") or []:
                 if not isinstance(entity, dict):
                     continue
-                ticker = str(entity.get("ticker") or "").strip()
                 entity_type = str(entity.get("entity_type") or "")
-                if ticker and entity_type in {"EQUITY", "INDEX", "COMMODITY"} and ticker not in symbols:
-                    symbols.append(ticker)
+                label = VideoSummarizer._format_entity_label(entity)
+                if label and entity_type in {"EQUITY", "INDEX", "COMMODITY"} and label not in symbols:
+                    symbols.append(label)
         return symbols[:8]
 
     @staticmethod

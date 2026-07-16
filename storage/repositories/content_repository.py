@@ -22,6 +22,19 @@ def _loads(value: str | None, default: object) -> object:
     return json.loads(value)
 
 
+def _truncate_text(value: object, limit: int | None) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    if limit is None or len(text) <= limit:
+        return text
+    if limit <= 1:
+        return text[:limit]
+    return f"{text[: limit - 1]}…"
+
+
 class VideoAssetRepository:
     def get(self, video_id: int) -> VideoAsset | None:
         with session_scope() as session:
@@ -312,6 +325,15 @@ class VideoFrameRepository:
 
 
 class FinancialEventRepository:
+    def delete_for_video(self, video_id: int) -> None:
+        with session_scope() as session:
+            existing_events = session.execute(
+                select(FinancialEvent.id).where(FinancialEvent.video_id == video_id)
+            ).scalars().all()
+            if existing_events:
+                session.execute(delete(EventEvidence).where(EventEvidence.event_id.in_(existing_events)))
+            session.execute(delete(FinancialEvent).where(FinancialEvent.video_id == video_id))
+
     def replace_for_video(self, video_id: int, events: list[dict], chunks: list[dict] | None = None) -> None:
         chunk_index_to_id: dict[int, int] = {}
         with session_scope() as session:
@@ -333,24 +355,24 @@ class FinancialEventRepository:
                     video_id=video_id,
                     chunk_id=chunk_id,
                     event_index=int(event.get("event_index") or index),
-                    event_type=event.get("event_type") or "OPINION",
-                    claim_type=event.get("claim_type"),
-                    sentiment=event.get("sentiment"),
-                    subjectivity=event.get("subjectivity"),
+                    event_type=_truncate_text(event.get("event_type") or "OPINION", 64) or "OPINION",
+                    claim_type=_truncate_text(event.get("claim_type"), 32),
+                    sentiment=_truncate_text(event.get("sentiment"), 32),
+                    subjectivity=_truncate_text(event.get("subjectivity"), 32),
                     certainty=event.get("certainty"),
                     confidence_score=event.get("confidence_score"),
                     statement=event.get("statement") or "",
-                    time_expression=event.get("time_expression"),
-                    normalized_time_start=event.get("normalized_time_start"),
-                    normalized_time_end=event.get("normalized_time_end"),
+                    time_expression=_truncate_text(event.get("time_expression"), 255),
+                    normalized_time_start=_truncate_text(event.get("normalized_time_start"), 64),
+                    normalized_time_end=_truncate_text(event.get("normalized_time_end"), 64),
                     start_ms=event.get("start_ms"),
                     end_ms=event.get("end_ms"),
                     condition_text=event.get("condition_text"),
                     invalidation_text=event.get("invalidation_text"),
                     entities_json=_dumps(event.get("entities") or []),
                     attributes_json=_dumps(event.get("attributes") or {}),
-                    conflict_key=event.get("conflict_key"),
-                    conflict_status=event.get("conflict_status"),
+                    conflict_key=_truncate_text(event.get("conflict_key"), 256),
+                    conflict_status=_truncate_text(event.get("conflict_status"), 32),
                     superseded_by_event_id=event.get("superseded_by_event_id"),
                 )
                 session.add(row)
@@ -359,8 +381,8 @@ class FinancialEventRepository:
                     session.add(
                         EventEvidence(
                             event_id=row.id,
-                            source_type=evidence.get("source_type") or "ASR",
-                            source_id=evidence.get("source_id"),
+                            source_type=_truncate_text(evidence.get("source_type") or "ASR", 32) or "ASR",
+                            source_id=_truncate_text(evidence.get("source_id"), 128),
                             evidence_text=evidence.get("text") or evidence.get("evidence_text") or "",
                             timestamp_ms=evidence.get("timestamp_ms") or evidence.get("start_ms"),
                             confidence_score=evidence.get("confidence_score") or evidence.get("confidence"),

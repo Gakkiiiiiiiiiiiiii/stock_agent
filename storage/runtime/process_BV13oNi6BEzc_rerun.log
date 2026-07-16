@@ -1,0 +1,70 @@
+{"queued": {"task_id": 6, "video_id": 3, "status": "pending", "stage": "queued", "deduplicated": false}}
+[0;93m2026-07-15 13:43:48.513089609 [W:onnxruntime:Default, device_discovery.cc:283 GetGpuDevices] Failed to detect devices under "/sys/class/drm/card0": device_discovery.cc:93 ReadFileContents Failed to open file: "/sys/class/drm/card0/device/vendor"[m
+/app/engines/content/video_ocr_service.py:74: UserWarning: `lang` and `ocr_version` will be ignored when model names or model directories are not `None`.
+  self._paddleocr_engine = paddleocr_class(
+[32mCreating model: ('PP-OCRv5_server_det', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `/root/.paddlex/official_models/PP-OCRv5_server_det`.[0m
+/usr/local/lib/python3.11/site-packages/paddle/utils/cpp_extension/extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-OCRv5_server_rec', None, None)[0m
+[32mModel files already exist. Using cached files. To redownload, please delete the directory manually: `/root/.paddlex/official_models/PP-OCRv5_server_rec`.[0m
+Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/usr/local/lib/python3.11/site-packages/psycopg/cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+psycopg.errors.StringDataRightTruncation: value too long for type character varying(255)
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "<stdin>", line 21, in <module>
+  File "/app/engines/content/video_ingest_service.py", line 170, in process_task
+    self.event_repo.replace_for_video(asset.id, events, chunks=chunks)
+  File "/app/storage/repositories/content_repository.py", line 357, in replace_for_video
+    session.flush()
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4353, in flush
+    self._flush(objects)
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4488, in _flush
+    with util.safe_reraise():
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/util/langhelpers.py", line 122, in __exit__
+    raise exc_value.with_traceback(exc_tb)
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/session.py", line 4449, in _flush
+    flush_context.execute()
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/unitofwork.py", line 465, in execute
+    rec.execute(self)
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/unitofwork.py", line 641, in execute
+    util.preloaded.orm_persistence.save_obj(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/persistence.py", line 94, in save_obj
+    _emit_insert_statements(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/orm/persistence.py", line 1234, in _emit_insert_statements
+    result = connection.execute(
+             ^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1421, in execute
+    return meth(
+           ^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/sql/elements.py", line 526, in _execute_on_connection
+    return connection._execute_clauseelement(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1643, in _execute_clauseelement
+    ret = self._execute_context(
+          ^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1848, in _execute_context
+    return self._exec_single_context(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1988, in _exec_single_context
+    self._handle_dbapi_exception(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 2365, in _handle_dbapi_exception
+    raise sqlalchemy_exception.with_traceback(exc_info[2]) from e
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/base.py", line 1969, in _exec_single_context
+    self.dialect.do_execute(
+  File "/usr/local/lib/python3.11/site-packages/sqlalchemy/engine/default.py", line 952, in do_execute
+    cursor.execute(statement, parameters)
+  File "/usr/local/lib/python3.11/site-packages/psycopg/cursor.py", line 117, in execute
+    raise ex.with_traceback(None)
+sqlalchemy.exc.DataError: (psycopg.errors.StringDataRightTruncation) value too long for type character varying(255)
+[SQL: INSERT INTO financial_event (video_id, chunk_id, event_index, event_type, claim_type, sentiment, subjectivity, certainty, confidence_score, statement, time_expression, normalized_time_start, normalized_time_end, start_ms, end_ms, condition_text, invalidation_text, entities_json, attributes_json, conflict_key, conflict_status, superseded_by_event_id, created_at) VALUES (%(video_id)s::INTEGER, %(chunk_id)s::INTEGER, %(event_index)s::INTEGER, %(event_type)s::VARCHAR, %(claim_type)s::VARCHAR, %(sentiment)s::VARCHAR, %(subjectivity)s::VARCHAR, %(certainty)s, %(confidence_score)s, %(statement)s::VARCHAR, %(time_expression)s::VARCHAR, %(normalized_time_start)s::VARCHAR, %(normalized_time_end)s::VARCHAR, %(start_ms)s::INTEGER, %(end_ms)s::INTEGER, %(condition_text)s::VARCHAR, %(invalidation_text)s::VARCHAR, %(entities_json)s::VARCHAR, %(attributes_json)s::VARCHAR, %(conflict_key)s::VARCHAR, %(conflict_status)s::VARCHAR, %(superseded_by_event_id)s::INTEGER, %(created_at)s::TIMESTAMP WITHOUT TIME ZONE) RETURNING financial_event.id]
+[parameters: {'video_id': 3, 'chunk_id': 46, 'event_index': 1, 'event_type': 'TECHNICAL_TREND', 'claim_type': 'FORECAST', 'sentiment': 'NEUTRAL', 'subjectivity': 'HIGH', 'certainty': 0.55, 'confidence_score': 0.74, 'statement': '大家晚上好 歡迎收看鷹眼看盤看開始本次節目之前 首先要提示大家股市有風險 入序需謹慎 節目中期到的案例和標的 均勢歷史回顧 不構成投資建議 好 我們今天視頻可能會稍微短一點 首先來看一下今天的盤面 盤面當中我們看到今天整個分值是比較低的 這個是今天看起來整個市場比較差的一面 但好的一面今天漲的個戶 ... (279 characters truncated) ... 度 在今年的话 算是拥挤度最低的一个方向之一了 所以说在这里面 它没有杂盘力量 因为跌过一大波了 所以说它没有什么杂判令 但是你在其他的这些东西里面 就有可能是为什么呢 有可能会被 比如说去钢杆的一部分的资金被砸 哪里在去钢杆呢 大家也可以看一下 像融资融券我们点两融前景 我们可以特别明显的看得到', 'time_expression': '大家晚上好 歡迎收看鷹眼看盤看開始本次節目之前 首先要提示大家股市有風險 入序需謹慎 節目中期到的案例和標的 均勢歷史回顧 不構成投資建議 好 我們今天視頻可能會稍微短一點 首先來看一下今天的盤面 盤面當中我們看到今天整個分值是比較低的 這個是今天看起來整個市場比較差的一面 但好的一面今天漲的個戶 ... (279 characters truncated) ... 度 在今年的话 算是拥挤度最低的一个方向之一了 所以说在这里面 它没有杂盘力量 因为跌过一大波了 所以说它没有什么杂判令 但是你在其他的这些东西里面 就有可能是为什么呢 有可能会被 比如说去钢杆的一部分的资金被砸 哪里在去钢杆呢 大家也可以看一下 像融资融券我们点两融前景 我们可以特别明显的看得到', 'normalized_time_start': '2026-07-15', 'normalized_time_end': '2026-07-15', 'start_ms': 370, 'end_ms': 89180, 'condition_text': None, 'invalidation_text': None, 'entities_json': '[{"name": "上证指数", "ticker": "000001.SH", "entity_type": "INDEX"}, {"name": "深证成指", "ticker": "399001.SZ", "entity_type": "INDEX"}, {"name": "创业板", "t ... (1807 characters truncated) ... ntity_type": "EQUITY"}, {"name": "购完成暨股份", "ticker": "购完成暨股份", "entity_type": "EQUITY"}, {"name": "炜冈科技", "ticker": "炜冈科技", "entity_type": "EQUITY"}]', 'attributes_json': '{"numbers": [3351, 2098, 1000, 2000, 500], "cycle": "日线"}', 'conflict_key': '000001.SH::TECHNICAL_TREND', 'conflict_status': 'active', 'superseded_by_event_id': None, 'created_at': datetime.datetime(2026, 7, 15, 13, 49, 5, 732012, tzinfo=datetime.timezone.utc)}]
+(Background on this error at: https://sqlalche.me/e/20/9h9h)

@@ -47,11 +47,22 @@ def test_video_summary_exporter_writes_markdown():
         content = path.read_text(encoding="utf-8")
         assert path.exists()
         assert "测试视频总结" in content
-        assert "若与旧视频或旧知识冲突，默认优先采信发布时间更近的总结" in content
+        assert "## 1. 视频元信息" in content
+        assert "## 2. 核心摘要" in content
+        assert "## 18. 生成约束" in content
         assert "测试证据" in content
         assert "画面显示均线压制" in content
-        assert "OCR：上证指数 MA5 MA10" in content
         assert "EQUITY_TECHNICAL_ANALYSIS" in content
         assert "跌破关键支撑则失效" in content
+        assert "### E1" in content
+        assert "### E2" in content
+        assert "### 作者观点" not in content
+        assert "### 作者预测" not in content
+        assert "作者观点强度" not in content
+        assert "作者明确提出的操作" not in content
+        assert "## 5. 行业与主题观点" not in content
+        assert "## 6. 个股与标的观点" not in content
+        assert "## 7. 技术分析" not in content
+        assert "## 8. 跨维度综合判断" not in content
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)

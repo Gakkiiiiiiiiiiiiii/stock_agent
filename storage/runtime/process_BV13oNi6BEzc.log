@@ -1,0 +1,27 @@
+{"queued": {"task_id": 5, "video_id": null, "status": "pending", "stage": "queued", "deduplicated": false}}
+[0;93m2026-07-15 13:26:35.731085306 [W:onnxruntime:Default, device_discovery.cc:283 GetGpuDevices] Failed to detect devices under "/sys/class/drm/card0": device_discovery.cc:93 ReadFileContents Failed to open file: "/sys/class/drm/card0/device/vendor"[m
+/app/engines/content/video_ocr_service.py:74: UserWarning: `lang` and `ocr_version` will be ignored when model names or model directories are not `None`.
+  self._paddleocr_engine = paddleocr_class(
+[32mCreating model: ('PP-OCRv5_server_det', None, None)[0m
+[33mChecking connectivity to the model hosters, this may take a while. To bypass this check, set `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK` to `True`.[0m
+[32mUsing official model (PP-OCRv5_server_det), the model files will be automatically downloaded and saved in `/root/.paddlex/official_models/PP-OCRv5_server_det`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|█▋        | 1/6 [00:01<00:06,  1.22s/it]Fetching 6 files:  83%|████████▎ | 5/6 [00:16<00:03,  3.48s/it]Fetching 6 files: 100%|██████████| 6/6 [00:16<00:00,  2.79s/it]
+/usr/local/lib/python3.11/site-packages/paddle/utils/cpp_extension/extension_utils.py:712: UserWarning: No ccache found. Please be aware that recompiling all source files may be required. You can download and install ccache from: https://github.com/ccache/ccache/blob/master/doc/INSTALL.md
+  warnings.warn(warning_message)
+[32mCreating model: ('PP-OCRv5_server_rec', None, None)[0m
+[32mUsing official model (PP-OCRv5_server_rec), the model files will be automatically downloaded and saved in `/root/.paddlex/official_models/PP-OCRv5_server_rec`.[0m
+Fetching 6 files:   0%|          | 0/6 [00:00<?, ?it/s]Fetching 6 files:  17%|█▋        | 1/6 [00:01<00:05,  1.11s/it]Fetching 6 files:  33%|███▎      | 2/6 [00:01<00:02,  1.54it/s]Fetching 6 files:  83%|████████▎ | 5/6 [00:17<00:03,  3.97s/it]Fetching 6 files: 100%|██████████| 6/6 [00:17<00:00,  2.88s/it]
+
+
+--------------------------------------
+C++ Traceback (most recent call last):
+--------------------------------------
+No stack trace in paddle, may be caused by external reasons.
+
+----------------------
+Error Message Summary:
+----------------------
+FatalError: `Termination signal` is detected by the operating system.
+  [TimeInfo: *** Aborted at 1784122991 (unix time) try "date -d @1784122991" if you are using GNU date ***]
+  [SignalInfo: *** SIGTERM (@0x2c02) received by PID 47 (TID 0x7f7380bab5c0) from PID 11266 ***]
+

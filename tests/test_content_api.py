@@ -67,6 +67,16 @@ class FakeContentService:
         assert summary_mode == "investment"
         return {"video_id": 2, "chunks": [{"chunk_index": 0}], "events": [{"event_type": "OPINION"}], "timeline": [{"statement": "测试"}]}
 
+    def get_video_frame_image_path(self, video_id, frame_index):
+        assert video_id == 2
+        assert frame_index == 1
+        return __file__
+
+    def get_video_frame_image_path_by_filename(self, bvid, filename):
+        assert bvid == "BVTEST123"
+        assert filename == "BVTEST123_000001.jpg"
+        return __file__
+
 
 client = TestClient(app)
 
@@ -87,6 +97,8 @@ def test_content_task_and_video_api(monkeypatch):
     deleted = client.delete("/api/v1/content/videos/2/summary")
     segments = client.get("/api/v1/content/videos/2/segments")
     events = client.get("/api/v1/content/videos/2/events")
+    frame = client.get("/api/v1/content/videos/2/frames/1/image")
+    frame_by_filename = client.get("/api/v1/content/video-frames/BVTEST123/BVTEST123_000001.jpg")
     assert task.status_code == 200
     assert videos.status_code == 200
     assert video.status_code == 200
@@ -94,6 +106,8 @@ def test_content_task_and_video_api(monkeypatch):
     assert deleted.status_code == 200
     assert segments.status_code == 200
     assert events.status_code == 200
+    assert frame.status_code == 200
+    assert frame_by_filename.status_code == 200
     assert task.json()["stage"] == "asr"
     assert videos.json()["items"][0]["bvid"] == "BVTEST123"
     assert video.json()["video"]["title"] == "测试视频"

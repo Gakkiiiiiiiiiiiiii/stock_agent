@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 from types import SimpleNamespace
 
@@ -114,3 +115,27 @@ def test_asr_service_respects_env_overrides(monkeypatch):
     assert service.beam_size == 1
     assert service.best_of == 1
     assert service.condition_on_previous_text is False
+
+
+def test_asr_service_extends_linux_library_path(monkeypatch, tmp_path):
+    nvidia_root = tmp_path / "nvidia"
+    for relative in (
+        ("cublas", "lib"),
+        ("cudnn", "lib"),
+        ("cuda_runtime", "lib"),
+        ("cuda_nvrtc", "lib"),
+        ("cu13", "lib"),
+    ):
+        nvidia_root.joinpath(*relative).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(AsrService, "_is_windows", staticmethod(lambda: False))
+    monkeypatch.setattr("engines.content.asr_service.sys.path", [str(tmp_path)])
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/existing/path")
+
+    AsrService._ensure_nvidia_library_path()
+
+    resolved = os.environ["LD_LIBRARY_PATH"]
+    assert str(nvidia_root / "cublas" / "lib") in resolved
+    assert str(nvidia_root / "cudnn" / "lib") in resolved
+    assert str(nvidia_root / "cuda_runtime" / "lib") in resolved
+    assert str(nvidia_root / "cuda_nvrtc" / "lib") in resolved
+    assert "/existing/path" in resolved

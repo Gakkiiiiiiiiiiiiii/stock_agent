@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 
 class BilibiliClient:
     def __init__(self, yt_dlp_bin: str | None = None) -> None:
-        self.yt_dlp_bin = yt_dlp_bin or os.getenv("YT_DLP_BIN", "yt-dlp")
+        self.yt_dlp_bin = self._resolve_yt_dlp_bin(yt_dlp_bin or os.getenv("YT_DLP_BIN", "yt-dlp"))
         self.ffmpeg_bin = os.getenv("FFMPEG_BIN")
         self.cookie_file = os.getenv("BILIBILI_COOKIE_FILE")
         self.cookie_header = os.getenv("BILIBILI_COOKIE_HEADER")
@@ -32,7 +34,7 @@ class BilibiliClient:
 
     def fetch_metadata(self, url: str | None = None, bv_id: str | None = None) -> dict:
         source_url, parsed_bv = self.resolve_source(url=url, bv_id=bv_id)
-        payload = self._run_json_command([self.yt_dlp_bin, "--dump-single-json", "--no-playlist", *self._build_auth_args(), source_url])
+        payload = self._run_json_command([*self._yt_dlp_command(), "--dump-single-json", "--no-playlist", *self._build_auth_args(), source_url])
         return {
             "platform": "bilibili",
             "platform_video_id": str(payload.get("id") or parsed_bv or ""),
@@ -57,7 +59,7 @@ class BilibiliClient:
             stale_file.unlink(missing_ok=True)
         template = str(output_path / f"{video_id}.%(ext)s")
         command = [
-            self.yt_dlp_bin,
+            *self._yt_dlp_command(),
             "--no-playlist",
             "--force-overwrites",
             "--no-continue",
@@ -93,7 +95,7 @@ class BilibiliClient:
             stale_file.unlink(missing_ok=True)
         template = str(output_path / f"{video_id}.%(ext)s")
         command = [
-            self.yt_dlp_bin,
+            *self._yt_dlp_command(),
             "--no-playlist",
             "--force-overwrites",
             "--no-continue",
@@ -147,6 +149,21 @@ class BilibiliClient:
             command.extend(["--cookies-from-browser", browser_spec])
         return command
 
+    def _yt_dlp_command(self) -> list[str]:
+        return self.yt_dlp_bin if isinstance(self.yt_dlp_bin, list) else [self.yt_dlp_bin]
+
+    @staticmethod
+    def _resolve_yt_dlp_bin(configured: str) -> list[str] | str:
+        raw = str(configured or "").strip() or "yt-dlp"
+        if shutil.which(raw):
+            return raw
+        try:
+            import yt_dlp  # noqa: F401
+
+            return [sys.executable, "-m", "yt_dlp"]
+        except Exception:
+            return raw
+
     @staticmethod
     def _run_json_command(command: list[str]) -> dict:
         result = BilibiliClient._run_command(command)
@@ -160,4 +177,10 @@ class BilibiliClient:
             stderr = (exc.stderr or "").strip()
             stdout = (exc.stdout or "").strip()
             details = stderr or stdout or str(exc)
+            if "ffprobe and ffmpeg not found" in details or "ffmpeg not found" in details or "ffprobe not found" in details:
+                details = (
+                    f"{details}\n\n"
+                    "Video runtime is incomplete. In Docker, rebuild the image after updating Dockerfile "
+                    "and ensure FFMPEG_BIN=/usr/bin/ffmpeg plus FFPROBE_BIN=/usr/bin/ffprobe are passed into the service."
+                )
             raise RuntimeError(details) from exc

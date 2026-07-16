@@ -1,0 +1,7 @@
+Traceback (most recent call last):
+  File "<stdin>", line 26, in <module>
+  File "D:\project\stock_agent\engines\content\video_ingest_service.py", line 140, in process_task
+    self._ensure_full_audio_download(metadata=metadata, audio_path=standardized_audio_path)
+  File "D:\project\stock_agent\engines\content\video_ingest_service.py", line 395, in _ensure_full_audio_download
+    raise RuntimeError(
+RuntimeError: Bilibili audio download looks incomplete. Expected about 2066s but only fetched 300s. Current auth source: cookie_file:D:\project\stock_agent\storage\runtime\bilibili.cookies.txt. For charged or member-only videos, run scripts/login-bilibili.ps1 to generate a project cookie file.
