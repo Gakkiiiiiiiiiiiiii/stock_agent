@@ -40,14 +40,9 @@ class HybridRetriever:
                 )
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"])
         hydrated = self.hydrator.hydrate(reranked)
-        hydrated.sort(
-            key=lambda item: (
-                float(item.get("rerank_score") or 0.0),
-                int(item.get("source_timestamp") or 0),
-            ),
-            reverse=True,
-        )
-        return {"plan": plan, "contexts": self._resolve_viewpoint_conflicts(hydrated)}
+        contexts = self._resolve_viewpoint_conflicts(hydrated)
+        contexts = self._apply_source_priority(contexts, plan.get("preferred_source_types") or [])
+        return {"plan": plan, "contexts": contexts}
 
     def _build_filter(self, filters: dict) -> models.Filter | None:
         if not filters:
@@ -85,6 +80,25 @@ class HybridRetriever:
                 resolved.append(item)
                 continue
         return resolved
+
+    @classmethod
+    def _apply_source_priority(cls, contexts: list[dict], preferred_source_types: list[str]) -> list[dict]:
+        priority_map = {source_type: len(preferred_source_types) - index for index, source_type in enumerate(preferred_source_types)}
+        contexts.sort(
+            key=lambda item: (
+                float(item.get("rerank_score") or 0.0) + cls._source_priority_bonus(item.get("source_type"), priority_map),
+                int(item.get("source_timestamp") or 0),
+            ),
+            reverse=True,
+        )
+        return contexts
+
+    @staticmethod
+    def _source_priority_bonus(source_type: str | None, priority_map: dict[str, int]) -> float:
+        if not source_type:
+            return 0.0
+        weight = priority_map.get(str(source_type), 0)
+        return weight * 0.02
 
     @staticmethod
     def _build_conflict_key(item: dict) -> str | None:

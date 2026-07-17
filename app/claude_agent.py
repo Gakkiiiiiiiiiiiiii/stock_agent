@@ -124,15 +124,20 @@ class ClaudeAgent:
         force_skill: str | None = None,
     ) -> SkillSelectionDecision:
         if force_skill:
-            for skill in self.skills:
-                if skill.slug == force_skill or skill.name == force_skill:
-                    return SkillSelectionDecision(skill=skill, reason=f"Skill forced by caller: {force_skill}")
+            skill = self._find_skill(force_skill)
+            if skill is not None:
+                return SkillSelectionDecision(skill=skill, reason=f"Skill forced by caller: {force_skill}")
             raise ValueError(f"unknown skill: {force_skill}")
+        preselected = self._preselect_skill(user_query)
+        if preselected is not None:
+            return preselected
         skill_catalog = format_skill_catalog(self.skills)
         response = self.client.create_chat_completion(
             system=(
                 "You are the orchestration brain for a financial research agent. "
                 "Pick exactly one skill that best matches the task. "
+                "If the user asks about recent/current investable sectors, themes, market directions, or what is worth watching now, "
+                "prefer daily-market-decision over static theme research. "
                 f"Today's runtime date is {date.today().isoformat()}. "
                 "Return only a JSON object like "
                 '{"skill_slug":"...", "reason":"..."} '
@@ -308,6 +313,7 @@ class ClaudeAgent:
         rules = [
             ("portfolio-construction", ["组合", "仓位", "持仓", "配仓", "防守", "标的"]),
             ("portfolio-risk-review", ["风控", "风险", "暴露", "集中度"]),
+            ("daily-market-decision", ["最近", "近期", "当前", "今天", "板块", "赛道", "方向", "机会", "主线", "值得关注", "值得投资"]),
             ("industry-logic-research", ["主题", "产业链", "催化", "证伪", "黄金", "逻辑"]),
             ("market-regime-strategy-router", ["市场状态", "风格", "轮动", "退潮", "regime"]),
             ("a-share-technical-analysis", ["技术", "k线", "b1", "b2", "b3", "macd", "rps"]),
@@ -317,10 +323,35 @@ class ClaudeAgent:
         ]
         for slug, keywords in rules:
             if any(keyword in query for keyword in keywords):
-                for skill in self.skills:
-                    if skill.slug == slug:
-                        return skill
+                skill = self._find_skill(slug)
+                if skill is not None:
+                    return skill
         return self.skills[0] if self.skills else None
+
+    def _preselect_skill(self, user_query: str) -> SkillSelectionDecision | None:
+        if self._is_recent_market_opportunity_query(user_query):
+            skill = self._find_skill("daily-market-decision")
+            if skill is not None:
+                return SkillSelectionDecision(
+                    skill=skill,
+                    reason="Query asks for recent/current investable sectors or directions, so it should use daily-market-decision with fresh market context and latest video insights.",
+                )
+        return None
+
+    def _find_skill(self, slug_or_name: str) -> SkillDefinition | None:
+        for skill in self.skills:
+            if skill.slug == slug_or_name or skill.name == slug_or_name:
+                return skill
+        return None
+
+    @staticmethod
+    def _is_recent_market_opportunity_query(user_query: str) -> bool:
+        query = (user_query or "").strip().lower()
+        if not query:
+            return False
+        recency_keywords = ("最近", "近期", "当前", "今天", "这两天", "这几天", "最新", "本周", "眼下")
+        opportunity_keywords = ("板块", "赛道", "方向", "机会", "主线", "值得关注", "值得投资", "可交易", "怎么看")
+        return any(keyword in query for keyword in recency_keywords) and any(keyword in query for keyword in opportunity_keywords)
 
     def _tool_call_summary(self, name: str, arguments: dict[str, Any]) -> str:
         description = self.tool_registry.describe_tool(name)

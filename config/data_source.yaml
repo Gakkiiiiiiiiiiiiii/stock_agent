@@ -1,8 +1,10 @@
 market_data:
-  provider: local_csv
-  local_csv_dir: data/market
+  provider: qmt
+  bridge_python: ../quant/.venv-qmt36/Scripts/python.exe
+  bridge_script: ../quant/scripts/qmt_bridge.py
+  install_dir: ../quant/runtime/qmt_client/installed
+  userdata_dir: ../quant/runtime/qmt_client/installed/userdata_mini
   default_adjust: qfq
 news:
   provider: local
   local_dir: data/news
-

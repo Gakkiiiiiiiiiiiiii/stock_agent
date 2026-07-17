@@ -22,6 +22,8 @@ class KlineResponse(BaseModel):
     freq: str = "1d"
     adjust: str = "qfq"
     records: list[KlineRecord]
+    source: str = "unknown"
+    warning: str | None = None
 
 
 class SignalResult(BaseModel):

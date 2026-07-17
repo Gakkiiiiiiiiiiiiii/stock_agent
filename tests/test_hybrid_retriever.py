@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from engines.retrieval.hybrid_retriever import HybridRetriever
+from engines.retrieval.query_understanding import build_retrieval_plan
 
 
 class FakeQdrant:
@@ -97,3 +98,42 @@ def test_hybrid_retriever_prefers_newer_viewpoint_when_stances_conflict():
     assert "旧看多观点" not in titles
     assert "同主题旧风险" in titles
     assert "无冲突操作建议" in titles
+
+
+class FakeVideoPriorityHydrator:
+    def hydrate(self, reranked_hits):
+        _ = reranked_hits
+        return [
+            {
+                "title": "静态主题库逻辑",
+                "rerank_score": 0.9,
+                "source_timestamp": 5,
+                "source_type": "theme_logic",
+            },
+            {
+                "title": "最近视频观点",
+                "rerank_score": 0.9,
+                "source_timestamp": 20,
+                "source_type": "bilibili_video_viewpoint",
+            },
+        ]
+
+
+def test_hybrid_retriever_prefers_recent_video_sources_for_market_opportunity_queries():
+    retriever = HybridRetriever(
+        qdrant_client=FakeQdrant(),
+        reranker=FakeReranker(),
+        embedder=FakeEmbedder(),
+        hydrator=FakeVideoPriorityHydrator(),
+    )
+    result = retriever.retrieve("最近有什么值得关注的板块方向", top_k=2)
+    assert result["contexts"][0]["title"] == "最近视频观点"
+    assert result["plan"]["task_type"] == "market_opportunity_scan"
+    assert result["plan"]["preferred_source_types"][0] == "bilibili_video_viewpoint"
+
+
+def test_build_retrieval_plan_marks_recent_market_opportunity_queries():
+    plan = build_retrieval_plan("最近有什么比较好的板块或者赛道可以进行投资", top_k=3)
+    assert plan["task_type"] == "market_opportunity_scan"
+    assert "bilibili_video_summary" in plan["preferred_source_types"]
+    assert plan["top_n_retrieve"] >= 18

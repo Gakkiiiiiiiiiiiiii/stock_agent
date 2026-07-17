@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Financial analysis agent MVP with technical factors, knowledge base, and API orchestration."
 requires-python = ">=3.11"
 dependencies = [
-  "akshare>=1.16",
   "anthropic>=0.67",
   "faster-whisper>=1.1",
   "fastapi>=0.111",

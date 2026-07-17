@@ -17,6 +17,9 @@ class LocalFallbackOrchestrator:
 
     def analyze_stock(self, symbol: str, as_of: date | None = None, patterns: list[str] | None = None) -> dict:
         kline = self.market.get_kline(symbol, end_date=as_of)
+        kline_guard = self._validate_kline_for_analysis(kline, as_of=as_of)
+        if kline_guard is not None:
+            return {"symbol": symbol, **kline_guard}
         if len(kline.records) < 30:
             return {"symbol": symbol, "error": "行情数据不足，至少需要 30 根 K 线"}
         highs = [item.high for item in kline.records]
@@ -39,6 +42,32 @@ class LocalFallbackOrchestrator:
             "risk": {"warnings": sorted({warning for item in signals for warning in item.risk})},
             "orchestration": "local-fallback",
         }
+
+    @staticmethod
+    def _validate_kline_for_analysis(kline, as_of: date | None = None) -> dict | None:
+        if not kline.records:
+            return {
+                "error": "QMT 未返回可用日 K 数据，已停止分析。",
+                "data_source": kline.source,
+                "warning": kline.warning,
+            }
+        latest_date = kline.records[-1].date
+        reference_date = as_of or date.today()
+        if kline.source != "qmt":
+            return {
+                "error": "当前返回的数据源不是 QMT 实时行情，已停止分析。",
+                "data_source": kline.source,
+                "latest_kline_date": str(latest_date),
+                "warning": kline.warning,
+            }
+        if (reference_date - latest_date).days > 14:
+            return {
+                "error": "日 K 数据时间过旧，无法用于当前分析。",
+                "data_source": kline.source,
+                "latest_kline_date": str(latest_date),
+                "warning": kline.warning,
+            }
+        return None
 
     def analyze_theme(self, theme_name: str) -> dict:
         theme = self.themes.search(theme_name)

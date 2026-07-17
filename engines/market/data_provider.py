@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import csv
-import os
-from datetime import date
+from collections import defaultdict
+from datetime import date, timedelta
 from functools import lru_cache
-from pathlib import Path
 from typing import Any
 
+from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 from financial_agent.models import KlineRecord, KlineResponse
-from financial_agent.utils import project_root
 
 
 COMMON_SYMBOL_ALIASES = {
@@ -42,206 +40,214 @@ class MarketDataProvider:
         raise NotImplementedError
 
 
-class LocalCsvMarketDataProvider(MarketDataProvider):
-    def __init__(self, data_dir: Path | None = None) -> None:
-        self.data_dir = data_dir or project_root() / "data" / "market"
+class QmtMarketDataProvider(MarketDataProvider):
+    def __init__(self, bridge: QmtBridgeClient | None = None) -> None:
+        self.bridge = bridge or QmtBridgeClient()
 
     def get_kline(self, symbol: str, start_date: date | None = None, end_date: date | None = None, freq: str = "1d", adjust: str = "qfq") -> KlineResponse:
         resolved = self.resolve_symbol(symbol)
-        path = self.data_dir / f"{resolved}.csv"
-        if not path.exists():
-            return KlineResponse(symbol=resolved, freq=freq, adjust=adjust, records=sample_kline(resolved))
-        records: list[KlineRecord] = []
-        with path.open("r", encoding="utf-8-sig", newline="") as file:
-            for row in csv.DictReader(file):
-                record = KlineRecord(
-                    date=date.fromisoformat(row["date"]),
-                    open=float(row["open"]),
-                    high=float(row["high"]),
-                    low=float(row["low"]),
-                    close=float(row["close"]),
-                    volume=float(row.get("volume") or 0),
-                    amount=float(row.get("amount") or 0),
-                    turnover_rate=float(row["turnover_rate"]) if row.get("turnover_rate") else None,
-                )
-                if start_date and record.date < start_date:
-                    continue
-                if end_date and record.date > end_date:
-                    continue
-                records.append(record)
-        return KlineResponse(symbol=resolved, freq=freq, adjust=adjust, records=records)
+        qmt_symbol = to_qmt_symbol(resolved)
+        actual_start = start_date or (date.today() - timedelta(days=240))
+        actual_end = end_date or date.today()
+        try:
+            rows = self.bridge.get_history(
+                symbols=[qmt_symbol],
+                period=self._normalize_period(freq),
+                start_time=actual_start.strftime("%Y%m%d"),
+                end_time=actual_end.strftime("%Y%m%d"),
+                dividend_type=self._normalize_adjust(adjust),
+                fill_data=True,
+                prefer_cache_first=True,
+            )
+        except QmtBridgeError as exc:
+            return KlineResponse(
+                symbol=qmt_symbol,
+                freq=freq,
+                adjust=adjust,
+                records=[],
+                source="qmt",
+                warning=str(exc),
+            )
+        records = self._records_from_rows(rows, symbol=qmt_symbol, start_date=start_date, end_date=end_date)
+        warning = None
+        if not records:
+            warning = f"QMT 未返回 {qmt_symbol} 在 {actual_start} 到 {actual_end} 的有效 {freq} 数据。"
+        return KlineResponse(
+            symbol=qmt_symbol,
+            freq=freq,
+            adjust=adjust,
+            records=records,
+            source="qmt",
+            warning=warning,
+        )
 
     def get_market_snapshot(self) -> dict[str, Any]:
+        index_symbols = ["000001.SH", "399001.SZ", "399006.SZ"]
+        end_day = date.today()
+        start_day = end_day - timedelta(days=40)
+        try:
+            rows = self.bridge.get_history(
+                symbols=index_symbols,
+                period="1d",
+                start_time=start_day.strftime("%Y%m%d"),
+                end_time=end_day.strftime("%Y%m%d"),
+                dividend_type="front",
+                fill_data=True,
+                prefer_cache_first=True,
+            )
+            quotes = self.bridge.get_quotes(index_symbols)
+        except QmtBridgeError as exc:
+            return {
+                "market_regime": "未知",
+                "risk_appetite": "未知",
+                "turnover": None,
+                "up_count": None,
+                "down_count": None,
+                "limit_up_count": None,
+                "limit_down_count": None,
+                "warning": str(exc),
+                "source": "qmt",
+            }
+        grouped = group_history_rows(rows)
+        intraday_changes: list[float] = []
+        return_5d: list[float] = []
+        return_20d: list[float] = []
+        for symbol in index_symbols:
+            quote = quotes.get(symbol) or {}
+            last_price = safe_float(quote.get("last_price"))
+            last_close = safe_float(quote.get("last_close"))
+            if last_price > 0 and last_close > 0:
+                intraday_changes.append((last_price - last_close) / last_close * 100)
+            records = grouped.get(symbol, [])
+            pct_5d = calculate_return_pct(records, 5)
+            pct_20d = calculate_return_pct(records, 20)
+            if pct_5d is not None:
+                return_5d.append(pct_5d)
+            if pct_20d is not None:
+                return_20d.append(pct_20d)
+        intraday = average(intraday_changes)
+        avg_5d = average(return_5d)
+        avg_20d = average(return_20d)
+        market_regime, risk_appetite = classify_market_snapshot(intraday=intraday, avg_5d=avg_5d, avg_20d=avg_20d)
+        warning = None
+        if not grouped:
+            warning = "QMT 未返回指数历史数据，市场快照仅保留空结构。"
         return {
-            "market_regime": "震荡偏强",
-            "risk_appetite": "中等",
+            "market_regime": market_regime,
+            "risk_appetite": risk_appetite,
             "turnover": None,
             "up_count": None,
             "down_count": None,
             "limit_up_count": None,
             "limit_down_count": None,
-            "warning": "当前使用本地样例行情；设置 MARKET_DATA_PROVIDER=akshare 可切换到实时 A 股行情。",
-            "source": "local_csv",
+            "warning": warning,
+            "source": "qmt",
+            "indices": {
+                "intraday_pct": round(intraday, 2),
+                "return_5d_pct": round(avg_5d, 2),
+                "return_20d_pct": round(avg_20d, 2),
+            },
         }
 
     def get_sector_strength(self, top_k: int = 20) -> list[dict[str, Any]]:
-        from engines.market.sector_strength import sample_sector_strength
-
-        return sample_sector_strength()[:top_k]
+        try:
+            rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
+        except QmtBridgeError:
+            return []
+        sector_samples: dict[str, list[str]] = defaultdict(list)
+        for row in rows:
+            sector_name = str(row.get("industry_name") or row.get("industry_code") or "").strip() or "未分类"
+            symbol = str(row.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            if len(sector_samples[sector_name]) < 3:
+                sector_samples[sector_name].append(symbol)
+        sample_symbols = sorted({symbol for symbols in sector_samples.values() for symbol in symbols})
+        if not sample_symbols:
+            return []
+        quotes: dict[str, Any] = {}
+        for chunk in batched(sample_symbols, 200):
+            try:
+                quotes.update(self.bridge.get_quotes(chunk))
+            except QmtBridgeError:
+                continue
+        items: list[dict[str, Any]] = []
+        for sector_name, symbols in sector_samples.items():
+            change_pcts: list[float] = []
+            up_count = 0
+            down_count = 0
+            for symbol in symbols:
+                payload = quotes.get(symbol) or {}
+                last_price = safe_float(payload.get("last_price"))
+                last_close = safe_float(payload.get("last_close"))
+                if last_price <= 0 or last_close <= 0:
+                    continue
+                pct = (last_price - last_close) / last_close * 100
+                change_pcts.append(pct)
+                if pct > 0:
+                    up_count += 1
+                elif pct < 0:
+                    down_count += 1
+            if not change_pcts:
+                continue
+            avg_pct = average(change_pcts)
+            breadth = (up_count - down_count) / max(len(change_pcts), 1)
+            score = clamp(50 + avg_pct * 6 + breadth * 20, 0, 100)
+            items.append(
+                {
+                    "sector": sector_name,
+                    "strength_score": round(score, 2),
+                    "reason": f"样本涨跌幅均值 {avg_pct:.2f}%，上涨/下跌 {up_count}/{down_count}",
+                    "change_pct": round(avg_pct, 2),
+                }
+            )
+        return sorted(items, key=lambda item: item["strength_score"], reverse=True)[:top_k]
 
     @staticmethod
     def resolve_symbol(symbol: str) -> str:
-        key = normalize_text(symbol)
-        return COMMON_SYMBOL_ALIASES.get(key, symbol)
-
-
-class AkshareMarketDataProvider(MarketDataProvider):
-    def __init__(self, fallback: MarketDataProvider | None = None) -> None:
-        import akshare as ak
-
-        self.ak = ak
-        self.fallback = fallback or LocalCsvMarketDataProvider()
-
-    def get_kline(self, symbol: str, start_date: date | None = None, end_date: date | None = None, freq: str = "1d", adjust: str = "qfq") -> KlineResponse:
-        try:
-            code, security_type = self.resolve_symbol(symbol)
-            period = self._normalize_period(freq)
-            start = (start_date or date.today().replace(month=1, day=1)).strftime("%Y%m%d")
-            end = (end_date or date.today()).strftime("%Y%m%d")
-            hist = self._fetch_hist(code=code, security_type=security_type, period=period, adjust=adjust, start=start, end=end)
-            records = self._records_from_dataframe(hist, start_date=start_date, end_date=end_date)
-            if records:
-                return KlineResponse(symbol=code, freq=freq, adjust=adjust, records=records)
-        except Exception:
-            pass
-        return self.fallback.get_kline(symbol=symbol, start_date=start_date, end_date=end_date, freq=freq, adjust=adjust)
-
-    def get_market_snapshot(self) -> dict[str, Any]:
-        try:
-            spot = self.ak.stock_zh_a_spot_em()
-            change_col = pick_column(spot.columns, "涨跌幅")
-            turnover_col = pick_column(spot.columns, "成交额")
-            up_count = int((spot[change_col] > 0).sum())
-            down_count = int((spot[change_col] < 0).sum())
-            limit_up_count = int((spot[change_col] >= 9.8).sum())
-            limit_down_count = int((spot[change_col] <= -9.8).sum())
-            turnover = round(float(spot[turnover_col].fillna(0).sum()) / 100000000, 2)
-            breadth = up_count / max(up_count + down_count, 1)
-            if breadth >= 0.62 and limit_up_count >= 45:
-                market_regime = "强势上行"
-                risk_appetite = "较高"
-            elif breadth >= 0.54:
-                market_regime = "震荡偏强"
-                risk_appetite = "中等"
-            elif breadth <= 0.42:
-                market_regime = "弱势承压"
-                risk_appetite = "较低"
-            else:
-                market_regime = "震荡偏弱"
-                risk_appetite = "偏低"
-            return {
-                "market_regime": market_regime,
-                "risk_appetite": risk_appetite,
-                "turnover": turnover,
-                "up_count": up_count,
-                "down_count": down_count,
-                "limit_up_count": limit_up_count,
-                "limit_down_count": limit_down_count,
-                "warning": None,
-                "source": "akshare_eastmoney",
-            }
-        except Exception:
-            return self.fallback.get_market_snapshot()
-
-    def get_sector_strength(self, top_k: int = 20) -> list[dict[str, Any]]:
-        try:
-            board = self.ak.stock_board_industry_name_em()
-            name_col = pick_column(board.columns, "板块名称", "名称")
-            pct_col = pick_column(board.columns, "涨跌幅")
-            up_col = optional_column(board.columns, "上涨家数")
-            down_col = optional_column(board.columns, "下跌家数")
-            amount_col = optional_column(board.columns, "总市值", "成交额")
-            items: list[dict[str, Any]] = []
-            for _, row in board.iterrows():
-                pct = safe_float(row[pct_col])
-                up_count = safe_float(row[up_col]) if up_col else 0.0
-                down_count = safe_float(row[down_col]) if down_col else 0.0
-                breadth = 0.0
-                if up_col and down_col and (up_count + down_count) > 0:
-                    breadth = (up_count - down_count) / (up_count + down_count)
-                size_factor = 0.0
-                if amount_col:
-                    size_factor = min(safe_float(row[amount_col]) / 1_000_000_000_000, 1.0)
-                score = max(0.0, min(100.0, round(50 + pct * 6 + breadth * 20 + size_factor * 5, 2)))
-                reason = f"涨跌幅 {pct:.2f}%"
-                if up_col and down_col:
-                    reason += f"，上涨/下跌家数 {int(up_count)}/{int(down_count)}"
-                items.append({"sector": str(row[name_col]), "strength_score": score, "reason": reason, "change_pct": round(pct, 2)})
-            return sorted(items, key=lambda item: item["strength_score"], reverse=True)[:top_k]
-        except Exception:
-            return self.fallback.get_sector_strength(top_k=top_k)
-
-    def resolve_symbol(self, symbol: str) -> tuple[str, str]:
         text = normalize_text(symbol)
         if text in COMMON_SYMBOL_ALIASES:
-            code = COMMON_SYMBOL_ALIASES[text]
-            return code, detect_security_type(code, symbol)
-        if symbol.isdigit() and len(symbol) == 6:
-            return symbol, detect_security_type(symbol, symbol)
-        code = self._search_code_by_name(symbol)
-        if code:
-            return code, detect_security_type(code, symbol)
-        return symbol, detect_security_type(symbol, symbol)
-
-    def _search_code_by_name(self, name: str) -> str | None:
-        target = normalize_text(name)
-        for loader in (self.ak.stock_zh_a_spot_em, self.ak.fund_etf_spot_em):
-            try:
-                frame = loader()
-                name_col = pick_column(frame.columns, "名称")
-                code_col = pick_column(frame.columns, "代码")
-                matched = frame[frame[name_col].astype(str).map(normalize_text) == target]
-                if not matched.empty:
-                    return str(matched.iloc[0][code_col])
-            except Exception:
-                continue
-        return None
-
-    def _fetch_hist(self, code: str, security_type: str, period: str, adjust: str, start: str, end: str):
-        if security_type == "etf":
-            return self.ak.fund_etf_hist_em(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust)
-        return self.ak.stock_zh_a_hist(symbol=code, period=period, start_date=start, end_date=end, adjust=adjust)
+            return COMMON_SYMBOL_ALIASES[text]
+        if "." in str(symbol):
+            code, suffix = str(symbol).split(".", 1)
+            if code.isdigit() and suffix.lower() in {"sh", "sz", "bj"}:
+                return f"{code}.{suffix.upper()}"
+        return str(symbol).strip()
 
     @staticmethod
     def _normalize_period(freq: str) -> str:
         mapping = {
-            "1d": "daily",
-            "d": "daily",
-            "daily": "daily",
-            "1w": "weekly",
-            "w": "weekly",
-            "weekly": "weekly",
-            "1m": "monthly",
-            "m": "monthly",
-            "monthly": "monthly",
+            "1d": "1d",
+            "d": "1d",
+            "daily": "1d",
+            "day": "1d",
         }
-        return mapping.get((freq or "1d").lower(), "daily")
+        return mapping.get((freq or "1d").lower(), "1d")
 
     @staticmethod
-    def _records_from_dataframe(frame, start_date: date | None = None, end_date: date | None = None) -> list[KlineRecord]:
+    def _normalize_adjust(adjust: str) -> str:
+        mapping = {
+            "qfq": "front",
+            "hfq": "back",
+            "bfq": "none",
+            "none": "none",
+            "nfq": "none",
+        }
+        return mapping.get((adjust or "qfq").lower(), "front")
+
+    @staticmethod
+    def _records_from_rows(
+        rows: list[dict[str, Any]],
+        symbol: str | None = None,
+        start_date: date | None = None,
+        end_date: date | None = None,
+    ) -> list[KlineRecord]:
         records: list[KlineRecord] = []
-        if frame is None or getattr(frame, "empty", True):
-            return records
-        date_col = pick_column(frame.columns, "日期", "date")
-        open_col = pick_column(frame.columns, "开盘", "open")
-        high_col = pick_column(frame.columns, "最高", "high")
-        low_col = pick_column(frame.columns, "最低", "low")
-        close_col = pick_column(frame.columns, "收盘", "close")
-        volume_col = optional_column(frame.columns, "成交量", "volume")
-        amount_col = optional_column(frame.columns, "成交额", "amount")
-        turnover_col = optional_column(frame.columns, "换手率", "turnover_rate")
-        for _, row in frame.iterrows():
-            trading_day = parse_date_value(row[date_col])
+        for row in rows:
+            row_symbol = str(row.get("symbol") or symbol or "").strip()
+            if symbol and row_symbol and row_symbol != symbol:
+                continue
+            trading_day = parse_date_value(row.get("trading_date"))
             if start_date and trading_day < start_date:
                 continue
             if end_date and trading_day > end_date:
@@ -249,54 +255,24 @@ class AkshareMarketDataProvider(MarketDataProvider):
             records.append(
                 KlineRecord(
                     date=trading_day,
-                    open=safe_float(row[open_col]),
-                    high=safe_float(row[high_col]),
-                    low=safe_float(row[low_col]),
-                    close=safe_float(row[close_col]),
-                    volume=safe_float(row[volume_col]) if volume_col else 0.0,
-                    amount=safe_float(row[amount_col]) if amount_col else 0.0,
-                    turnover_rate=safe_float(row[turnover_col]) if turnover_col else None,
+                    open=safe_float(row.get("open")),
+                    high=safe_float(row.get("high")),
+                    low=safe_float(row.get("low")),
+                    close=safe_float(row.get("close")),
+                    volume=safe_float(row.get("volume")),
+                    amount=safe_float(row.get("amount")),
                 )
             )
-        return records
+        return sorted(records, key=lambda item: item.date)
 
 
 @lru_cache(maxsize=4)
 def get_market_data_provider() -> MarketDataProvider:
-    provider = os.getenv("MARKET_DATA_PROVIDER", "local_csv").strip().lower()
-    if provider in {"akshare", "ak"}:
-        try:
-            return AkshareMarketDataProvider()
-        except Exception:
-            return LocalCsvMarketDataProvider()
-    return LocalCsvMarketDataProvider()
+    return QmtMarketDataProvider()
 
 
 def normalize_text(value: str) -> str:
     return "".join(str(value).strip().lower().split())
-
-
-def detect_security_type(code: str, raw_symbol: str) -> str:
-    text = normalize_text(raw_symbol)
-    if "etf" in text or (str(code).isdigit() and str(code).startswith(("1", "5"))):
-        return "etf"
-    return "stock"
-
-
-def pick_column(columns: Any, *candidates: str) -> str:
-    normalized = {normalize_text(column): column for column in columns}
-    for candidate in candidates:
-        match = normalized.get(normalize_text(candidate))
-        if match:
-            return match
-    raise KeyError(f"missing columns: {candidates}")
-
-
-def optional_column(columns: Any, *candidates: str) -> str | None:
-    try:
-        return pick_column(columns, *candidates)
-    except KeyError:
-        return None
 
 
 def parse_date_value(value: Any) -> date:
@@ -308,6 +284,68 @@ def safe_float(value: Any) -> float:
     if value is None or value == "":
         return 0.0
     return float(str(value).replace(",", ""))
+
+
+def to_qmt_symbol(symbol: str) -> str:
+    raw = str(symbol).strip()
+    if "." in raw:
+        code, suffix = raw.split(".", 1)
+        if code.isdigit() and suffix.lower() in {"sh", "sz", "bj"}:
+            return f"{code}.{suffix.upper()}"
+    if not raw.isdigit() or len(raw) != 6:
+        return raw
+    if raw.startswith(("60", "68", "50", "51", "56", "58")):
+        return f"{raw}.SH"
+    if raw.startswith(("00", "12", "15", "16", "18", "20", "30")):
+        return f"{raw}.SZ"
+    if raw.startswith(("43", "83", "87", "88", "92")):
+        return f"{raw}.BJ"
+    return f"{raw}.SZ"
+
+
+def average(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return sum(values) / len(values)
+
+
+def calculate_return_pct(records: list[KlineRecord], lookback: int) -> float | None:
+    if len(records) <= lookback:
+        return None
+    base = records[-lookback - 1].close
+    if base <= 0:
+        return None
+    return (records[-1].close - base) / base * 100
+
+
+def classify_market_snapshot(intraday: float, avg_5d: float, avg_20d: float) -> tuple[str, str]:
+    if avg_20d >= 5 and avg_5d >= 1 and intraday >= 0:
+        return "强势上行", "较高"
+    if avg_20d >= 2 and avg_5d >= 0:
+        return "震荡偏强", "中等"
+    if avg_20d <= -4 and avg_5d <= -1:
+        return "弱势承压", "较低"
+    if avg_5d < 0 or intraday < 0:
+        return "震荡偏弱", "偏低"
+    return "震荡整理", "中等"
+
+
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
+def batched(items: list[str], size: int) -> list[list[str]]:
+    return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def group_history_rows(rows: list[dict[str, Any]]) -> dict[str, list[KlineRecord]]:
+    grouped: dict[str, list[KlineRecord]] = defaultdict(list)
+    for row in rows:
+        symbol = str(row.get("symbol") or "").strip()
+        if not symbol:
+            continue
+        grouped[symbol].extend(QmtMarketDataProvider._records_from_rows([row], symbol=symbol))
+    return grouped
 
 
 def sample_kline(symbol: str, days: int = 140) -> list[KlineRecord]:

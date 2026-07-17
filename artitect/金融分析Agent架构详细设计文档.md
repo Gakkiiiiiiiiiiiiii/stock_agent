@@ -1885,7 +1885,10 @@ services:
 DATABASE_URL=postgresql://agent:agent_pass@localhost:5432/financial_agent
 REDIS_URL=redis://localhost:6379/0
 ANTHROPIC_API_KEY=your_key
-MARKET_DATA_PROVIDER=akshare
+QMT_BRIDGE_PYTHON=../quant/.venv-qmt36/Scripts/python.exe
+QMT_BRIDGE_SCRIPT=../quant/scripts/qmt_bridge.py
+QMT_INSTALL_DIR=../quant/runtime/qmt_client/installed
+QMT_USERDATA_DIR=../quant/runtime/qmt_client/installed/userdata_mini
 NEWS_DATA_PROVIDER=custom
 LOG_LEVEL=INFO
 ```

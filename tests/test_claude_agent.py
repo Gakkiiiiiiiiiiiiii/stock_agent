@@ -52,3 +52,17 @@ def test_claude_agent_runs_tool_loop():
     assert result.trace["steps"][0]["type"] == "skill_selection"
     assert any(step["type"] == "tool_call" for step in result.trace["steps"])
     assert "最终报告" in result.report
+
+
+def test_claude_agent_preselects_daily_market_decision_for_recent_opportunity_query():
+    agent = ClaudeAgent(
+        client=FakeClient([]),
+        tools=ClaudeToolRegistry(),
+        skills=[
+            SkillDefinition(slug="daily-market-decision", name="daily-market-decision", description="", content="Use tools."),
+            SkillDefinition(slug="industry-logic-research", name="industry-logic-research", description="", content="Use tools."),
+        ],
+    )
+    decision = agent._choose_skill("最近有什么比较好的板块或者赛道可以进行投资")
+    assert decision.skill.slug == "daily-market-decision"
+    assert "video insights" in decision.reason.lower()
