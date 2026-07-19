@@ -95,6 +95,8 @@ def test_asr_service_uses_batched_pipeline_on_cuda(monkeypatch, tmp_path):
     assert kwargs["best_of"] == 1
     assert kwargs["without_timestamps"] is False
     assert kwargs["condition_on_previous_text"] is False
+    assert kwargs["initial_prompt"]
+    assert "上证指数" in kwargs["initial_prompt"]
     assert result["use_batched"] is True
     assert result["batch_size"] == 12
     assert result["chunk_length_seconds"] == 20
@@ -109,12 +111,14 @@ def test_asr_service_respects_env_overrides(monkeypatch):
     monkeypatch.setenv("ASR_BEAM_SIZE", "1")
     monkeypatch.setenv("ASR_BEST_OF", "1")
     monkeypatch.setenv("ASR_CONDITION_ON_PREVIOUS_TEXT", "false")
+    monkeypatch.setenv("ASR_INITIAL_PROMPT", "自定义金融引导词")
     service = AsrService(model_size="small", device="auto", compute_type="auto")
     assert service.batch_size == 20
     assert service.chunk_length_seconds == 18
     assert service.beam_size == 1
     assert service.best_of == 1
     assert service.condition_on_previous_text is False
+    assert service.initial_prompt == "自定义金融引导词"
 
 
 def test_asr_service_extends_linux_library_path(monkeypatch, tmp_path):

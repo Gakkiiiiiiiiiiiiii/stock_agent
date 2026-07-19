@@ -36,7 +36,7 @@ def _make_chunk(chunk_index: int, text: str) -> dict:
     }
 
 
-def test_financial_event_extractor_skips_llm_for_many_chunks(monkeypatch):
+def test_financial_event_extractor_falls_back_to_rules_beyond_chunk_budget(monkeypatch):
     monkeypatch.setenv("VIDEO_EVENT_LLM_MAX_CHUNKS", "2")
     model_client = FakeModelClient()
     extractor = FinancialEventExtractor(model_client=model_client)
@@ -50,7 +50,8 @@ def test_financial_event_extractor_skips_llm_for_many_chunks(monkeypatch):
     video_type, events = extractor.extract(metadata=metadata, chunks=chunks)
 
     assert video_type
-    assert model_client.calls == 0
+    # 前 2 个分块走 LLM，超出预算的分块回退为规则抽取
+    assert model_client.calls == 2
     assert events
     assert any(event["event_type"] == "RISK" for event in events)
 

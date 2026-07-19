@@ -37,6 +37,13 @@ class VideoSummaryMarkdownExporter:
     def _render_markdown(metadata: dict, summary: dict) -> str:
         ctx = VideoSummaryMarkdownExporter._build_template_context(metadata=metadata, summary=summary)
         lines: list[str] = [f"# {ctx['title']}", ""]
+        if summary.get("degraded"):
+            lines.extend(
+                [
+                    "> **警告：本次总结未使用 LLM 生成（模型调用失败或未配置），以下为结构化规则降级摘要，内容完整度与准确性显著低于正常总结，请人工复核后使用。**",
+                    "",
+                ]
+            )
 
         VideoSummaryMarkdownExporter._append_section(lines, "## 1. 视频元信息")
         VideoSummaryMarkdownExporter._append_bullets(

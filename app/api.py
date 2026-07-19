@@ -6,7 +6,7 @@ from datetime import date as Date
 from queue import Queue
 from threading import Thread
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -281,6 +281,17 @@ def get_content_task(task_id: int) -> dict:
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
     return task
+
+
+@app.post("/api/v1/content/tasks/{task_id}/process")
+def process_content_task(task_id: int, background_tasks: BackgroundTasks) -> dict:
+    task = content_ingest_service.get_task(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    if task.get("status") in {"processing", "success"}:
+        return {"started": False, "task": task}
+    background_tasks.add_task(content_ingest_service.process_task, task_id)
+    return {"started": True, "task": task}
 
 
 @app.get("/api/v1/content/videos")

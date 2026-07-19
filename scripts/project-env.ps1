@@ -30,6 +30,7 @@ function Get-BilibiliCookieFilePath {
 
 function Set-ProjectRuntimeEnv {
     $env:PATH = "$script:ScriptsDir;$script:LibraryBin;$env:PATH"
+    $env:PYTHONIOENCODING = "utf-8"
     if (Test-Path $script:NvidiaSitePackages) {
         $nvidiaBinCandidates = @(
             (Join-Path $script:NvidiaSitePackages "cu12\bin"),
@@ -115,6 +116,7 @@ function Set-ProjectRuntimeEnv {
                 "VISUAL_MODEL_NAME",
                 "VISUAL_MODEL_BASE_URL",
                 "VISUAL_MODEL_API_KEY",
+                "VISUAL_MODEL_TEMPERATURE",
                 "BILIBILI_COOKIE_FILE",
                 "BILIBILI_COOKIE_HEADER",
                 "BILIBILI_COOKIES_FROM_BROWSER",
@@ -142,6 +144,8 @@ function Set-ProjectRuntimeEnv {
                 "ASR_BEAM_SIZE",
                 "ASR_BEST_OF",
                 "ASR_CONDITION_ON_PREVIOUS_TEXT",
+                "ASR_INITIAL_PROMPT",
+                "VIDEO_EVENT_LLM_MAX_CHUNKS",
                 "LOG_LEVEL"
             )) {
                 Set-Item -Path "Env:$key" -Value $value

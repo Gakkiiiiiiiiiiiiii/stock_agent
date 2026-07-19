@@ -100,3 +100,26 @@ def test_video_ocr_service_prefers_gpu_when_nvidia_env_is_present(monkeypatch):
     monkeypatch.setattr("shutil.which", lambda name: None)
 
     assert service._resolve_paddle_device("auto") == "gpu:0"
+
+
+def test_video_ocr_service_filters_trading_ui_noise_lines():
+    service = VideoOcrService(backend="paddleocr")
+    raw_text = "\n".join(
+        [
+            "系统 功能 深度 报价 分析 扩展 市场 行情 资讯 交易 服务 工具 帮助",
+            "分时 日线 周线 月线 前复权",
+            "上证指数 3764.15 -3.05%",
+            "半导体 880491",
+            "F10 画线 逐笔 交易信息",
+            "创业板指 3428.63 -7.15%",
+        ]
+    )
+
+    cleaned = service._clean_lines(raw_text)
+
+    assert "上证指数 3764.15 -3.05%" in cleaned
+    assert "半导体 880491" in cleaned
+    assert "创业板指 3428.63 -7.15%" in cleaned
+    assert not any("问小达" in line or "深度" in line for line in cleaned)
+    assert not any(line.startswith("分时 日线") for line in cleaned)
+    assert not any("F10" in line and "画线" in line for line in cleaned)

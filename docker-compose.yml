@@ -59,10 +59,14 @@ services:
     env_file:
       - .env
     environment:
+      ASR_MODEL_SIZE: large-v3
       ASR_DEVICE: cuda
       ASR_COMPUTE_TYPE: float16
       ASR_USE_BATCHED: "true"
-      ASR_BATCH_SIZE: "8"
+      ASR_BATCH_SIZE: "4"
+      ASR_BEAM_SIZE: "5"
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
       FFMPEG_BIN: /usr/bin/ffmpeg
       FFPROBE_BIN: /usr/bin/ffprobe
       VIDEO_OCR_DEVICE: gpu:0
@@ -72,6 +76,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - hf_cache:/root/.cache/huggingface
       - ./app:/app/app
       - ./agent:/app/agent
       - ./config:/app/config
@@ -98,13 +103,18 @@ services:
     env_file:
       - .env
     environment:
+      ASR_MODEL_SIZE: large-v3
       ASR_DEVICE: cuda
       ASR_COMPUTE_TYPE: float16
       ASR_USE_BATCHED: "true"
-      ASR_BATCH_SIZE: "8"
+      ASR_BATCH_SIZE: "4"
+      ASR_BEAM_SIZE: "5"
+      HF_ENDPOINT: https://hf-mirror.com
+      HF_HUB_DISABLE_XET: "1"
       FFMPEG_BIN: /usr/bin/ffmpeg
       FFPROBE_BIN: /usr/bin/ffprobe
     volumes:
+      - hf_cache:/root/.cache/huggingface
       - ./app:/app/app
       - ./agent:/app/agent
       - ./config:/app/config
@@ -123,3 +133,6 @@ services:
       - qdrant
       - redis
       - reranker
+
+volumes:
+  hf_cache:

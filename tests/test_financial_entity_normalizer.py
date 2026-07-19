@@ -24,3 +24,14 @@ def test_extract_entities_captures_code_name_pairs_from_ocr():
     )
 
     assert {"name": "成都先导", "ticker": "688222", "entity_type": "EQUITY"} in entities
+
+
+def test_extract_entities_resolves_alias_dictionary_names():
+    normalizer = FinancialEntityNormalizer()
+
+    entities = normalizer.extract_entities("宁德时代和贵州茅台今天都在调整，科创50跌得更多。")
+    by_name = {item["name"]: item for item in entities}
+
+    assert by_name["宁德时代"]["ticker"] == "300750"
+    assert by_name["贵州茅台"]["ticker"] == "600519"
+    assert by_name["科创50"]["entity_type"] == "INDEX"

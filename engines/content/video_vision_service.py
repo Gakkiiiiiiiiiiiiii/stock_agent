@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,9 @@ import httpx
 
 from app.model_providers import VisualModelClient
 from engines.content.video_ocr_service import VideoOcrService
+
+
+logger = logging.getLogger(__name__)
 
 
 class VideoVisionService:
@@ -22,6 +26,7 @@ class VideoVisionService:
         self.model_client = model_client or VisualModelClient()
         self.ocr_service = ocr_service or VideoOcrService()
         self.max_frames_per_run = int(os.getenv("VIDEO_VISION_MAX_FRAMES", str(max_frames_per_run or 12)))
+        self.temperature = float(os.getenv("VISUAL_MODEL_TEMPERATURE", "0.1"))
         self._image_input_supported: bool | None = None
         self.text_fallback_enabled = os.getenv("VIDEO_VISION_TEXT_FALLBACK", "1").strip().lower() not in {"0", "false", "no"}
 
@@ -78,6 +83,7 @@ class VideoVisionService:
         try:
             return self.ocr_service.extract_text(image_path)
         except Exception:
+            logger.warning("关键帧 OCR 提取失败（%s）", image_path, exc_info=True)
             return ""
 
     def _safe_visual_analyze(self, metadata: dict, image_path: str, timestamp_ms: int, ocr_text: str, related_text: str) -> dict[str, Any]:
@@ -129,14 +135,21 @@ class VideoVisionService:
                     "你是投研视频视觉解析器。请识别画面中的文字、图表、K线、表格和结论。"
                     "只返回 JSON，不要输出多余解释。不要杜撰看不清的内容。"
                 ),
-                temperature=0.1,
-                max_tokens=700,
+                temperature=self.temperature,
+                max_tokens=1500,
             )
             self._image_input_supported = True
         except httpx.HTTPStatusError as exc:
             error_body = self._extract_http_error_message(exc)
             if exc.response is not None and exc.response.status_code == 400 and self._looks_like_unsupported_image_input(error_body):
                 self._image_input_supported = False
+                logger.warning(
+                    "配置的视觉模型不支持图片输入（%s），视觉环节降级为 OCR 文本复核；"
+                    "请在 VISUAL_MODEL_* 中配置支持 image_url 的多模态模型",
+                    error_body or str(exc),
+                )
+            else:
+                logger.warning("视觉模型调用失败（HTTP %s）：%s", exc.response.status_code if exc.response is not None else "?", error_body or str(exc))
             return {
                 "visual_summary": "",
                 "themes": [],
@@ -147,6 +160,7 @@ class VideoVisionService:
                 "error_message": error_body or str(exc),
             }
         except Exception as exc:
+            logger.warning("视觉模型解析关键帧异常（timestamp_ms=%s）", timestamp_ms, exc_info=True)
             return {
                 "visual_summary": "",
                 "themes": [],
@@ -202,9 +216,10 @@ class VideoVisionService:
                     "只提取 OCR 明确支持、或可由 OCR 与口播共同印证的信息。"
                     "输出合法 JSON，不要附加解释。"
                 ),
-                temperature=0.1,
+                temperature=self.temperature,
             )
         except Exception as exc:
+            logger.warning("OCR 引导的视觉复核调用失败（timestamp_ms=%s）", timestamp_ms, exc_info=True)
             return {
                 "visual_summary": "",
                 "themes": [],
@@ -243,7 +258,11 @@ class VideoVisionService:
             "- visual_tags: 从 candlestick_chart, line_chart, financial_table, presentation_slide, news_page, subtitle 中选择。\n"
             "- objects: 若能明确识别出股票代码、价格、指标，输出对象数组。\n"
             "- confidence_score: 0 到 1。\n"
-            "不要根据口播臆造图中没有的信息。\n"
+            "分工与交叉印证规则：\n"
+            "- 你负责解读画面语义（K线形态、趋势、图表结构、表格含义）；具体数字、点位、代码以 OCR 文本为准。\n"
+            "- 若你目测的数值与 OCR 文本不一致，必须采用 OCR 的数值，不要输出与 OCR 冲突的数字。\n"
+            "- OCR 文本中没有出现的具体数值、代码，不要写入 symbols 和 objects。\n"
+            "- 不要根据口播臆造图中没有的信息。\n"
             f"video_title: {metadata.get('title', '')}\n"
             f"timestamp_ms: {timestamp_ms}\n"
             f"ocr_text: {ocr_text or '未识别到文字'}\n"

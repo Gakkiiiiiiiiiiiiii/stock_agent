@@ -9,6 +9,13 @@ from pathlib import Path
 from typing import Any
 
 
+DEFAULT_ASR_INITIAL_PROMPT = (
+    "以下是简体中文金融财经视频口播，内容涉及上证指数、深证成指、创业板、科创板、恒生科技、"
+    "半导体、新能源、医药、券商、杠杆、平仓、强平、均量线、MACD、成交额、成交量、"
+    "满仓、空仓、止盈、止损、支撑、压力、突破、回调。"
+)
+
+
 class AsrService:
     def __init__(
         self,
@@ -21,6 +28,7 @@ class AsrService:
         beam_size: int | None = None,
         best_of: int | None = None,
         condition_on_previous_text: bool | None = None,
+        initial_prompt: str | None = None,
     ) -> None:
         self.model_size = model_size or os.getenv("ASR_MODEL_SIZE", "small")
         requested_device = device or os.getenv("ASR_DEVICE", "auto")
@@ -49,6 +57,7 @@ class AsrService:
             env_key="ASR_CONDITION_ON_PREVIOUS_TEXT",
             default_value=False if self.device == "cuda" else True,
         )
+        self.initial_prompt = self._resolve_initial_prompt(initial_prompt)
 
     def transcribe(self, audio_path: str | Path, language_hint: str | None = None) -> dict:
         self._ensure_runtime_paths()
@@ -64,6 +73,8 @@ class AsrService:
             "best_of": self.best_of,
             "condition_on_previous_text": self.condition_on_previous_text,
         }
+        if self.initial_prompt:
+            transcribe_kwargs["initial_prompt"] = self.initial_prompt
         if self.chunk_length_seconds:
             transcribe_kwargs["chunk_length"] = self.chunk_length_seconds
         if self.use_batched:
@@ -176,6 +187,15 @@ class AsrService:
         if env_value is None:
             return default_value
         return cls._parse_bool(env_value, default=default_value)
+
+    @staticmethod
+    def _resolve_initial_prompt(explicit_value: str | None) -> str:
+        if explicit_value is not None:
+            return explicit_value.strip()
+        env_value = os.getenv("ASR_INITIAL_PROMPT")
+        if env_value is not None:
+            return env_value.strip()
+        return DEFAULT_ASR_INITIAL_PROMPT
 
     @staticmethod
     def _parse_bool(raw_value: str | bool, default: bool = False) -> bool:

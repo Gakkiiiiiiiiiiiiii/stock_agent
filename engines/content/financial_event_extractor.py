@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
+
+
+logger = logging.getLogger(__name__)
 
 
 EVENT_TYPE_KEYWORDS = {
@@ -29,13 +33,20 @@ class FinancialEventExtractor:
     ) -> None:
         self.model_client = model_client or AnalysisModelClient()
         self.entity_normalizer = entity_normalizer or FinancialEntityNormalizer()
-        self.max_llm_chunks = max(0, int(os.getenv("VIDEO_EVENT_LLM_MAX_CHUNKS", "8")))
+        self.max_llm_chunks = max(0, int(os.getenv("VIDEO_EVENT_LLM_MAX_CHUNKS", "40")))
 
     def extract(self, metadata: dict, chunks: list[dict]) -> tuple[str, list[dict]]:
         video_type = self._classify_video_type(metadata=metadata, chunks=chunks)
-        use_llm = self._should_use_llm(chunks)
+        llm_available = self.model_client.available()
+        if llm_available and self.max_llm_chunks and len(chunks) > self.max_llm_chunks:
+            logger.warning(
+                "视频分块数 %d 超过 LLM 事件抽取上限 %d，超出部分回退为规则抽取",
+                len(chunks),
+                self.max_llm_chunks,
+            )
         events: list[dict] = []
-        for chunk in chunks:
+        for index, chunk in enumerate(chunks):
+            use_llm = llm_available and (not self.max_llm_chunks or index < self.max_llm_chunks)
             extracted = self._extract_chunk_events(
                 metadata=metadata,
                 chunk=chunk,
@@ -54,15 +65,12 @@ class FinancialEventExtractor:
                 if payload:
                     return self._normalize_events(payload, metadata=metadata, chunk=chunk)
             except Exception:
-                pass
+                logger.warning(
+                    "LLM 事件抽取失败（chunk_index=%s），回退为规则抽取",
+                    chunk.get("chunk_index"),
+                    exc_info=True,
+                )
         return self._extract_chunk_events_with_rules(metadata=metadata, chunk=chunk, video_type=video_type)
-
-    def _should_use_llm(self, chunks: list[dict]) -> bool:
-        if not self.model_client.available():
-            return False
-        if self.max_llm_chunks and len(chunks) > self.max_llm_chunks:
-            return False
-        return True
 
     def _extract_chunk_events_with_llm(self, metadata: dict, chunk: dict, video_type: str) -> list[dict]:
         prompt = (

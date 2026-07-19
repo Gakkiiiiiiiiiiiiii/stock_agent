@@ -1,0 +1,91 @@
+# 实体别名词典：口播/字幕中不带代码的常见指数、板块、高频个股名 → 标准代码。
+# 只收录确定性高的映射，避免误标；文件缺失或解析失败时回退代码内置别名表。
+# entity_type 可选：INDEX / EQUITY / INDUSTRY / THEME / COMMODITY / MACRO
+aliases:
+  科创50:
+    entity_type: INDEX
+    ticker: 000688.SH
+  沪深300:
+    entity_type: INDEX
+    ticker: 000300.SH
+  中证500:
+    entity_type: INDEX
+    ticker: 000905.SH
+  中证1000:
+    entity_type: INDEX
+    ticker: 000852.SH
+  上证50:
+    entity_type: INDEX
+    ticker: 000016.SH
+  恒生指数:
+    entity_type: INDEX
+    ticker: HSI
+  纳斯达克:
+    entity_type: INDEX
+    ticker: IXIC
+  标普500:
+    entity_type: INDEX
+    ticker: SPX
+  券商:
+    entity_type: INDUSTRY
+    ticker: BROKER
+  银行:
+    entity_type: INDUSTRY
+    ticker: BANK
+  新能源:
+    entity_type: INDUSTRY
+    ticker: NEWENERGY
+  医药:
+    entity_type: INDUSTRY
+    ticker: PHARMA
+  白酒:
+    entity_type: INDUSTRY
+    ticker: LIQUOR
+  军工:
+    entity_type: INDUSTRY
+    ticker: DEFENSE
+  房地产:
+    entity_type: INDUSTRY
+    ticker: REALESTATE
+  人工智能:
+    entity_type: THEME
+    ticker: AI
+  算力:
+    entity_type: THEME
+    ticker: COMPUTING
+  机器人:
+    entity_type: THEME
+    ticker: ROBOT
+  宁德时代:
+    entity_type: EQUITY
+    ticker: "300750"
+  贵州茅台:
+    entity_type: EQUITY
+    ticker: "600519"
+  比亚迪:
+    entity_type: EQUITY
+    ticker: "002594"
+  中际旭创:
+    entity_type: EQUITY
+    ticker: "300308"
+  东方财富:
+    entity_type: EQUITY
+    ticker: "300059"
+  立讯精密:
+    entity_type: EQUITY
+    ticker: "002475"
+  工业富联:
+    entity_type: EQUITY
+    ticker: "601138"
+  寒武纪:
+    entity_type: EQUITY
+    ticker: "688256"
+  中芯国际:
+    entity_type: EQUITY
+    ticker: "688981"
+  北方华创:
+    entity_type: EQUITY
+    ticker: "002371"
+  片仔癀:
+    entity_type: EQUITY
+    ticker: "600436"

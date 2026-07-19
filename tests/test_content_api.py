@@ -12,12 +12,17 @@ class FakeAdminService:
 
 
 class FakeContentService:
+    def __init__(self, task_status="processing"):
+        self.task_status = task_status
+        self.started_task_ids = []
+
     def enqueue_bilibili(self, **kwargs):
         assert kwargs["url"] == "https://www.bilibili.com/video/BVTEST123"
         return {"task_id": 1, "video_id": 2, "status": "pending", "stage": "queued", "deduplicated": False}
 
     def process_task(self, task_id):
         assert task_id == 1
+        self.started_task_ids.append(task_id)
         return {
             "video": {"id": 2, "title": "测试视频", "transcript_status": "success"},
             "summary": {"core_summary": "摘要"},
@@ -28,7 +33,9 @@ class FakeContentService:
 
     def get_task(self, task_id):
         assert task_id == 1
-        return {"task_id": 1, "video_id": 2, "status": "processing", "stage": "asr", "progress": 50, "error_message": None}
+        stage = "queued" if self.task_status == "pending" else "asr"
+        progress = 0 if self.task_status == "pending" else 50
+        return {"task_id": 1, "video_id": 2, "status": self.task_status, "stage": stage, "progress": progress, "error_message": None}
 
     def get_video_detail(self, video_id, summary_mode="investment"):
         assert video_id == 2
@@ -86,6 +93,15 @@ def test_content_ingest_api(monkeypatch):
     response = client.post("/api/v1/content/bilibili/ingest", json={"url": "https://www.bilibili.com/video/BVTEST123"})
     assert response.status_code == 200
     assert response.json()["task_id"] == 1
+
+
+def test_content_task_process_api_starts_background_task(monkeypatch):
+    fake_service = FakeContentService(task_status="pending")
+    monkeypatch.setattr("app.api.content_ingest_service", fake_service)
+    response = client.post("/api/v1/content/tasks/1/process")
+    assert response.status_code == 200
+    assert response.json()["started"] is True
+    assert fake_service.started_task_ids == [1]
 
 
 def test_content_task_and_video_api(monkeypatch):

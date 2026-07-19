@@ -1,12 +1,24 @@
 from __future__ import annotations
 
 import importlib
+import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any
+
+import yaml
+
+from financial_agent.utils import project_root
+
+
+logger = logging.getLogger(__name__)
+
+VIDEO_OCR_DENOISE_PATH = Path("config") / "video_ocr_denoise.yaml"
+
 
 class VideoOcrService:
     def __init__(
@@ -14,6 +26,7 @@ class VideoOcrService:
         tesseract_bin: str | None = None,
         language: str | None = None,
         backend: str | None = None,
+        denoise_path: str | Path | None = None,
     ) -> None:
         self.tesseract_bin = tesseract_bin or os.getenv("TESSERACT_BIN", "tesseract")
         self.language = language or os.getenv("VIDEO_OCR_LANGUAGE", "chi_sim+eng")
@@ -28,6 +41,7 @@ class VideoOcrService:
         self._paddleocr_class = None
         self._paddleocr_engine = None
         self._dll_dir_handles: list[Any] = []
+        self.denoise_config = self._load_denoise_config(denoise_path)
 
     def available(self) -> bool:
         return self._paddleocr_available()
@@ -248,7 +262,26 @@ class VideoOcrService:
             return 0.0
 
     @staticmethod
-    def _clean_lines(text: str) -> list[str]:
+    def _load_denoise_config(denoise_path: str | Path | None = None) -> dict[str, Any]:
+        default = {"ui_terms": [], "period_tokens": [], "min_ui_term_hits": 2}
+        path = Path(denoise_path) if denoise_path else project_root() / VIDEO_OCR_DENOISE_PATH
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            logger.warning("OCR 降噪配置加载失败（%s），跳过界面噪声过滤", path, exc_info=True)
+            return default
+        if not isinstance(data, dict):
+            logger.warning("OCR 降噪配置格式不正确（%s），跳过界面噪声过滤", path)
+            return default
+        ui_terms = [str(term).strip() for term in data.get("ui_terms") or [] if str(term).strip()]
+        period_tokens = [str(token).strip() for token in data.get("period_tokens") or [] if str(token).strip()]
+        try:
+            min_hits = max(1, int(data.get("min_ui_term_hits") or 2))
+        except (TypeError, ValueError):
+            min_hits = 2
+        return {"ui_terms": ui_terms, "period_tokens": period_tokens, "min_ui_term_hits": min_hits}
+
+    def _clean_lines(self, text: str) -> list[str]:
         cleaned = []
         for raw_line in (text or "").splitlines():
             line = " ".join(raw_line.split()).strip()
@@ -256,5 +289,19 @@ class VideoOcrService:
                 continue
             if len(line) == 1 and not line.isdigit():
                 continue
+            if self._is_ui_noise_line(line):
+                continue
             cleaned.append(line)
         return cleaned
+
+    def _is_ui_noise_line(self, line: str) -> bool:
+        ui_terms = self.denoise_config["ui_terms"]
+        min_hits = self.denoise_config["min_ui_term_hits"]
+        hits = {term for term in ui_terms if term in line}
+        if len(hits) >= min_hits:
+            return True
+        period_tokens = set(self.denoise_config["period_tokens"])
+        tokens = line.split()
+        if len(tokens) >= 2 and all(token in period_tokens or re.fullmatch(r"\d+分钟", token) for token in tokens):
+            return True
+        return False

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
+
+
+logger = logging.getLogger(__name__)
 
 
 class VideoSummarizer:
@@ -62,9 +66,10 @@ class VideoSummarizer:
                 ) | {
                     "llm_provider": response.get("provider"),
                     "llm_model": response.get("model"),
+                    "degraded": False,
                 }
             except Exception:
-                pass
+                logger.warning("LLM 视频总结失败，降级为结构化规则摘要", exc_info=True)
         return self._fallback_summary(
             metadata=metadata,
             transcript=transcript,
@@ -168,6 +173,7 @@ class VideoSummarizer:
             "video_type": video_type or "GENERAL_FINANCE",
             "llm_provider": "fallback",
             "llm_model": "none",
+            "degraded": True,
         }
 
     def _normalize_summary(
@@ -371,7 +377,7 @@ class VideoSummarizer:
             score += 5.0
         if re.search(r"[\u4e00-\u9fff]{2,8}", topic) and topic not in {"未分类", "GENERAL_FINANCE"}:
             score += 1.0
-        for token in ("买点", "洗盘", "压力", "突破", "反弹", "风险", "止跌", "成都先导"):
+        for token in ("买点", "洗盘", "压力", "突破", "反弹", "风险", "止跌"):
             if token in merged:
                 score += 1.5
         score += min(int(chunk.get("start_ms") or 0) / 1_000_000.0, 2.0)

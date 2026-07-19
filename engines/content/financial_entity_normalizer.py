@@ -1,7 +1,18 @@
 from __future__ import annotations
 
+import logging
 import re
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+import yaml
+
+from financial_agent.utils import project_root
+
+
+logger = logging.getLogger(__name__)
+
+ENTITY_ALIASES_PATH = Path("config") / "entity_aliases.yaml"
 
 
 COMMON_ENTITY_ALIASES = {
@@ -104,11 +115,14 @@ CODE_NAME_PATTERNS = (
 
 
 class FinancialEntityNormalizer:
+    def __init__(self, aliases_path: str | Path | None = None) -> None:
+        self.aliases = self._load_entity_aliases(aliases_path)
+
     def extract_entities(self, *texts: str) -> list[dict]:
         joined = " ".join(str(text or "") for text in texts if str(text or "").strip())
         results: list[dict] = []
         seen: set[str] = set()
-        for alias, payload in COMMON_ENTITY_ALIASES.items():
+        for alias, payload in self.aliases.items():
             if alias not in joined:
                 continue
             entity_id = payload["ticker"]
@@ -160,6 +174,29 @@ class FinancialEntityNormalizer:
             )
             seen.add(company_name)
         return results
+
+    @staticmethod
+    def _load_entity_aliases(aliases_path: str | Path | None = None) -> dict[str, dict]:
+        path = Path(aliases_path) if aliases_path else project_root() / ENTITY_ALIASES_PATH
+        try:
+            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            logger.warning("实体别名词典加载失败（%s），回退内置别名表", path, exc_info=True)
+            return dict(COMMON_ENTITY_ALIASES)
+        entries = data.get("aliases")
+        if not isinstance(entries, dict):
+            logger.warning("实体别名词典为空或格式不正确（%s），回退内置别名表", path)
+            return dict(COMMON_ENTITY_ALIASES)
+        merged = dict(COMMON_ENTITY_ALIASES)
+        for name, payload in entries.items():
+            if not isinstance(payload, dict):
+                continue
+            ticker = str(payload.get("ticker") or "").strip()
+            entity_type = str(payload.get("entity_type") or "").strip()
+            if not ticker or not entity_type:
+                continue
+            merged[str(name).strip()] = {"entity_type": entity_type, "ticker": ticker}
+        return merged
 
     def normalize_time_expression(self, text: str, publish_time: str | None) -> dict[str, str | None]:
         normalized = str(text or "").strip()

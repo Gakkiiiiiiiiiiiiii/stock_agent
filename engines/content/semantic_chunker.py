@@ -17,6 +17,23 @@ TOPIC_SHIFT_MARKERS = (
     "总结一下",
 )
 
+TOPIC_KEYWORDS = (
+    "上证指数",
+    "深证成指",
+    "创业板",
+    "科创板",
+    "恒生科技",
+    "黄金",
+    "原油",
+    "美联储",
+    "半导体",
+    "新能源",
+    "医药",
+    "券商",
+    "银行",
+    "白酒",
+)
+
 
 class SemanticChunker:
     def __init__(
@@ -107,7 +124,9 @@ class SemanticChunker:
             if start_ms <= int(frame.get("timestamp_ms") or 0) <= end_ms
         ]
         transcript_text = " ".join(str(segment.get("text") or "").strip() for segment in segments if str(segment.get("text") or "").strip()).strip()
-        ocr_texts = [str(frame.get("ocr_text") or "").strip() for frame in chunk_frames if str(frame.get("ocr_text") or "").strip()]
+        ocr_texts = self._dedup_ocr_lines(
+            [str(frame.get("ocr_text") or "").strip() for frame in chunk_frames if str(frame.get("ocr_text") or "").strip()]
+        )
         visual_focus_parts = [str(frame.get("visual_summary") or "").strip() for frame in chunk_frames if str(frame.get("visual_summary") or "").strip()]
         visual_tags = sorted({tag for frame in chunk_frames for tag in self._frame_tags(frame)})
         entities = sorted({entity for frame in chunk_frames for entity in self._frame_entities(frame)})
@@ -144,17 +163,42 @@ class SemanticChunker:
         source = " ".join([transcript_text, *ocr_texts]).strip()
         if not source:
             return "未分类片段"
-        match = re.search(r"([A-Za-z0-9\.\-]{4,12}\.(?:HK|US)|\d{6}|上证指数|深证成指|创业板|恒生科技|黄金|原油|美联储|半导体|AI)", source, re.IGNORECASE)
-        if match:
-            return str(match.group(1)).strip()
+        scores: dict[str, int] = {}
+        for match in re.finditer(r"[A-Za-z0-9.\-]{4,12}\.(?:HK|US)|\b\d{6}\b", source, re.IGNORECASE):
+            token = str(match.group(0)).strip()
+            scores[token] = scores.get(token, 0) + 1
+        for keyword in TOPIC_KEYWORDS:
+            count = source.count(keyword)
+            if count:
+                scores[keyword] = scores.get(keyword, 0) + count
+        ai_count = len(re.findall(r"(?<![A-Za-z])AI(?![A-Za-z])", source))
+        if ai_count:
+            scores["AI"] = scores.get("AI", 0) + ai_count
+        if scores:
+            return max(scores.items(), key=lambda item: item[1])[0]
         company_names = FinancialEntityNormalizer.extract_company_names(source)
         if company_names:
             return company_names[0]
         for marker in ("支撑", "压力", "突破", "反弹", "下跌", "风险", "催化", "业绩", "估值"):
             if marker in source:
                 return marker
-        snippet = re.sub(r"\s+", " ", source).strip()
-        return snippet[:32] or "未分类片段"
+        return "综合盘面"
+
+    @staticmethod
+    def _dedup_ocr_lines(ocr_texts: list[str]) -> list[str]:
+        seen: set[str] = set()
+        results: list[str] = []
+        for text in ocr_texts:
+            kept_lines = []
+            for line in text.splitlines():
+                key = " ".join(line.split()).strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                kept_lines.append(line)
+            if kept_lines:
+                results.append("\n".join(kept_lines))
+        return results
 
     @staticmethod
     def _frame_tags(frame: dict) -> list[str]:

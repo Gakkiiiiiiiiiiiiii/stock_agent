@@ -151,6 +151,7 @@ class VideoIngestService:
             visual_context = None
             frame_insights: list[dict] = []
             if options.get("enable_visual_context", True):
+                self.task_repo.update(task_id, stage="visual_context", progress=72)
                 visual_bundle = self._build_visual_context(
                     metadata=metadata,
                     transcript=transcript,
