@@ -942,6 +942,7 @@
         <button class="tab" data-tab="docs">Docs</button>
         <button class="tab" data-tab="videos">Videos</button>
         <button class="tab" data-tab="skills">Skills</button>
+        <button class="tab" data-tab="factors">Factors</button>
         <button class="tab" data-tab="agent">Agent</button>
       </div>
     </aside>
@@ -1075,6 +1076,60 @@
         </section>
       </div>
 
+      <div id="factorsView" class="workspace hidden">
+        <section class="panel">
+          <div class="panel-header">Factor Library</div>
+          <div class="panel-body">
+            <div class="session-shell">
+              <div class="toolbar">
+                <button class="primary" id="mineFactorsButton">开始挖掘</button>
+                <button id="reloadFactorsButton">刷新</button>
+                <select id="factorSortSelect">
+                  <option value="fitness">按综合适应度排序</option>
+                  <option value="rank_ic">按 RankIC 排序</option>
+                  <option value="icir">按 ICIR 排序</option>
+                  <option value="topk_annual_return">按 TopK 年化排序</option>
+                  <option value="topk_max_drawdown">按最大回撤排序</option>
+                </select>
+              </div>
+              <div class="hint" id="factorMineHint">样本内挖掘结果存在过拟合风险，所有指标标记为【待核验】。</div>
+              <div class="item-list" id="factorList"></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-header">Factor Detail</div>
+          <div class="panel-body">
+            <div class="hint" id="factorEmptyHint">从左侧选择一个因子查看指标。</div>
+            <div id="factorDetail" class="hidden">
+              <div class="meta-grid">
+                <div class="meta-card"><div class="meta-label">ID</div><div class="meta-value mono" id="factorId">-</div></div>
+                <div class="meta-card"><div class="meta-label">状态</div><div class="meta-value" id="factorStatus">-</div></div>
+                <div class="meta-card"><div class="meta-label">发现时间</div><div class="meta-value mono" id="factorDiscoveredAt">-</div></div>
+                <div class="meta-card"><div class="meta-label">挖掘模型</div><div class="meta-value mono" id="factorModel">-</div></div>
+                <div class="meta-card"><div class="meta-label">预测周期</div><div class="meta-value" id="factorHorizon">-</div></div>
+                <div class="meta-card"><div class="meta-label">股票池规模</div><div class="meta-value" id="factorUniverse">-</div></div>
+              </div>
+              <div class="section" style="margin-top:12px;">
+                <div class="section-title">因子假设</div>
+                <div id="factorHypothesis" style="font-size:13px;line-height:1.6;"></div>
+              </div>
+              <div class="section" style="margin-top:12px;">
+                <div class="section-title">RPN 公式</div>
+                <pre id="factorRpn"></pre>
+              </div>
+              <div class="section" style="margin-top:12px;">
+                <div class="section-title">样本内指标【待核验】</div>
+                <table class="stock-table">
+                  <thead><tr><th>指标</th><th>数值</th><th>口径</th></tr></thead>
+                  <tbody id="factorMetricsBody"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+
       <div id="agentView" class="workspace agent-workspace hidden">
         <section class="panel">
           <div class="panel-header">Conversation History</div>
@@ -1160,6 +1215,10 @@
       videoSummaryView: "preview",
       videoList: [],
       activeSkill: null,
+      factorList: [],
+      activeFactor: null,
+      factorMining: false,
+      factorSort: "fitness",
       agent: {
         skillOptionsLoaded: false,
         messages: [],
@@ -1204,6 +1263,7 @@
       $("docsView").classList.toggle("hidden", tab !== "docs");
       $("videosView").classList.toggle("hidden", tab !== "videos");
       $("skillsView").classList.toggle("hidden", tab !== "skills");
+      $("factorsView").classList.toggle("hidden", tab !== "factors");
       $("agentView").classList.toggle("hidden", tab !== "agent");
       syncGlobalActions();
       loadActiveTab();
@@ -1212,8 +1272,9 @@
     function syncGlobalActions() {
       const isAgentTab = state.tab === "agent";
       const isVideoTab = state.tab === "videos";
+      const isFactorTab = state.tab === "factors";
       const isDocsVideoSummary = state.tab === "docs" && typeof state.activeDoc === "string" && state.activeDoc.startsWith("video_summaries/");
-      $("globalActions").classList.toggle("hidden", isAgentTab);
+      $("globalActions").classList.toggle("hidden", isAgentTab || isFactorTab);
       $("saveButton").classList.toggle("hidden", isVideoTab);
       $("createButton").classList.toggle("hidden", isVideoTab);
       $("deleteButton").classList.toggle("hidden", !(isVideoTab || isDocsVideoSummary));
@@ -1227,6 +1288,7 @@
       if (state.tab === "docs") return loadDocs();
       if (state.tab === "videos") return loadVideos(force);
       if (state.tab === "skills") return loadSkills();
+      if (state.tab === "factors") return loadFactors();
       return loadAgentConsole(force);
     }
 
@@ -2009,6 +2071,109 @@
       $("skillContent").value = data.content || "";
       await loadSkills();
     }
+
+    const FACTOR_METRIC_DEFS = [
+      ["rank_ic", "RankIC", "因子值与未来收益的逐日截面秩相关均值，≥0.02 为有效"],
+      ["ic_mean", "IC", "逐日截面皮尔逊相关均值"],
+      ["icir", "ICIR", "RankIC 均值 / 标准差，≥0.2 为稳定"],
+      ["topk_annual_return", "TopK 年化", "Top5 等权多头组合样本内年化（含双边 0.1% 换手成本）"],
+      ["topk_max_drawdown", "TopK 最大回撤", "Top5 组合样本内净值最大回撤"],
+      ["coverage", "覆盖率", "有效 IC 天数占比，<0.6 直接淘汰"],
+      ["fitness", "综合适应度", "5×RankIC + 0.5×ICIR + TopK 年化"],
+    ];
+
+    async function loadFactors() {
+      const res = await fetch("/api/v1/admin/factors");
+      const data = await res.json();
+      state.factorList = data.factors || [];
+      const sortKey = state.factorSort;
+      const ascending = sortKey === "topk_max_drawdown";
+      state.factorList.sort((a, b) => {
+        const av = (a.metrics || {})[sortKey] ?? (ascending ? Infinity : -Infinity);
+        const bv = (b.metrics || {})[sortKey] ?? (ascending ? Infinity : -Infinity);
+        return ascending ? av - bv : bv - av;
+      });
+      $("factorList").innerHTML = "";
+      if (!state.factorList.length) {
+        $("factorList").innerHTML = `<div class="hint">因子库为空，点击“开始挖掘”生成因子。</div>`;
+      }
+      state.factorList.forEach((item, rank) => {
+        const metrics = item.metrics || {};
+        const card = document.createElement("div");
+        card.className = "item" + (item.id === state.activeFactor ? " active" : "");
+        card.innerHTML = `<div class="item-title">#${rank + 1} ${escapeHtml(item.id)} · RankIC ${formatMetric(metrics.rank_ic)} · ICIR ${formatMetric(metrics.icir)}</div><div class="item-meta">${escapeHtml(item.hypothesis || "")}</div>`;
+        card.onclick = () => selectFactor(item.id);
+        $("factorList").appendChild(card);
+      });
+      if (!state.activeFactor && state.factorList.length) {
+        selectFactor(state.factorList[0].id);
+      } else if (state.activeFactor) {
+        selectFactor(state.activeFactor);
+      } else {
+        renderFactorDetail(null);
+      }
+      setStatus(`Factors loaded (${state.factorList.length})`, true);
+    }
+
+    function selectFactor(factorId) {
+      state.activeFactor = factorId;
+      const item = state.factorList.find((entry) => entry.id === factorId) || null;
+      renderFactorDetail(item);
+      document.querySelectorAll("#factorList .item").forEach((el, idx) => {
+        el.classList.toggle("active", state.factorList[idx] && state.factorList[idx].id === factorId);
+      });
+    }
+
+    function renderFactorDetail(item) {
+      $("factorEmptyHint").classList.toggle("hidden", !!item);
+      $("factorDetail").classList.toggle("hidden", !item);
+      if (!item) return;
+      const metrics = item.metrics || {};
+      $("factorId").textContent = item.id || "-";
+      $("factorStatus").textContent = item.status || "-";
+      $("factorDiscoveredAt").textContent = item.discovered_at || "-";
+      $("factorModel").textContent = item.llm_model || "-";
+      $("factorHorizon").textContent = item.horizon ? `${item.horizon} 日` : "-";
+      $("factorUniverse").textContent = `${item.universe_size || (Array.isArray(item.universe) ? item.universe.length : 0)} 只`;
+      $("factorHypothesis").textContent = item.hypothesis || "-";
+      $("factorRpn").textContent = (item.rpn || []).join("  ");
+      $("factorMetricsBody").innerHTML = FACTOR_METRIC_DEFS.map(([key, label, desc]) =>
+        `<tr><td>${label}</td><td class="mono">${formatMetric(metrics[key])}</td><td>${desc}</td></tr>`
+      ).join("");
+    }
+
+    function formatMetric(value) {
+      return typeof value === "number" ? value.toFixed(4) : "-";
+    }
+
+    async function runFactorMining() {
+      if (state.factorMining) return;
+      state.factorMining = true;
+      $("mineFactorsButton").disabled = true;
+      $("factorMineHint").textContent = "挖掘中：LLM 生成候选 → 样本内评估 → 达标入库，通常需要几分钟……";
+      try {
+        const res = await fetch("/api/v1/admin/factors/mine", { method: "POST" });
+        const data = await res.json();
+        const accepted = (data.accepted || []).length;
+        const rejected = (data.rejected || []).length;
+        $("factorMineHint").textContent = data.warning
+          ? `挖掘中断：${data.warning}`
+          : `挖掘完成：入库 ${accepted} 个，淘汰 ${rejected} 个。指标为样本内结果【待核验】。`;
+      } catch (err) {
+        $("factorMineHint").textContent = `挖掘请求失败：${err}`;
+      } finally {
+        state.factorMining = false;
+        $("mineFactorsButton").disabled = false;
+        await loadFactors();
+      }
+    }
+
+    $("mineFactorsButton").addEventListener("click", runFactorMining);
+    $("reloadFactorsButton").addEventListener("click", () => loadFactors());
+    $("factorSortSelect").addEventListener("change", (event) => {
+      state.factorSort = event.target.value;
+      loadFactors();
+    });
 
     async function loadAgentConsole(force = false) {
       if (!state.agent.skillOptionsLoaded || force) {

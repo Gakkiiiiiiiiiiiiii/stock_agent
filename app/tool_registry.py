@@ -6,6 +6,7 @@ from typing import Any
 from app.model_providers import AnalysisModelClient
 from mcp_servers import (
     content_server,
+    factor_mining_server,
     industry_knowledge_server,
     knowledge_server,
     market_data_server,
@@ -347,6 +348,62 @@ class ClaudeToolRegistry:
                     },
                 },
                 lambda payload: content_server.search_video_insights(**payload),
+            ),
+            "mine_factors": (
+                {
+                    "name": "mine_factors",
+                    "description": "Mine cross-sectional alpha factors automatically with the analysis LLM, evaluate them in-sample (RankIC/ICIR/TopK), and store passing factors into the factor library. Results are in-sample and marked as unverified.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "rounds": {"type": "integer"},
+                            "candidates_per_round": {"type": "integer"},
+                            "universe": {"type": "array", "items": {"type": "string"}},
+                            "days": {"type": "integer"},
+                            "eval_window": {"type": "integer"},
+                        },
+                    },
+                },
+                lambda payload: factor_mining_server.mine_factors(**payload),
+            ),
+            "list_factor_library": (
+                {
+                    "name": "list_factor_library",
+                    "description": "List active mined factors with their in-sample metrics.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"limit": {"type": "integer"}},
+                    },
+                },
+                lambda payload: factor_mining_server.list_factor_library(**payload),
+            ),
+            "evaluate_factor": (
+                {
+                    "name": "evaluate_factor",
+                    "description": "Re-evaluate a mined factor (by library id or raw RPN formula) on the current universe.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "factor_id": {"type": "string"},
+                            "rpn": {"type": "array", "items": {"type": "string"}},
+                            "universe": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+                lambda payload: factor_mining_server.evaluate_factor(**payload),
+            ),
+            "scan_alpha_factors": (
+                {
+                    "name": "scan_alpha_factors",
+                    "description": "Score and rank symbols by an equal-weight composite of active mined factors (in-sample, unverified).",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "symbols": {"type": "array", "items": {"type": "string"}},
+                        },
+                    },
+                },
+                lambda payload: factor_mining_server.scan_alpha_factors(**payload),
             ),
         }
 

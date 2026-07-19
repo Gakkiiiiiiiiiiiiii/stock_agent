@@ -425,6 +425,20 @@ def admin_delete_doc(path: str, summary_mode: str = "investment") -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.get("/api/v1/admin/factors")
+def admin_list_factors() -> dict:
+    from mcp_servers.factor_mining_server import list_factor_library
+
+    return list_factor_library(limit=100)
+
+
+@app.post("/api/v1/admin/factors/mine")
+def admin_mine_factors(rounds: int | None = None, candidates_per_round: int | None = None) -> dict:
+    from mcp_servers.factor_mining_server import mine_factors
+
+    return mine_factors(rounds=rounds, candidates_per_round=candidates_per_round)
+
+
 @app.get("/api/v1/admin/skills")
 def admin_list_skills() -> dict:
     return {"items": admin_service.list_skills()}

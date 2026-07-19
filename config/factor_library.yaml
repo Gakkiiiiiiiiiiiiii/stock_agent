@@ -1,0 +1,814 @@
+factors:
+- id: F001
+  rpn:
+  - close
+  - close
+  - ts_delay_20
+  - div
+  - cs_rank
+  expression: close close ts_delay_20 div cs_rank
+  hypothesis: 20日动量：过去一月涨幅高的股票趋势延续
+  metrics:
+    rank_ic: -0.0248
+    ic_mean: 0.0186
+    icir: -0.1572
+    topk_annual_return: 0.075
+    topk_max_drawdown: 0.1418
+    coverage: 0.9
+    fitness: -0.1277
+    passed: false
+  universe:
+  - 000001.SZ
+  - 000063.SZ
+  - 000333.SZ
+  - 000568.SZ
+  - 000651.SZ
+  - 000725.SZ
+  - 000858.SZ
+  - 002142.SZ
+  - 002230.SZ
+  - 002304.SZ
+  - 002415.SZ
+  - 002475.SZ
+  - 002594.SZ
+  - 002714.SZ
+  - 300015.SZ
+  - 300059.SZ
+  - 300124.SZ
+  - 300274.SZ
+  - 300750.SZ
+  - 300760.SZ
+  - 600028.SH
+  - 600030.SH
+  - 600036.SH
+  - 600050.SH
+  - 600276.SH
+  - 600519.SH
+  - 600585.SH
+  - 600887.SH
+  - 600900.SH
+  - 601012.SH
+  - 601138.SH
+  - 601318.SH
+  - 601668.SH
+  - 601857.SH
+  - 601888.SH
+  - 601899.SH
+  - 601988.SH
+  - 603288.SH
+  - 688111.SH
+  - 688981.SH
+  horizon: 5
+  discovered_at: '2026-07-19T15:32:42+00:00'
+  llm_model: ''
+  status: active
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F002
+  rpn:
+  - turnover
+  - cs_rank
+  expression: turnover cs_rank
+  hypothesis: 高换手率：当前交易活跃度高的股票短期受资金追捧
+  metrics:
+    rank_ic: 0.0171
+    ic_mean: 0.0277
+    icir: 0.2493
+    topk_annual_return: 0.1981
+    topk_max_drawdown: 0.1322
+    coverage: 0.98
+    fitness: 0.4081
+    passed: false
+  universe:
+  - 000001.SZ
+  - 000063.SZ
+  - 000333.SZ
+  - 000568.SZ
+  - 000651.SZ
+  - 000725.SZ
+  - 000858.SZ
+  - 002142.SZ
+  - 002230.SZ
+  - 002304.SZ
+  - 002415.SZ
+  - 002475.SZ
+  - 002594.SZ
+  - 002714.SZ
+  - 300015.SZ
+  - 300059.SZ
+  - 300124.SZ
+  - 300274.SZ
+  - 300750.SZ
+  - 300760.SZ
+  - 600028.SH
+  - 600030.SH
+  - 600036.SH
+  - 600050.SH
+  - 600276.SH
+  - 600519.SH
+  - 600585.SH
+  - 600887.SH
+  - 600900.SH
+  - 601012.SH
+  - 601138.SH
+  - 601318.SH
+  - 601668.SH
+  - 601857.SH
+  - 601888.SH
+  - 601899.SH
+  - 601988.SH
+  - 603288.SH
+  - 688111.SH
+  - 688981.SH
+  horizon: 5
+  discovered_at: '2026-07-19T15:34:10+00:00'
+  llm_model: ''
+  status: active
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F003
+  rpn:
+  - ret
+  - ts_mean_10
+  - neg
+  - cs_rank
+  expression: ret ts_mean_10 neg cs_rank
+  hypothesis: 10日反转：过去两周平均收益低的股票反弹概率高
+  metrics:
+    rank_ic: 0.0346
+    ic_mean: -0.0072
+    icir: 0.2367
+    topk_annual_return: 0.0428
+    topk_max_drawdown: 0.1548
+    coverage: 0.944
+    fitness: 0.3341
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:18:43+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 250
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F004
+  rpn:
+  - close
+  - open
+  - sub
+  - open
+  - div
+  - ts_mean_5
+  - neg
+  - cs_rank
+  expression: close open sub open div ts_mean_5 neg cs_rank
+  hypothesis: 5日日内收益反转：近期日内跌幅大的股票具备反弹潜力
+  metrics:
+    rank_ic: 0.0174
+    ic_mean: -0.0117
+    icir: 0.1238
+    topk_annual_return: 0.0366
+    topk_max_drawdown: 0.1612
+    coverage: 0.964
+    fitness: 0.1856
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:18:43+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 250
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F005
+  rpn:
+  - close
+  - vwap
+  - sub
+  - vwap
+  - div
+  - ts_mean_5
+  - neg
+  - cs_rank
+  expression: close vwap sub vwap div ts_mean_5 neg cs_rank
+  hypothesis: 均价偏离反转：近期价格持续低于均价的比例越大，反弹动能越强
+  metrics:
+    rank_ic: 0.0227
+    ic_mean: 0.0037
+    icir: 0.2141
+    topk_annual_return: 0.1745
+    topk_max_drawdown: 0.136
+    coverage: 0.964
+    fitness: 0.3953
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:18:44+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 250
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F006
+  rpn:
+  - amount
+  - ts_std_20
+  - amount
+  - ts_mean_20
+  - div
+  - neg
+  - cs_rank
+  expression: amount ts_std_20 amount ts_mean_20 div neg cs_rank
+  hypothesis: 成交额稳定：近20日成交额变异系数小的股票，筹码结构稳定，未来收益稳健
+  metrics:
+    rank_ic: 0.0455
+    ic_mean: 0.0241
+    icir: 0.6809
+    topk_annual_return: 0.0433
+    topk_max_drawdown: 0.1475
+    coverage: 0.904
+    fitness: 0.6115
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:19:45+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F007
+  rpn:
+  - amount
+  - close
+  - div
+  - ts_std_20
+  - amount
+  - close
+  - div
+  - ts_mean_20
+  - div
+  - neg
+  - cs_rank
+  expression: amount close div ts_std_20 amount close div ts_mean_20 div neg cs_rank
+  hypothesis: 估算股数稳定：日均估计股数（成交额/收盘价）变异系数小的股票，筹码稳定，未来表现稳健
+  metrics:
+    rank_ic: 0.0423
+    ic_mean: 0.0276
+    icir: 0.6676
+    topk_annual_return: 0.0455
+    topk_max_drawdown: 0.1446
+    coverage: 0.904
+    fitness: 0.591
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:20:45+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F008
+  rpn:
+  - high
+  - low
+  - sub
+  - close
+  - div
+  - ts_mean_5
+  - cs_rank
+  expression: high low sub close div ts_mean_5 cs_rank
+  hypothesis: 振幅动量：近5日平均日内振幅（高低差/收盘价）较大的股票短期活跃度高，趋势延续
+  metrics:
+    rank_ic: -0.0387
+    ic_mean: 0.0322
+    icir: -0.1771
+    topk_annual_return: 0.1014
+    topk_max_drawdown: 0.1475
+    coverage: 0.964
+    fitness: -0.1805
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:22:06+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F009
+  rpn:
+  - amount
+  - ts_std_20
+  - close
+  - ts_std_20
+  - div
+  - neg
+  - cs_rank
+  expression: amount ts_std_20 close ts_std_20 div neg cs_rank
+  hypothesis: 成交额相对股价波动：成交额波动与股价波动的比值越小，信息扰动少，未来收益更稳
+  metrics:
+    rank_ic: 0.0309
+    ic_mean: 0.0338
+    icir: 0.2904
+    topk_annual_return: 0.1017
+    topk_max_drawdown: 0.1389
+    coverage: 0.904
+    fitness: 0.4015
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:22:06+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F010
+  rpn:
+  - open
+  - close
+  - ts_delay_3
+  - sub
+  - close
+  - ts_delay_3
+  - div
+  - ts_mean_5
+  - cs_rank
+  expression: open close ts_delay_3 sub close ts_delay_3 div ts_mean_5 cs_rank
+  hypothesis: 隔夜跳空惯性：近5日平均隔夜跳空幅度（今开相对3日前收）大的股票，短期买盘强势，趋势延续
+  metrics:
+    rank_ic: -0.0166
+    ic_mean: 0.01
+    icir: -0.1121
+    topk_annual_return: 0.1049
+    topk_max_drawdown: 0.1466
+    coverage: 0.964
+    fitness: -0.034
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:23:08+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F011
+  rpn:
+  - ret
+  - ts_mean_10
+  - volume
+  - ts_mean_10
+  - div
+  - cs_rank
+  expression: ret ts_mean_10 volume ts_mean_10 div cs_rank
+  hypothesis: 量价效率：过去10日单位均量产生的平均收益，高效率股票强势延续，低效率股票疲弱
+  metrics:
+    rank_ic: -0.0304
+    ic_mean: 0.0054
+    icir: -0.2265
+    topk_annual_return: 0.0759
+    topk_max_drawdown: 0.1449
+    coverage: 0.944
+    fitness: -0.1894
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:23:08+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F012
+  rpn:
+  - open
+  - close
+  - min
+  - low
+  - sub
+  - close
+  - div
+  - ts_mean_5
+  - cs_rank
+  expression: open close min low sub close div ts_mean_5 cs_rank
+  hypothesis: 下影线支撑：近5日平均下影线比例大的股票买方支撑强，短期易反弹
+  metrics:
+    rank_ic: -0.0352
+    ic_mean: 0.0176
+    icir: -0.2145
+    topk_annual_return: 0.0841
+    topk_max_drawdown: 0.15
+    coverage: 0.964
+    fitness: -0.1991
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:25:13+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F013
+  rpn:
+  - ret
+  - ts_mean_5
+  - volume
+  - ts_delta_5
+  - mul
+  - cs_rank
+  expression: ret ts_mean_5 volume ts_delta_5 mul cs_rank
+  hypothesis: 量价共振：过去5日平均收益与成交量变化方向一致时趋势强化
+  metrics:
+    rank_ic: -0.031
+    ic_mean: -0.0077
+    icir: -0.3435
+    topk_annual_return: 0.0409
+    topk_max_drawdown: 0.1615
+    coverage: 0.96
+    fitness: -0.2858
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:26:26+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F014
+  rpn:
+  - ret
+  - ts_max_5
+  - ret
+  - abs
+  - ts_mean_5
+  - div
+  - cs_rank
+  expression: ret ts_max_5 ret abs ts_mean_5 div cs_rank
+  hypothesis: 正向偏度：近期最大收益相对平均波动较大，强势动能延续
+  metrics:
+    rank_ic: -0.0122
+    ic_mean: 0.0112
+    icir: -0.1197
+    topk_annual_return: 0.0053
+    topk_max_drawdown: 0.1738
+    coverage: 0.964
+    fitness: -0.1154
+    passed: false
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:26:27+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+  data_window:
+    start: '2025-07-08'
+    end: '2026-07-17'
+- id: F015
+  rpn:
+  - high
+  - low
+  - sub
+  - close
+  - div
+  - neg
+  - cs_rank
+  expression: high low sub close div neg cs_rank
+  hypothesis: 低振幅：日内价格波动小的股票短期收益更稳健
+  metrics:
+    rank_ic: 0.0383
+    ic_mean: -0.025
+    icir: 0.2048
+    topk_annual_return: 0.0301
+    topk_max_drawdown: 0.1741
+    coverage: 0.98
+    fitness: 0.3239
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:34:25+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 250
+- id: F016
+  rpn:
+  - high
+  - low
+  - sub
+  - ts_std_10
+  - close
+  - ts_mean_10
+  - div
+  - neg
+  - cs_rank
+  expression: high low sub ts_std_10 close ts_mean_10 div neg cs_rank
+  hypothesis: 日振幅稳定性：近10日振幅波动较小（相对均价）的股票，筹码结构稳定，未来表现稳健
+  metrics:
+    rank_ic: 0.0443
+    ic_mean: -0.0192
+    icir: 0.2488
+    topk_annual_return: 0.0644
+    topk_max_drawdown: 0.1493
+    coverage: 0.944
+    fitness: 0.4105
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:36:18+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 250
+- id: F017
+  rpn:
+  - amount
+  - high
+  - low
+  - sub
+  - div
+  - ts_std_10
+  - neg
+  - cs_rank
+  expression: amount high low sub div ts_std_10 neg cs_rank
+  hypothesis: 单位振幅成交额稳定：近10日单位振幅成交额的波动越小，表明多空分歧小，未来走势更稳
+  metrics:
+    rank_ic: 0.046
+    ic_mean: 0.0442
+    icir: 0.5197
+    topk_annual_return: -0.5085
+    topk_max_drawdown: 0.1416
+    coverage: 0.9167
+    fitness: -0.0189
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:40:53+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+- id: F018
+  rpn:
+  - volume
+  - close
+  - div
+  - ts_std_10
+  - neg
+  - cs_rank
+  expression: volume close div ts_std_10 neg cs_rank
+  hypothesis: 量价结构稳定：单位股价成交量近10日波动小的股票，筹码结构紧实，未来收益更稳健
+  metrics:
+    rank_ic: 0.0486
+    ic_mean: 0.0538
+    icir: 0.3803
+    topk_annual_return: -0.4895
+    topk_max_drawdown: 0.1385
+    coverage: 0.9167
+    fitness: -0.0564
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:41:37+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 60
+- id: F019
+  rpn:
+  - high
+  - low
+  - sub
+  - ts_std_20
+  - neg
+  - cs_rank
+  expression: high low sub ts_std_20 neg cs_rank
+  hypothesis: 日波幅稳定性：近20日日波幅（高减低）标准差小，股价平稳，未来表现好
+  metrics:
+    rank_ic: 0.2817
+    ic_mean: 0.233
+    icir: 0.9892
+    topk_annual_return: -1.2518
+    topk_max_drawdown: 0.0728
+    coverage: 0.75
+    fitness: 0.6513
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:43:01+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F020
+  rpn:
+  - ret
+  - ts_mean_5
+  - ret
+  - ts_std_5
+  - div
+  - cs_rank
+  expression: ret ts_mean_5 ret ts_std_5 div cs_rank
+  hypothesis: 风险调整动量：近5日平均收益/波动率高的股票，动量效应强
+  metrics:
+    rank_ic: 0.0418
+    ic_mean: 0.0321
+    icir: 0.2033
+    topk_annual_return: -1.3964
+    topk_max_drawdown: 0.0808
+    coverage: 0.75
+    fitness: -1.0856
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:44:30+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F021
+  rpn:
+  - ret
+  - ts_std_20
+  - ret
+  - ts_std_60
+  - div
+  - neg
+  - cs_rank
+  expression: ret ts_std_20 ret ts_std_60 div neg cs_rank
+  hypothesis: 波动率收敛：短期波动相对长期波动处于低位的股票，风险调整后收益更稳
+  metrics:
+    rank_ic: 0.0814
+    ic_mean: 0.0723
+    icir: 1.0314
+    topk_annual_return: -1.3085
+    topk_max_drawdown: 0.0759
+    coverage: 0.75
+    fitness: -0.386
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:44:31+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F022
+  rpn:
+  - vwap
+  - ts_delta_5
+  - cs_rank
+  expression: vwap ts_delta_5 cs_rank
+  hypothesis: 均价动量：近5日均价涨幅高的股票，具备短期趋势跟随效应
+  metrics:
+    rank_ic: 0.1009
+    ic_mean: 0.0903
+    icir: 0.4882
+    topk_annual_return: -1.3282
+    topk_max_drawdown: 0.077
+    coverage: 0.75
+    fitness: -0.5797
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:44:31+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F023
+  rpn:
+  - volume
+  - ts_mean_5
+  - volume
+  - ts_mean_20
+  - div
+  - cs_rank
+  expression: volume ts_mean_5 volume ts_mean_20 div cs_rank
+  hypothesis: 量能放大：近5日均量相对20日均量放大，表明资金活跃，股价有上行动力
+  metrics:
+    rank_ic: 0.0587
+    ic_mean: 0.0587
+    icir: 1.1678
+    topk_annual_return: -1.3252
+    topk_max_drawdown: 0.0769
+    coverage: 0.75
+    fitness: -0.448
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:44:32+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F024
+  rpn:
+  - volume
+  - volume
+  - ts_mean_20
+  - gt
+  - ts_mean_5
+  - cs_rank
+  expression: volume volume ts_mean_20 gt ts_mean_5 cs_rank
+  hypothesis: 近5日放量天数比例高，反映资金短期持续流入，动量延续
+  metrics:
+    rank_ic: 0.0441
+    ic_mean: 0.0473
+    icir: 0.7465
+    topk_annual_return: -1.3085
+    topk_max_drawdown: 0.0759
+    coverage: 0.75
+    fitness: -0.7148
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:46:07+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F025
+  rpn:
+  - close
+  - open
+  - sub
+  - open
+  - div
+  - ts_std_10
+  - neg
+  - cs_rank
+  expression: close open sub open div ts_std_10 neg cs_rank
+  hypothesis: 近10日日内收益率波动小，盘中走势平稳，筹码结构稳定，未来表现稳健
+  metrics:
+    rank_ic: 0.3236
+    ic_mean: 0.2606
+    icir: 1.3586
+    topk_annual_return: -1.3418
+    topk_max_drawdown: 0.0778
+    coverage: 0.75
+    fitness: 0.9556
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:46:07+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20
+- id: F026
+  rpn:
+  - close
+  - ts_delta_10
+  - volume
+  - ts_delta_10
+  - mul
+  - neg
+  - cs_rank
+  expression: close ts_delta_10 volume ts_delta_10 mul neg cs_rank
+  hypothesis: 近10日价量同步下跌（乘积为正）暗示超卖，反向均值修复动能蓄积
+  metrics:
+    rank_ic: 0.1308
+    ic_mean: 0.1102
+    icir: 1.3831
+    topk_annual_return: -1.3952
+    topk_max_drawdown: 0.0808
+    coverage: 0.75
+    fitness: -0.0498
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-19T16:46:08+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 1000
+  eval_window: 20

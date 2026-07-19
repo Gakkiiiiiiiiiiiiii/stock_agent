@@ -311,6 +311,7 @@ class ClaudeAgent:
     def _fallback_choose_skill(self, user_query: str) -> SkillDefinition | None:
         query = user_query.lower()
         rules = [
+            ("factor-mining", ["挖因子", "因子挖掘", "因子", "alpha"]),
             ("portfolio-construction", ["组合", "仓位", "持仓", "配仓", "防守", "标的"]),
             ("portfolio-risk-review", ["风控", "风险", "暴露", "集中度"]),
             ("daily-market-decision", ["最近", "近期", "当前", "今天", "板块", "赛道", "方向", "机会", "主线", "值得关注", "值得投资"]),

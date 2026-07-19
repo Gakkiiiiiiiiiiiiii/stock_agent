@@ -1,18 +1,18 @@
 {
-  "session_id": "5db42d76e9fb48acb25515e85f9281e1",
+  "session_id": "afe2f140845047e4b081da3a54e3883a",
   "title": "分析黄金主题",
-  "created_at": "2026-07-19T17:09:24",
-  "updated_at": "2026-07-19T17:09:24",
+  "created_at": "2026-07-20T00:53:36",
+  "updated_at": "2026-07-20T00:53:36",
   "messages": [
     {
       "role": "user",
       "content": "分析黄金主题",
-      "created_at": "2026-07-19T17:09:24"
+      "created_at": "2026-07-20T00:53:36"
     },
     {
       "role": "assistant",
       "content": "主模型未配置，当前无法运行 Claude-style Agent。请配置 AGENT_MODEL_* 或 ANALYSIS_MODEL_* 为 DeepSeek/OpenAI-compatible 模型。",
-      "created_at": "2026-07-19T17:09:24"
+      "created_at": "2026-07-20T00:53:36"
     }
   ],
   "last_response": {
