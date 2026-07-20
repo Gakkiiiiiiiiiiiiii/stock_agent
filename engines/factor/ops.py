@@ -15,10 +15,21 @@ import warnings
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 
-from engines.factor.vocab import BINARY_OPS, CS_OPS, TS_OPS, TS_WINDOWS, UNARY_OPS
+from engines.factor.vocab import (
+    BINARY_OPS,
+    CS_OPS,
+    TERNARY_OPS,
+    TS_BINARY_OPS,
+    TS_OPS,
+    TS_WINDOWS,
+    UNARY_OPS,
+)
 
 _EPS = 1e-12
-_TS_TOKEN_RE = re.compile(r"^(ts_(?:mean|std|max|min|delta|delay|rank))_(\d+)$")
+_TS_TOKEN_RE = re.compile(
+    r"^(ts_mean|ts_std|ts_max|ts_min|ts_delta|ts_delay|ts_rank|ts_sum"
+    r"|ts_corr|ts_cov|ts_argmax|ts_argmin|decay_linear|count)_(\d+)$"
+)
 
 
 def _rolling_apply(x: np.ndarray, window: int, func) -> np.ndarray:
@@ -76,6 +87,120 @@ def _ts_rank(x: np.ndarray, window: int) -> np.ndarray:
     return _rolling_apply(x, window, _rank)
 
 
+def _ts_sum(x: np.ndarray, window: int) -> np.ndarray:
+    """窗内求和：NaN 视为缺失跳过，全 NaN 窗输出 NaN（nansum 全 NaN 默认得 0，需额外掩蔽）。"""
+
+    def _sum(v: np.ndarray) -> np.ndarray:
+        s = np.nansum(v, axis=-1)
+        return np.where(np.isnan(v).all(axis=-1), np.nan, s)
+
+    return _rolling_apply(x, window, _sum)
+
+
+def _decay_linear(x: np.ndarray, window: int) -> np.ndarray:
+    """线性衰减加权平均：权重 w_i=i/sum(i)（i 由远及近 1..window），最新值权重最大。"""
+    weights = np.arange(1, window + 1, dtype=float)
+    weights /= weights.sum()
+
+    def _wma(v: np.ndarray) -> np.ndarray:
+        valid = ~np.isnan(v)
+        w_sum = (valid * weights).sum(axis=-1)
+        weighted = np.nansum(v * weights, axis=-1)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            # 按有效值的权重和归一化；全 NaN 窗（w_sum=0）输出 NaN
+            return np.where(w_sum > 0, weighted / np.where(w_sum > 0, w_sum, 1.0), np.nan)
+
+    return _rolling_apply(x, window, _wma)
+
+
+def _ts_argextreme(x: np.ndarray, window: int, pick_max: bool) -> np.ndarray:
+    """窗内极值距今的天数（0 表示极值就在当期），全 NaN 窗输出 NaN。"""
+    fill = -np.inf if pick_max else np.inf
+
+    def _arg(v: np.ndarray) -> np.ndarray:
+        all_nan = np.isnan(v).all(axis=-1)
+        masked = np.where(np.isnan(v), fill, v)
+        idx = masked.argmax(axis=-1) if pick_max else masked.argmin(axis=-1)
+        dist = (v.shape[-1] - 1 - idx).astype(float)
+        return np.where(all_nan, np.nan, dist)
+
+    return _rolling_apply(x, window, _arg)
+
+
+def _ts_argmax(x: np.ndarray, window: int) -> np.ndarray:
+    return _ts_argextreme(x, window, pick_max=True)
+
+
+def _ts_argmin(x: np.ndarray, window: int) -> np.ndarray:
+    return _ts_argextreme(x, window, pick_max=False)
+
+
+def _count(x: np.ndarray, window: int) -> np.ndarray:
+    """窗内 x>0 的天数；NaN 不计入，全 NaN 窗输出 NaN。"""
+
+    def _cnt(v: np.ndarray) -> np.ndarray:
+        all_nan = np.isnan(v).all(axis=-1)
+        c = (v > 0).sum(axis=-1).astype(float)
+        return np.where(all_nan, np.nan, c)
+
+    return _rolling_apply(x, window, _cnt)
+
+
+def _rolling_apply_pair(a: np.ndarray, b: np.ndarray, window: int, func) -> np.ndarray:
+    """二元时序算子的滚动框架：对两个面板同步取滑动窗，前 window-1 个位置为 NaN。"""
+    out = np.full(a.shape, np.nan, dtype=float)
+    if window <= 0 or a.shape[1] < window:
+        return out
+    va = sliding_window_view(a, window, axis=1)  # (n_symbols, n_days-window+1, window)
+    vb = sliding_window_view(b, window, axis=1)
+    out[:, window - 1:] = func(va, vb)
+    return out
+
+
+def _pair_stats(va: np.ndarray, vb: np.ndarray):
+    """窗内有效配对（剔除任一序列为 NaN 的位置）的和/平方和/交叉和。"""
+    valid = ~(np.isnan(va) | np.isnan(vb))
+    n = valid.sum(axis=-1)
+    xa = np.where(valid, va, 0.0)
+    xb = np.where(valid, vb, 0.0)
+    sx = xa.sum(axis=-1)
+    sy = xb.sum(axis=-1)
+    sxx = (xa * xa).sum(axis=-1)
+    syy = (xb * xb).sum(axis=-1)
+    sxy = (xa * xb).sum(axis=-1)
+    return n, sx, sy, sxx, syy, sxy
+
+
+def _ts_corr(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+    """窗内皮尔逊相关系数：有效配对 <2 或任一序列零方差时输出 NaN。"""
+
+    def _corr(va: np.ndarray, vb: np.ndarray) -> np.ndarray:
+        n, sx, sy, sxx, syy, sxy = _pair_stats(va, vb)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            nf = np.maximum(n, 1)
+            cov = sxy / nf - (sx / nf) * (sy / nf)
+            vx = sxx / nf - (sx / nf) ** 2
+            vy = syy / nf - (sy / nf) ** 2
+            denom = np.sqrt(np.maximum(vx, 0.0) * np.maximum(vy, 0.0))
+            corr = cov / denom
+        return np.where((n >= 2) & (denom > _EPS), corr, np.nan)
+
+    return _rolling_apply_pair(a, b, window, _corr)
+
+
+def _ts_cov(a: np.ndarray, b: np.ndarray, window: int) -> np.ndarray:
+    """窗内总体协方差（ddof=0，与 ts_std 的 nanstd 口径一致）：有效配对 <2 时输出 NaN。"""
+
+    def _cov(va: np.ndarray, vb: np.ndarray) -> np.ndarray:
+        n, sx, sy, _, _, sxy = _pair_stats(va, vb)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            nf = np.maximum(n, 1)
+            cov = sxy / nf - (sx / nf) * (sy / nf)
+        return np.where(n >= 2, cov, np.nan)
+
+    return _rolling_apply_pair(a, b, window, _cov)
+
+
 _TS_FUNCS = {
     "ts_mean": _ts_mean,
     "ts_std": _ts_std,
@@ -84,11 +209,21 @@ _TS_FUNCS = {
     "ts_delta": _ts_delta,
     "ts_delay": _ts_delay,
     "ts_rank": _ts_rank,
+    "ts_sum": _ts_sum,
+    "decay_linear": _decay_linear,
+    "ts_argmax": _ts_argmax,
+    "ts_argmin": _ts_argmin,
+    "count": _count,
+}
+
+_TS_BINARY_FUNCS = {
+    "ts_corr": _ts_corr,
+    "ts_cov": _ts_cov,
 }
 
 
 def parse_ts_token(token: str) -> tuple[str, int] | None:
-    """解析 `ts_mean_10` 形式的时序 token，返回 (算子名, 窗口)。"""
+    """解析 `ts_mean_10` / `ts_corr_10` / `decay_linear_10` 形式的时序 token，返回 (算子名, 窗口)。"""
     m = _TS_TOKEN_RE.match(token)
     if not m:
         return None
@@ -142,6 +277,9 @@ def get_op(token: str) -> tuple[object, int] | None:
     parsed = parse_ts_token(token)
     if parsed:
         name, window = parsed
+        if name in TS_BINARY_OPS:
+            func = _TS_BINARY_FUNCS[name]
+            return (lambda a, b, _f=func, _w=window: _f(a, b, _w)), 2
         func = _TS_FUNCS[name]
         return (lambda x, _f=func, _w=window: _f(x, _w)), 1
 
@@ -155,6 +293,7 @@ def get_op(token: str) -> tuple[object, int] | None:
             "log": _safe_log,
             "sqrt": lambda x: np.where(x >= 0, np.sqrt(np.where(x >= 0, x, 0.0)), np.nan),
             "sign": np.sign,
+            "signedpower": lambda x: np.sign(x) * x * x,
         }
         return unary[token], 1
 
@@ -170,6 +309,13 @@ def get_op(token: str) -> tuple[object, int] | None:
             "min": np.minimum,
         }
         return binary[token], 2
+
+    if token in TERNARY_OPS:
+        ternary = {
+            # where(cond, a, b)：cond>0 取 a 否则取 b；cond 为 NaN 时按 False 处理取 b
+            "where": lambda cond, a, b: np.where(cond > 0, a, b),
+        }
+        return ternary[token], 3
 
     return None
 

@@ -29,7 +29,7 @@ def load_universe(path: str | Path | None = None) -> list[str]:
     try:
         data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
         symbols = [str(s).strip() for s in data.get("symbols") or [] if str(s).strip()]
-        return symbols[:1200]
+        return symbols[:5000]
     except Exception as exc:  # noqa: BLE001
         logger.warning("读取股票池配置失败 %s: %s", cfg_path, exc)
         return []
@@ -127,6 +127,20 @@ def load_factor_panel(
         panels["ret"] = np.where(prev_close > 0, panels["close"] / np.where(prev_close > 0, prev_close, 1.0) - 1.0, np.nan)
 
     dates = [d.isoformat() for d in all_dates]
+
+    # 视频知识库特征（按视频发布时间对齐，无前视；数据缺失时全零面板）
+    try:
+        from engines.factor.video_features import build_video_feature_panel
+
+        video_panels, video_warning = build_video_feature_panel(ordered_symbols, dates)
+        panels.update(video_panels)
+        if video_warning:
+            logger.info("视频特征: %s", video_warning)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("视频特征构建失败（置零跳过）: %s", exc)
+        panels["event_heat"][:] = 0.0
+        panels["theme_sentiment"][:] = 0.0
+
     return panels, dates, ordered_symbols, warning
 
 

@@ -1,0 +1,38 @@
+# Alpha191 风格因子种子库。
+# 按 Alpha191 风格改写（非原式逐字复刻），仅作 few-shot 示例与判重基线。
+# 每条均为纯日频 OHLCV/amount/vwap/turnover 可表达的 RPN 公式，
+# 均可被 engines.factor.vm.StackVM 直接执行（tests/test_factor_ops.py 逐条验证）。
+seeds:
+- name: reversal_5d
+  hypothesis: 5日反转：过去5日涨幅越高的股票短期越可能回落
+  rpn: [close, close, ts_delay_5, div, neg, cs_rank]
+- name: price_volume_corr_10d
+  hypothesis: 量价背离：近10日收盘价与成交量相关性越高（放量上涨）未来收益越差
+  rpn: [close, volume, ts_corr_10, neg, cs_rank]
+- name: volatility_ratio_5_20
+  hypothesis: 波动率比值：5日波动相对20日波动放大，预示风险释放未完、收益偏弱
+  rpn: [ret, ts_std_5, ret, ts_std_20, div, neg, cs_rank]
+- name: vwap_deviation
+  hypothesis: 收盘价相对当日vwap的正偏离越大（尾盘追涨）短期越易回落
+  rpn: [close, vwap, div, neg, cs_rank]
+- name: bias_20d
+  hypothesis: 20日乖离率：价格高于20日均线越多短期超买，反转概率越大
+  rpn: [close, close, ts_mean_20, div, neg, cs_rank]
+- name: amount_surge_20d
+  hypothesis: 量能放大：当日成交额相对20日均额异常放大后短期动量衰减
+  rpn: [amount, amount, ts_mean_20, div, neg, cs_rank]
+- name: intraday_position
+  hypothesis: 日内位置：收盘价在当日高低区间中的位置越高代表买盘越强
+  rpn: [close, low, sub, high, low, sub, div, cs_rank]
+- name: up_days_10d
+  hypothesis: 上涨天数：近10日上涨天数越多短期过热，反转概率越大
+  rpn: [ret, count_10, neg, cs_rank]
+- name: weighted_reversal_decay_10d
+  hypothesis: 线性衰减加权反转：近期收益权重更高的10日加权收益反转
+  rpn: [ret, decay_linear_10, neg, cs_rank]
+- name: days_since_high_20d
+  hypothesis: 距离20日最高价的天数越短（临近新高）动量越强
+  rpn: [high, ts_argmax_20, neg, cs_rank]
+- name: turnover_mean_20d
+  hypothesis: 低换手溢价：20日均换手率越低（关注度低）未来收益越好
+  rpn: [turnover, ts_mean_20, neg, cs_rank]

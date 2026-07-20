@@ -1,4 +1,7 @@
+from engines.market.data_provider import sample_kline
+from financial_agent.models import KlineResponse
 from mcp_servers.industry_knowledge_server import search_theme_logic
+from mcp_servers import technical_factor_server
 from mcp_servers.technical_factor_server import detect_pattern_signal
 
 
@@ -20,7 +23,12 @@ def test_search_theme_alias():
     assert result["theme_name"] == "高股息"
 
 
-def test_detect_pattern_signal_tool():
+def test_detect_pattern_signal_tool(monkeypatch):
+    class _SampleProvider:
+        def get_kline(self, symbol, **kwargs):
+            return KlineResponse(symbol=symbol, records=sample_kline(symbol, days=140), source="sample")
+
+    monkeypatch.setattr(technical_factor_server, "get_market_data_provider", lambda: _SampleProvider())
     result = detect_pattern_signal("SAMPLE", patterns=["B1"])
     assert result["symbol"] == "SAMPLE"
     assert result["signals"][0]["pattern"] == "B1"

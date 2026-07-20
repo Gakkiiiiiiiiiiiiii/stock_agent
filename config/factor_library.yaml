@@ -812,3 +812,254 @@ factors:
   status: active
   universe_size: 1000
   eval_window: 20
+- id: F027
+  rpn:
+  - close
+  - vwap
+  - div
+  - ts_std_15
+  - neg
+  - cs_rank
+  expression: close vwap div ts_std_15 neg cs_rank
+  hypothesis: 近15日收盘价相对均价偏离的波动越小，定价越有效，未来收益越稳健
+  metrics:
+    rank_ic: 0.1025
+    ic_mean: 0.0419
+    icir: 0.4066
+    topk_annual_return: -0.9587
+    topk_max_drawdown: 0.1464
+    coverage: 0.6833
+    fitness: -0.243
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:44:13+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F028
+  rpn:
+  - close
+  - ts_max_20
+  - close
+  - ts_min_20
+  - sub
+  - close
+  - ts_mean_20
+  - div
+  - neg
+  - cs_rank
+  expression: close ts_max_20 close ts_min_20 sub close ts_mean_20 div neg cs_rank
+  hypothesis: 20日价格通道相对宽度越窄，波动收敛，蓄势后未来收益好
+  metrics:
+    rank_ic: 0.1199
+    ic_mean: 0.0738
+    icir: 0.514
+    topk_annual_return: -0.9813
+    topk_max_drawdown: 0.1327
+    coverage: 0.6
+    fitness: -0.125
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:44:13+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F029
+  rpn:
+  - close
+  - open
+  - sub
+  - high
+  - low
+  - sub
+  - div
+  - ts_std_10
+  - neg
+  - cs_rank
+  expression: close open sub high low sub div ts_std_10 neg cs_rank
+  hypothesis: 近10日日内走势位置（收盘在高低区间的相对位置）波动小，筹码结构稳定，未来收益好
+  metrics:
+    rank_ic: 0.0204
+    ic_mean: 0.0031
+    icir: 0.3224
+    topk_annual_return: -0.9996
+    topk_max_drawdown: 0.1689
+    coverage: 0.7667
+    fitness: -0.7365
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:44:13+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F030
+  rpn:
+  - close
+  - high
+  - ts_max_20
+  - div
+  - cs_rank
+  expression: close high ts_max_20 div cs_rank
+  hypothesis: 收盘价接近20日最高价，显示突破强度，动量延续
+  metrics:
+    rank_ic: 0.0579
+    ic_mean: 0.0529
+    icir: 0.3554
+    topk_annual_return: -1.1434
+    topk_max_drawdown: 0.1528
+    coverage: 0.6
+    fitness: -0.6761
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:46:20+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F031
+  rpn:
+  - high
+  - low
+  - sub
+  - close
+  - div
+  - ts_std_5
+  - neg
+  - cs_rank
+  expression: high low sub close div ts_std_5 neg cs_rank
+  hypothesis: 近日振幅率波动小，走势平稳，筹码结构稳定，未来表现偏好
+  metrics:
+    rank_ic: 0.0568
+    ic_mean: 0.0099
+    icir: 0.3058
+    topk_annual_return: -0.7294
+    topk_max_drawdown: 0.1729
+    coverage: 0.85
+    fitness: -0.2927
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:46:20+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F032
+  rpn:
+  - high
+  - ts_argmax_20
+  - low
+  - ts_argmin_20
+  - sub
+  - cs_rank
+  expression: high ts_argmax_20 low ts_argmin_20 sub cs_rank
+  hypothesis: 高低点时间差动量：20日内最高点出现晚于最低点的时间差越大，上升趋势越强，短期动量延续
+  metrics:
+    rank_ic: 0.0629
+    ic_mean: 0.0252
+    icir: 0.3667
+    topk_annual_return: -1.1163
+    topk_max_drawdown: 0.1494
+    coverage: 0.6
+    fitness: -0.6186
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T15:47:33+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F033
+  rpn:
+  - ret
+  - volume
+  - mul
+  - decay_linear_10
+  - neg
+  - cs_rank
+  expression: ret volume mul decay_linear_10 neg cs_rank
+  hypothesis: 近10日成交额加权的线性衰减收益反转，近期活跃资金推动的涨幅易回落
+  metrics:
+    rank_ic: 0.0267
+    ic_mean: -0.0095
+    icir: 0.2315
+    topk_annual_return: 0.1012
+    topk_max_drawdown: 0.1606
+    coverage: 0.944
+    fitness: 0.3504
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T16:00:21+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F034
+  rpn:
+  - high
+  - low
+  - div
+  - ts_mean_5
+  - high
+  - low
+  - div
+  - ts_mean_20
+  - div
+  - neg
+  - cs_rank
+  expression: high low div ts_mean_5 high low div ts_mean_20 div neg cs_rank
+  hypothesis: 振幅均值比值逆转：近5日平均日内振幅相对20日平均振幅扩张的股票，短期过热反转，未来收益偏弱
+  metrics:
+    rank_ic: 0.0211
+    ic_mean: 0.006
+    icir: 0.2226
+    topk_annual_return: 0.0617
+    topk_max_drawdown: 0.1647
+    coverage: 0.904
+    fitness: 0.2785
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T16:03:58+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208
+- id: F035
+  rpn:
+  - ret
+  - ts_sum_5
+  - ret
+  - decay_linear_5
+  - neg
+  - ret
+  - decay_linear_5
+  - where
+  - cs_rank
+  expression: ret ts_sum_5 ret decay_linear_5 neg ret decay_linear_5 where cs_rank
+  hypothesis: 状态依赖反转：近5日累计收益为正时取线性衰减反转，为负时取线性衰减动量延续，捕捉非对称反转效应
+  metrics:
+    rank_ic: 0.0235
+    ic_mean: -0.0074
+    icir: 0.2217
+    topk_annual_return: -0.0435
+    topk_max_drawdown: 0.1891
+    coverage: 0.964
+    fitness: 0.1847
+    top_k: 42
+    passed: true
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-20T16:04:03+00:00'
+  llm_model: ''
+  status: active
+  universe_size: 4208

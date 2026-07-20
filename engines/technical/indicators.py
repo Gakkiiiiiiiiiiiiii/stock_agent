@@ -2,43 +2,63 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 
+import numpy as np
+import pandas as pd
+from numpy.lib.stride_tricks import sliding_window_view
 
-def _none_prefix(values: list[float | None], window: int) -> list[float | None]:
-    return [None if i < window - 1 else values[i] for i in range(len(values))]
+
+def _to_array(values: Sequence[float]) -> np.ndarray:
+    return np.asarray(values, dtype=float)
+
+
+def _to_series(values: Sequence[float]) -> pd.Series:
+    return pd.Series(_to_array(values))
+
+
+def _nan_to_none(values: np.ndarray) -> list[float | None]:
+    # 前导不足窗口期的位置以 NaN 表示，对外仍按旧约定返回 None
+    # tolist 在 C 层完成 float 转换，避免逐元素 np.isnan 的开销
+    is_nan = np.isnan(values).tolist()
+    return [None if m else v for v, m in zip(values.tolist(), is_nan)]
+
+
+def _ma_arr(values: np.ndarray, window: int) -> np.ndarray:
+    # 滑动窗口均值，前 window-1 个位置为 NaN（pairwise 求和，精度与逐 bar 累加相当）
+    out = np.full(values.shape[0], np.nan)
+    if values.shape[0] >= window:
+        out[window - 1 :] = sliding_window_view(values, window).mean(axis=1)
+    return out
 
 
 def ma(values: Sequence[float], window: int) -> list[float | None]:
     if window <= 0:
         raise ValueError("window must be positive")
-    result: list[float | None] = []
-    running = 0.0
-    for i, value in enumerate(values):
-        running += value
-        if i >= window:
-            running -= values[i - window]
-        result.append(running / window if i >= window - 1 else None)
-    return result
+    return _nan_to_none(_ma_arr(_to_array(values), window))
 
 
 def ema(values: Sequence[float], span: int) -> list[float]:
     if span <= 0:
         raise ValueError("span must be positive")
-    if not values:
+    if len(values) == 0:
         return []
-    alpha = 2 / (span + 1)
-    result = [float(values[0])]
-    for value in values[1:]:
-        result.append(alpha * value + (1 - alpha) * result[-1])
-    return result
+    # adjust=False 时 y0=x0、y_t=alpha*x_t+(1-alpha)*y_{t-1}，与旧实现一致
+    averaged = _to_series(values).ewm(span=span, adjust=False).mean()
+    return averaged.tolist()
 
 
 def macd(values: Sequence[float], fast: int = 12, slow: int = 26, signal: int = 9) -> dict[str, list[float]]:
-    ema_fast = ema(values, fast)
-    ema_slow = ema(values, slow)
-    dif = [a - b for a, b in zip(ema_fast, ema_slow)]
-    dea = ema(dif, signal)
-    hist = [(d - e) * 2 for d, e in zip(dif, dea)]
-    return {"dif": dif, "dea": dea, "macd": hist}
+    ema_fast = _to_array(ema(values, fast))
+    ema_slow = _to_array(ema(values, slow))
+    dif = ema_fast - ema_slow
+    dea = _to_array(ema(dif, signal))
+    hist = (dif - dea) * 2
+    return {"dif": dif.tolist(), "dea": dea.tolist(), "macd": hist.tolist()}
+
+
+def _ewm_seeded(values: np.ndarray, alpha: float, seed: float) -> np.ndarray:
+    # 在序列前补一个 seed 值，利用 ewm(adjust=False) 的 y0=x0 特性实现带初值的递推
+    seeded = pd.Series(np.concatenate(([seed], values)))
+    return seeded.ewm(alpha=alpha, adjust=False).mean().to_numpy()[1:]
 
 
 def kdj(
@@ -51,27 +71,39 @@ def kdj(
 ) -> dict[str, list[float | None]]:
     if not (len(highs) == len(lows) == len(closes)):
         raise ValueError("highs, lows and closes must have the same length")
-    k_raw: list[float | None] = []
-    k_values: list[float | None] = []
-    d_values: list[float | None] = []
-    last_k = 50.0
-    last_d = 50.0
-    for i, close in enumerate(closes):
-        if i < n - 1:
-            k_raw.append(None)
-            k_values.append(None)
-            d_values.append(None)
-            continue
-        high_n = max(highs[i - n + 1 : i + 1])
-        low_n = min(lows[i - n + 1 : i + 1])
-        rsv = 50.0 if high_n == low_n else (close - low_n) / (high_n - low_n) * 100
-        last_k = (m1 - 1) / m1 * last_k + rsv / m1
-        last_d = (m2 - 1) / m2 * last_d + last_k / m2
-        k_raw.append(rsv)
-        k_values.append(last_k)
-        d_values.append(last_d)
-    j_values = [None if k is None or d is None else 3 * k - 2 * d for k, d in zip(k_values, d_values)]
-    return {"rsv": k_raw, "k": k_values, "d": d_values, "j": j_values}
+    length = len(closes)
+    high_arr = _to_array(highs)
+    low_arr = _to_array(lows)
+    close_arr = _to_array(closes)
+
+    high_n = np.full(length, np.nan)
+    low_n = np.full(length, np.nan)
+    if length >= n:
+        high_n[n - 1 :] = sliding_window_view(high_arr, n).max(axis=1)
+        low_n[n - 1 :] = sliding_window_view(low_arr, n).min(axis=1)
+
+    with np.errstate(invalid="ignore", divide="ignore"):
+        rsv = (close_arr - low_n) / (high_n - low_n) * 100
+    # 窗口内最高价==最低价（一字板）时 rsv 按旧约定取 50
+    flat = (high_n == low_n) & ~np.isnan(high_n)
+    rsv = np.where(flat, 50.0, rsv)
+
+    if length >= n:
+        k_tail = _ewm_seeded(rsv[n - 1 :], 1 / m1, 50.0)
+        d_tail = _ewm_seeded(k_tail, 1 / m2, 50.0)
+        k_values = np.concatenate((np.full(n - 1, np.nan), k_tail))
+        d_values = np.concatenate((np.full(n - 1, np.nan), d_tail))
+    else:
+        k_values = np.full(length, np.nan)
+        d_values = np.full(length, np.nan)
+
+    j_values = 3 * k_values - 2 * d_values
+    return {
+        "rsv": _nan_to_none(rsv),
+        "k": _nan_to_none(k_values),
+        "d": _nan_to_none(d_values),
+        "j": _nan_to_none(j_values),
+    }
 
 
 def stl(closes: Sequence[float]) -> list[float]:
@@ -79,19 +111,23 @@ def stl(closes: Sequence[float]) -> list[float]:
 
 
 def ltl(closes: Sequence[float]) -> list[float | None]:
-    ma14 = ma(closes, 14)
-    ma28 = ma(closes, 28)
-    ma57 = ma(closes, 57)
-    ma114 = ma(closes, 114)
-    result: list[float | None] = []
-    for values in zip(ma14, ma28, ma57, ma114):
-        result.append(None if any(v is None for v in values) else sum(v for v in values if v is not None) / 4)
-    return result
+    close_arr = _to_array(closes)
+    stacked = np.vstack([_ma_arr(close_arr, window) for window in (14, 28, 57, 114)])
+    # 任一分量缺失（NaN）时整体为 None，否则取四线均值
+    return _nan_to_none(stacked.mean(axis=0))
 
 
 def rolling_ratio(values: Sequence[float], window: int) -> list[float | None]:
-    avg = ma(values, window)
-    return [None if a in (None, 0) else value / a for value, a in zip(values, avg)]
+    if window <= 0:
+        raise ValueError("window must be positive")
+    avg_arr = _ma_arr(_to_array(values), window)
+    value_arr = _to_array(values)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ratio = value_arr / avg_arr
+    # 均线缺失或为 0 时比值无意义，按旧约定返回 None
+    invalid = np.isnan(avg_arr) | (avg_arr == 0)
+    ratio = np.where(invalid, np.nan, ratio)
+    return _nan_to_none(ratio)
 
 
 def calc_all(highs: Sequence[float], lows: Sequence[float], closes: Sequence[float], volumes: Sequence[float]) -> dict[str, list[float | None] | list[float]]:
@@ -113,4 +149,3 @@ def calc_all(highs: Sequence[float], lows: Sequence[float], closes: Sequence[flo
     result.update({"dif": macd_values["dif"], "dea": macd_values["dea"], "macd": macd_values["macd"]})
     result.update({"kdj_k": kdj_values["k"], "kdj_d": kdj_values["d"], "kdj_j": kdj_values["j"]})
     return result
-

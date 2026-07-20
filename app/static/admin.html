@@ -2150,22 +2150,50 @@
       if (state.factorMining) return;
       state.factorMining = true;
       $("mineFactorsButton").disabled = true;
-      $("factorMineHint").textContent = "挖掘中：LLM 生成候选 → 样本内评估 → 达标入库，通常需要几分钟……";
+      $("factorMineHint").textContent = "正在提交挖掘任务……";
       try {
         const res = await fetch("/api/v1/admin/factors/mine", { method: "POST" });
-        const data = await res.json();
-        const accepted = (data.accepted || []).length;
-        const rejected = (data.rejected || []).length;
-        $("factorMineHint").textContent = data.warning
-          ? `挖掘中断：${data.warning}`
-          : `挖掘完成：入库 ${accepted} 个，淘汰 ${rejected} 个。指标为样本内结果【待核验】。`;
+        const { task_id } = await res.json();
+        if (!task_id) throw new Error("后端未返回 task_id");
+        $("factorMineHint").textContent = "挖掘中：LLM 生成候选 → 样本内评估 → 达标入库，通常需要几分钟……";
+        const data = await pollFactorMining(task_id);
+        if (data.status === "done") {
+          const result = data.result || {};
+          const accepted = (result.accepted || []).length;
+          const rejected = (result.rejected || []).length;
+          $("factorMineHint").textContent = result.warning
+            ? `挖掘中断：${result.warning}`
+            : `挖掘完成：入库 ${accepted} 个，淘汰 ${rejected} 个。指标为样本内结果【待核验】。`;
+          await loadFactors();
+        } else {
+          $("factorMineHint").textContent = `挖掘失败：${data.error || "未知错误"}`;
+        }
       } catch (err) {
         $("factorMineHint").textContent = `挖掘请求失败：${err}`;
       } finally {
         state.factorMining = false;
         $("mineFactorsButton").disabled = false;
-        await loadFactors();
       }
+    }
+
+    // 每 3 秒轮询一次任务状态，直到 done / failed
+    function pollFactorMining(taskId) {
+      return new Promise((resolve, reject) => {
+        const timer = setInterval(async () => {
+          try {
+            const res = await fetch(`/api/v1/admin/factors/mine/${taskId}`);
+            if (!res.ok) throw new Error(`状态查询失败：${res.status}`);
+            const data = await res.json();
+            if (data.status !== "running") {
+              clearInterval(timer);
+              resolve(data);
+            }
+          } catch (err) {
+            clearInterval(timer);
+            reject(err);
+          }
+        }, 3000);
+      });
     }
 
     $("mineFactorsButton").addEventListener("click", runFactorMining);

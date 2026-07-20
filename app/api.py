@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import uuid
 from contextlib import asynccontextmanager
 from datetime import date as Date
 from queue import Queue
@@ -18,6 +20,8 @@ from engines.content.video_ingest_service import VideoIngestService
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
 from financial_agent.models import Position, ThemeLogic, TradeReviewInput
 from mcp_servers.knowledge_server import upsert_theme_logic as upsert_theme_logic_mcp
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -432,11 +436,41 @@ def admin_list_factors() -> dict:
     return list_factor_library(limit=100)
 
 
+# 因子挖掘任务表：模块级 dict（单进程 uvicorn 即可），task_id -> {status, result, error}
+_factor_mine_tasks: dict[str, dict] = {}
+_FACTOR_MINE_TASK_LIMIT = 100
+
+
 @app.post("/api/v1/admin/factors/mine")
 def admin_mine_factors(rounds: int | None = None, candidates_per_round: int | None = None) -> dict:
-    from mcp_servers.factor_mining_server import mine_factors
+    """提交因子挖掘任务，立即返回 task_id，实际挖掘在后台线程执行。"""
+    task_id = uuid.uuid4().hex[:8]
+    _factor_mine_tasks[task_id] = {"status": "running", "result": None, "error": None}
+    # 任务表超过上限时清理最旧记录（dict 保持插入序）
+    while len(_factor_mine_tasks) > _FACTOR_MINE_TASK_LIMIT:
+        _factor_mine_tasks.pop(next(iter(_factor_mine_tasks)))
 
-    return mine_factors(rounds=rounds, candidates_per_round=candidates_per_round)
+    def _run() -> None:
+        try:
+            from mcp_servers.factor_mining_server import mine_factors
+
+            result = mine_factors(rounds=rounds, candidates_per_round=candidates_per_round)
+            _factor_mine_tasks[task_id].update(status="done", result=result)
+        except Exception as exc:  # noqa: BLE001  # 容器内无法访问 QMT 等数据源时优雅落错
+            logger.exception("因子挖掘任务 %s 失败", task_id)
+            _factor_mine_tasks[task_id].update(status="failed", error=str(exc))
+
+    Thread(target=_run, daemon=True).start()
+    return {"task_id": task_id}
+
+
+@app.get("/api/v1/admin/factors/mine/{task_id}")
+def admin_mine_factors_status(task_id: str) -> dict:
+    """查询挖掘任务状态：running / done（带 result）/ failed（带 error）。"""
+    task = _factor_mine_tasks.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="task not found")
+    return {"status": task["status"], "result": task["result"], "error": task["error"]}
 
 
 @app.get("/api/v1/admin/skills")

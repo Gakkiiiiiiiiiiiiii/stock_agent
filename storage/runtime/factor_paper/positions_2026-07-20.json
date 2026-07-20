@@ -1,0 +1,217 @@
+{
+  "date": "2026-07-20",
+  "generated_at": "2026-07-20T15:47:35+00:00",
+  "top_k": 42,
+  "picks": [
+    {
+      "symbol": "600694.SH",
+      "alpha_score": 0.7038,
+      "rank": 1
+    },
+    {
+      "symbol": "688100.SH",
+      "alpha_score": 0.6947,
+      "rank": 2
+    },
+    {
+      "symbol": "603075.SH",
+      "alpha_score": 0.6935,
+      "rank": 3
+    },
+    {
+      "symbol": "301035.SZ",
+      "alpha_score": 0.6905,
+      "rank": 4
+    },
+    {
+      "symbol": "603899.SH",
+      "alpha_score": 0.6848,
+      "rank": 5
+    },
+    {
+      "symbol": "600997.SH",
+      "alpha_score": 0.6773,
+      "rank": 6
+    },
+    {
+      "symbol": "600298.SH",
+      "alpha_score": 0.6765,
+      "rank": 7
+    },
+    {
+      "symbol": "600132.SH",
+      "alpha_score": 0.6761,
+      "rank": 8
+    },
+    {
+      "symbol": "688232.SH",
+      "alpha_score": 0.6746,
+      "rank": 9
+    },
+    {
+      "symbol": "601568.SH",
+      "alpha_score": 0.6744,
+      "rank": 10
+    },
+    {
+      "symbol": "601500.SH",
+      "alpha_score": 0.6733,
+      "rank": 11
+    },
+    {
+      "symbol": "603193.SH",
+      "alpha_score": 0.673,
+      "rank": 12
+    },
+    {
+      "symbol": "603508.SH",
+      "alpha_score": 0.6727,
+      "rank": 13
+    },
+    {
+      "symbol": "002216.SZ",
+      "alpha_score": 0.6688,
+      "rank": 14
+    },
+    {
+      "symbol": "601928.SH",
+      "alpha_score": 0.6686,
+      "rank": 15
+    },
+    {
+      "symbol": "603227.SH",
+      "alpha_score": 0.6685,
+      "rank": 16
+    },
+    {
+      "symbol": "600167.SH",
+      "alpha_score": 0.6677,
+      "rank": 17
+    },
+    {
+      "symbol": "605599.SH",
+      "alpha_score": 0.6672,
+      "rank": 18
+    },
+    {
+      "symbol": "002060.SZ",
+      "alpha_score": 0.6671,
+      "rank": 19
+    },
+    {
+      "symbol": "300703.SZ",
+      "alpha_score": 0.6669,
+      "rank": 20
+    },
+    {
+      "symbol": "603279.SH",
+      "alpha_score": 0.6659,
+      "rank": 21
+    },
+    {
+      "symbol": "603833.SH",
+      "alpha_score": 0.6654,
+      "rank": 22
+    },
+    {
+      "symbol": "603099.SH",
+      "alpha_score": 0.6653,
+      "rank": 23
+    },
+    {
+      "symbol": "600820.SH",
+      "alpha_score": 0.6646,
+      "rank": 24
+    },
+    {
+      "symbol": "603218.SH",
+      "alpha_score": 0.6641,
+      "rank": 25
+    },
+    {
+      "symbol": "600433.SH",
+      "alpha_score": 0.6632,
+      "rank": 26
+    },
+    {
+      "symbol": "600300.SH",
+      "alpha_score": 0.6631,
+      "rank": 27
+    },
+    {
+      "symbol": "603658.SH",
+      "alpha_score": 0.663,
+      "rank": 28
+    },
+    {
+      "symbol": "603069.SH",
+      "alpha_score": 0.6629,
+      "rank": 29
+    },
+    {
+      "symbol": "600729.SH",
+      "alpha_score": 0.6626,
+      "rank": 30
+    },
+    {
+      "symbol": "601068.SH",
+      "alpha_score": 0.6624,
+      "rank": 31
+    },
+    {
+      "symbol": "603866.SH",
+      "alpha_score": 0.6621,
+      "rank": 32
+    },
+    {
+      "symbol": "002311.SZ",
+      "alpha_score": 0.662,
+      "rank": 33
+    },
+    {
+      "symbol": "603298.SH",
+      "alpha_score": 0.6619,
+      "rank": 34
+    },
+    {
+      "symbol": "600125.SH",
+      "alpha_score": 0.6618,
+      "rank": 35
+    },
+    {
+      "symbol": "600638.SH",
+      "alpha_score": 0.6615,
+      "rank": 36
+    },
+    {
+      "symbol": "688032.SH",
+      "alpha_score": 0.6611,
+      "rank": 37
+    },
+    {
+      "symbol": "600663.SH",
+      "alpha_score": 0.66,
+      "rank": 38
+    },
+    {
+      "symbol": "301109.SZ",
+      "alpha_score": 0.6597,
+      "rank": 39
+    },
+    {
+      "symbol": "300453.SZ",
+      "alpha_score": 0.6594,
+      "rank": 40
+    },
+    {
+      "symbol": "601952.SH",
+      "alpha_score": 0.6592,
+      "rank": 41
+    },
+    {
+      "symbol": "301262.SZ",
+      "alpha_score": 0.659,
+      "rank": 42
+    }
+  ]
+}

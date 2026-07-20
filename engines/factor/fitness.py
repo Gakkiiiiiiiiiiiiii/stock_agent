@@ -8,7 +8,8 @@ import numpy as np
 
 MIN_VALID_PER_DAY = 10      # 单日截面有效标的最少数量
 MIN_COVERAGE = 0.6          # 有效 IC 天数占比下限，不足直接淘汰
-TOP_K = 5                   # TopK 组合持仓数
+TOP_K_RATIO = 0.01          # TopK 组合持仓比例（池子的 1%）
+TOP_K_MIN = 5               # TopK 下限
 TURNOVER_COST = 0.001       # 双边换手成本率
 TRADING_DAYS_PER_YEAR = 250
 
@@ -35,7 +36,7 @@ def evaluate_factor(
     factor_panel: np.ndarray,
     closes: np.ndarray,
     horizon: int = 5,
-    top_k: int = TOP_K,
+    top_k: int | None = None,
     eval_window: int | None = None,
 ) -> dict:
     """评估因子面板，返回指标字典。
@@ -47,6 +48,8 @@ def evaluate_factor(
     """
     n_symbols, n_days = factor_panel.shape
     start_d = max(0, n_days - eval_window) if eval_window else 0
+    # TopK 比例化：全 A 大池下固定 5 只过于极端，默认取池子的 1%（下限 5 只）
+    resolved_top_k = top_k or max(TOP_K_MIN, int(n_symbols * TOP_K_RATIO))
     fwd = np.full((n_symbols, n_days), np.nan, dtype=float)
     if n_days > horizon:
         with np.errstate(invalid="ignore", divide="ignore"):
@@ -69,7 +72,7 @@ def evaluate_factor(
         rank_ic_list.append(float(np.corrcoef(_rank(fv), _rank(rv))[0, 1]))
 
         # TopK 等权多头组合：按因子值取前 top_k，持有 horizon 日后的平均前瞻收益折算为日收益
-        k = min(top_k, int(valid.sum()))
+        k = min(resolved_top_k, int(valid.sum()))
         idx = np.where(valid)[0]
         top_idx = set(idx[np.argsort(fv)[-k:]].tolist())
         topk_daily.append((d, float(np.mean(rv) / horizon), top_idx))
@@ -120,6 +123,7 @@ def evaluate_factor(
         "topk_max_drawdown": round(max_dd, 4),
         "coverage": round(coverage, 4),
         "fitness": round(fitness, 4),
+        "top_k": resolved_top_k,
         "passed": bool(passed),
     }
 
