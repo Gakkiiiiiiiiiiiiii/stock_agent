@@ -12,6 +12,7 @@ data/
 stock_agent.egg-info/
 
 storage/content/
+storage/chat_sessions/*.json
 knowledge_base/video_summaries/
 
 summary.md

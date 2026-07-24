@@ -60,3 +60,16 @@ def test_eval_window_restricts_evaluation_to_recent_days():
     assert windowed["rank_ic"] > 0.9
     assert windowed["coverage"] >= 0.6
     assert full["rank_ic"] < windowed["rank_ic"]
+
+
+def test_topk_return_uses_only_selected_symbols():
+    n_symbols, n_days = 10, 20
+    returns = np.full((n_symbols, n_days), -0.01)
+    returns[0, :] = 0.01
+    closes = 100 * np.cumprod(1 + returns, axis=1)
+    factor = np.zeros_like(closes)
+    factor[0, :] = 10.0
+    metrics = evaluate_factor(factor, closes, horizon=1, top_k=1)
+    assert metrics["topk_annual_return"] > 0
+    assert metrics["benchmark_annual_return"] < 0
+    assert metrics["topk_excess_annual_return"] > 0

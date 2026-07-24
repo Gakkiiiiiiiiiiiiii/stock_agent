@@ -1,0 +1,25 @@
+rule_packs:
+  core_signals_v1:
+    version: 1.0.0
+    profile: core_daily_v1
+    status: approved
+    rules:
+      - id: trend_alignment
+        name: 均线多头排列
+        enabled: true
+        score: 25
+        condition:
+          all:
+            - gt: [ma5, ma10]
+            - gt: [ma10, ma20]
+            - gt: [ma20, ma60]
+        evidence:
+          - template: MA5、MA10、MA20、MA60 呈多头排列
+      - id: macd_bullish_cross
+        name: MACD 金叉
+        enabled: true
+        score: 15
+        condition:
+          cross_up: [macd_12_26_9.dif, macd_12_26_9.dea]
+        evidence:
+          - template: DIF 上穿 DEA

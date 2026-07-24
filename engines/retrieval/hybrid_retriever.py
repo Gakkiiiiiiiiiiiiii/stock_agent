@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from qdrant_client.http import models
 
-from engines.retrieval.embedder import DeterministicEmbedder
+from engines.retrieval.embedder import LocalChineseNgramEmbedder, build_embedder
 from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
@@ -14,12 +14,12 @@ class HybridRetriever:
         self,
         qdrant_client: FinancialQdrantClient | None = None,
         reranker: RerankerClient | None = None,
-        embedder: DeterministicEmbedder | None = None,
+        embedder: LocalChineseNgramEmbedder | None = None,
         hydrator: PostgresHydrator | None = None,
     ) -> None:
         self.qdrant_client = qdrant_client or FinancialQdrantClient()
         self.reranker = reranker or RerankerClient()
-        self.embedder = embedder or DeterministicEmbedder()
+        self.embedder = embedder or build_embedder()
         self.hydrator = hydrator or PostgresHydrator()
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
@@ -35,14 +35,21 @@ class HybridRetriever:
                         "chunk_id": hit.payload.get("chunk_id", str(hit.id)),
                         "text": hit.payload.get("text", ""),
                         "payload": hit.payload,
+                        "dense_score": hit.score,
                         "score": hit.score,
                     }
                 )
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"])
+        reranked = self._apply_hybrid_score(reranked)
         hydrated = self.hydrator.hydrate(reranked)
         contexts = self._resolve_viewpoint_conflicts(hydrated)
         contexts = self._apply_source_priority(contexts, plan.get("preferred_source_types") or [])
-        return {"plan": plan, "contexts": contexts}
+        metadata = getattr(self.embedder, "metadata", None)
+        if metadata is None:
+            embedding = {"provider": "unknown", "model": type(self.embedder).__name__, "dimension": len(query_vector)}
+        else:
+            embedding = metadata.__dict__
+        return {"plan": plan, "contexts": contexts, "embedding": embedding}
 
     def _build_filter(self, filters: dict) -> models.Filter | None:
         if not filters:
@@ -92,6 +99,43 @@ class HybridRetriever:
             reverse=True,
         )
         return contexts
+
+    @classmethod
+    def _apply_hybrid_score(cls, items: list[dict]) -> list[dict]:
+        for item in items:
+            payload = item.get("payload") or {}
+            dense = float(item.get("dense_score") or item.get("score") or 0.0)
+            bm25 = float(item.get("bm25_score") or 0.0)
+            rerank = float(item.get("rerank_score") or 0.0)
+            source_quality = float(payload.get("source_quality") or 0.5)
+            freshness = float(payload.get("freshness_score") or cls._freshness_score(payload))
+            status = cls._status_score(payload.get("status"))
+            item["final_score"] = round(
+                0.35 * dense
+                + 0.20 * bm25
+                + 0.30 * rerank
+                + 0.05 * source_quality
+                + 0.05 * freshness
+                + 0.05 * status,
+                6,
+            )
+        items.sort(key=lambda entry: entry.get("final_score", 0.0), reverse=True)
+        return items
+
+    @staticmethod
+    def _status_score(status: str | None) -> float:
+        value = str(status or "").lower()
+        if value in {"approved", "validated", "active", "current"}:
+            return 1.0
+        if value in {"superseded", "retired"}:
+            return 0.1
+        return 0.5
+
+    @staticmethod
+    def _freshness_score(payload: dict) -> float:
+        if payload.get("valid_to"):
+            return 0.2
+        return 0.7
 
     @staticmethod
     def _source_priority_bonus(source_type: str | None, priority_map: dict[str, int]) -> float:

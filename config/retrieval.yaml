@@ -2,9 +2,9 @@ retrieval:
   default_top_n: 20
   default_top_k: 5
   collections:
-    knowledge: financial_knowledge
-    memory: financial_memory
-    decision_trace: financial_decision_trace
+    knowledge: financial_knowledge_v2_bge_m3
+    memory: financial_memory_v2_bge_m3
+    decision_trace: financial_decision_trace_v2_bge_m3
   status_weight:
     approved: 1.0
     validated: 1.0
@@ -21,4 +21,3 @@ retrieval:
   filters:
     exclude_deleted: true
     exclude_rejected: true
-

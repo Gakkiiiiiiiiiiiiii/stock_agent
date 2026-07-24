@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 
 LIBRARY_PATH = "config/factor_library.yaml"
 MAX_CORRELATION = 0.9  # 与库内 active 因子面板逐日截面相关绝对值上限，超过视为重复
+ACTIVE_STATUS = "active"
+RESEARCH_STATUS = "UNIT_VALIDATED"
+LEGACY_UNVERIFIED_STATUS = "LEGACY_UNVERIFIED"
 
 
 def _default_path() -> Path:
@@ -92,7 +95,10 @@ def add_factor(
     horizon: int,
     llm_model: str = "",
 ) -> dict:
-    """追加入库条目并返回该条目。"""
+    """追加入库条目并返回该条目。
+
+    新挖出的因子只完成了公式校验和样本内评估，不能直接进入 active。
+    """
     entry = {
         "id": next_factor_id(library),
         "rpn": list(rpn),
@@ -103,16 +109,36 @@ def add_factor(
         "horizon": horizon,
         "discovered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "llm_model": llm_model,
-        "status": "active",
+        "status": RESEARCH_STATUS,
+        "validation_stage": RESEARCH_STATUS,
     }
     library.setdefault("factors", []).append(entry)
     return entry
 
 
 def active_factors(library: dict, limit: int | None = None) -> list[dict]:
-    factors = [f for f in library.get("factors", []) if f.get("status") == "active"]
+    factors = [f for f in library.get("factors", []) if f.get("status") == ACTIVE_STATUS]
     factors.sort(key=lambda f: (f.get("metrics") or {}).get("fitness", float("-inf")), reverse=True)
     return factors[:limit] if limit else factors
 
 
-__all__ = ["load_library", "save_library", "add_factor", "active_factors", "is_duplicate", "next_factor_id"]
+def research_validated_factors(library: dict, limit: int | None = None) -> list[dict]:
+    """返回可用于研究预检的因子，不包含旧版未核验因子。"""
+    allowed = {ACTIVE_STATUS, RESEARCH_STATUS}
+    factors = [f for f in library.get("factors", []) if f.get("status") in allowed]
+    factors.sort(key=lambda f: (f.get("metrics") or {}).get("fitness", float("-inf")), reverse=True)
+    return factors[:limit] if limit else factors
+
+
+__all__ = [
+    "load_library",
+    "save_library",
+    "add_factor",
+    "active_factors",
+    "research_validated_factors",
+    "is_duplicate",
+    "next_factor_id",
+    "ACTIVE_STATUS",
+    "RESEARCH_STATUS",
+    "LEGACY_UNVERIFIED_STATUS",
+]

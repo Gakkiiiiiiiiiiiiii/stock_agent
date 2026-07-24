@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
+import time
 from collections.abc import Callable
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
+from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
     content_server,
     factor_mining_server,
@@ -26,6 +29,8 @@ ToolExecutor = Callable[[dict[str, Any]], dict[str, Any]]
 class ClaudeToolRegistry:
     def __init__(self, analysis_model_client: AnalysisModelClient | None = None) -> None:
         self.analysis_model_client = analysis_model_client or AnalysisModelClient()
+        self.proposals = ProposalStore()
+        self.auditor = ToolAuditor()
         self._tools: dict[str, tuple[dict[str, Any], ToolExecutor]] = {
             "get_kline": (
                 {
@@ -75,6 +80,38 @@ class ClaudeToolRegistry:
                     },
                 },
                 lambda payload: technical_factor_server.calc_technical_indicators(**payload),
+            ),
+            "calc_profile_indicators": (
+                {
+                    "name": "calc_profile_indicators",
+                    "description": "Calculate versioned technical profile indicators with profile hash and data metadata.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {"type": "string"},
+                            "profile": {"type": "string"},
+                            "end_date": {"type": "string"},
+                        },
+                        "required": ["symbol"],
+                    },
+                },
+                lambda payload: technical_factor_server.calc_profile_indicators(**payload),
+            ),
+            "evaluate_technical_rules": (
+                {
+                    "name": "evaluate_technical_rules",
+                    "description": "Evaluate approved technical rule-pack DSL with three-valued logic and node evidence.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "symbol": {"type": "string"},
+                            "rule_pack": {"type": "string"},
+                            "end_date": {"type": "string"},
+                        },
+                        "required": ["symbol"],
+                    },
+                },
+                lambda payload: technical_factor_server.evaluate_technical_rules(**payload),
             ),
             "detect_pattern_signal": (
                 {
@@ -406,6 +443,7 @@ class ClaudeToolRegistry:
                 lambda payload: factor_mining_server.scan_alpha_factors(**payload),
             ),
         }
+        self._policies: dict[str, ToolPolicy] = self._default_policies()
 
     def anthropic_tools(self) -> list[dict[str, Any]]:
         return [item[0] for item in self._tools.values()]
@@ -434,8 +472,42 @@ class ClaudeToolRegistry:
     def execute(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
         if name not in self._tools:
             return {"error": f"unknown tool: {name}"}
+        payload = dict(payload or {})
+        policy = self._policies.get(name, ToolPolicy(PermissionLevel.READ))
+        confirmation_id = None
+        if policy.permission in {PermissionLevel.CONFIRMED_WRITE, PermissionLevel.ADMIN} or policy.requires_confirmation:
+            token = payload.pop("confirmation_token", None)
+            try:
+                confirmation_id = self.proposals.verify(name, payload, token)
+            except ToolPolicyError as exc:
+                self._audit(name, payload, policy, "denied", confirmation_id, 0, {"code": exc.code})
+                return {"error": {"code": exc.code, "message": exc.message}}
+        started = time.perf_counter()
         _, executor = self._tools[name]
-        return executor(payload)
+        try:
+            result = executor(payload)
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            result = self._limit_output(result, policy.output_limit_bytes)
+            self._audit(name, payload, policy, "succeeded", confirmation_id, elapsed_ms, result)
+            return result
+        except Exception as exc:  # noqa: BLE001
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            self._audit(name, payload, policy, "failed", confirmation_id, elapsed_ms, {"error": type(exc).__name__})
+            return {"error": {"code": "TOOL_EXECUTION_FAILED", "message": str(exc), "tool_name": name}}
+
+    def create_proposal(self, tool_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if tool_name not in self._tools:
+            return {"error": {"code": "UNKNOWN_TOOL", "message": f"unknown tool: {tool_name}"}}
+        policy = self._policies.get(tool_name, ToolPolicy(PermissionLevel.READ))
+        if policy.permission not in {PermissionLevel.CONFIRMED_WRITE, PermissionLevel.ADMIN}:
+            return {"error": {"code": "PROPOSAL_NOT_REQUIRED", "message": f"tool {tool_name} does not require write confirmation"}}
+        return self.proposals.create(tool_name, payload)
+
+    def approve_proposal(self, proposal_id: str) -> dict[str, Any]:
+        try:
+            return self.proposals.approve(proposal_id)
+        except ToolPolicyError as exc:
+            return {"error": {"code": exc.code, "message": exc.message}}
 
     def _ask_research_model(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.analysis_model_client.complete(
@@ -443,3 +515,57 @@ class ClaudeToolRegistry:
             system=payload.get("system"),
             temperature=float(payload.get("temperature", 0.2)),
         )
+
+    @staticmethod
+    def _default_policies() -> dict[str, ToolPolicy]:
+        compute = {
+            "walk_forward_validate",
+            "mine_factors",
+            "evaluate_factor",
+            "scan_alpha_factors",
+            "construct_portfolio",
+            "ingest_bilibili_video",
+        }
+        writes = {"upsert_theme_logic"}
+        policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
+            "get_kline", "get_market_snapshot", "get_sector_strength", "calc_technical_indicators",
+            "calc_profile_indicators", "evaluate_technical_rules",
+            "detect_pattern_signal", "scan_stock_signals", "search_theme_logic", "retrieve_relevant_context",
+            "get_theme_related_stocks", "evaluate_theme_trigger", "rank_themes_by_score", "get_market_regime",
+            "route_strategy", "adjust_signal", "evaluate_portfolio_risk", "ask_research_model",
+            "get_video_summary", "search_video_insights", "list_factor_library",
+        )}
+        policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
+        policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})
+        return policies
+
+    @staticmethod
+    def _limit_output(result: dict[str, Any], max_bytes: int) -> dict[str, Any]:
+        encoded = json.dumps(result, ensure_ascii=False, default=str)
+        if len(encoded.encode("utf-8")) <= max_bytes:
+            return result
+        return {
+            "warning": "TOOL_OUTPUT_TRUNCATED",
+            "summary": encoded[: max_bytes // 2],
+        }
+
+    def _audit(
+        self,
+        name: str,
+        payload: dict[str, Any],
+        policy: ToolPolicy,
+        status: str,
+        confirmation_id: str | None,
+        latency_ms: int,
+        response: dict[str, Any],
+    ) -> None:
+        self.auditor.log({
+            "tool_name": name,
+            "permission_level": policy.permission.value,
+            "request_payload": payload,
+            "response_summary": response,
+            "status": status,
+            "latency_ms": latency_ms,
+            "confirmation_id": confirmation_id,
+            "created_at": int(time.time()),
+        })

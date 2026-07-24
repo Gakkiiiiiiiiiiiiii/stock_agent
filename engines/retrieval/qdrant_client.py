@@ -32,14 +32,16 @@ class FinancialQdrantClient:
         }
         for collection_name, config in self.config["collections"].items():
             if collection_name not in collections:
+                vector_size = int(config["vector_size"])
                 create_response = requests.put(
                     f"{self.url}/collections/{collection_name}",
                     headers=self._headers(),
                     json={
                         "vectors": {
-                            "size": config["vector_size"],
+                            "size": vector_size,
                             "distance": config["distance"].upper(),
-                        }
+                        },
+                        "optimizers_config": {"default_segment_number": 2},
                     },
                     timeout=30,
                 )

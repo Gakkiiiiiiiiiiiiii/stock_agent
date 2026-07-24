@@ -15,7 +15,8 @@ TRADING_DAYS_PER_YEAR = 250
 
 # 入库阈值
 RANK_IC_THRESHOLD = 0.02
-ICIR_THRESHOLD = 0.2
+ICIR_THRESHOLD = 0.3
+TOPK_EXCESS_THRESHOLD = 0.0
 
 
 def _rank(values: np.ndarray) -> np.ndarray:
@@ -57,7 +58,8 @@ def evaluate_factor(
 
     ic_list: list[float] = []
     rank_ic_list: list[float] = []
-    topk_daily: list[tuple[int, float, set[int]]] = []  # (day, 组合日收益, 持仓索引集合)
+    topk_daily: list[tuple[int, float, float, set[int]]] = []  # (day, TopK日收益, 基准日收益, 持仓索引集合)
+    last_topk_day = start_d - horizon
 
     for d in range(start_d, n_days):
         f = factor_panel[:, d]
@@ -71,11 +73,19 @@ def evaluate_factor(
         ic_list.append(float(np.corrcoef(fv, rv)[0, 1]))
         rank_ic_list.append(float(np.corrcoef(_rank(fv), _rank(rv))[0, 1]))
 
-        # TopK 等权多头组合：按因子值取前 top_k，持有 horizon 日后的平均前瞻收益折算为日收益
+        if d - last_topk_day < horizon:
+            continue
+        last_topk_day = d
+
+        # TopK 等权多头组合：只统计 TopK 标的收益，不能退化为全截面均值。
         k = min(resolved_top_k, int(valid.sum()))
         idx = np.where(valid)[0]
-        top_idx = set(idx[np.argsort(fv)[-k:]].tolist())
-        topk_daily.append((d, float(np.mean(rv) / horizon), top_idx))
+        local_top = np.argsort(fv, kind="mergesort")[-k:]
+        top_global_idx = idx[local_top]
+        top_idx = set(top_global_idx.tolist())
+        top_return = float(np.nanmean(fwd[top_global_idx, d]))
+        benchmark_return = float(np.nanmean(rv))
+        topk_daily.append((d, top_return, benchmark_return, top_idx))
 
     total_days = n_days - start_d
     coverage = len(ic_list) / total_days if total_days else 0.0
@@ -96,30 +106,47 @@ def evaluate_factor(
         # 日 IC 无波动（如完美预测）：用 0.01 作为波动下限避免 ICIR 退化为 0
         icir = rank_ic / 0.01 if rank_ic != 0 else 0.0
 
-    # TopK 组合净值：逐日换仓，扣除双边换手成本
-    equity = 1.0
+    # TopK 辅助组合评价：使用每个信号日的非重叠前瞻收益序列做准入参考。
+    # 这里不把重叠 N 日收益简单除以 N 拼成逐日净值，避免伪净值。
+    topk_equity = 1.0
+    benchmark_equity = 1.0
     peak = 1.0
     max_dd = 0.0
     prev_holdings: set[int] | None = None
-    daily_returns: list[float] = []
-    for _, day_ret, holdings in topk_daily:
+    net_period_returns: list[float] = []
+    benchmark_period_returns: list[float] = []
+    for _, period_ret, benchmark_ret, holdings in topk_daily:
         turnover = 1.0 if prev_holdings is None else len(holdings - prev_holdings) / max(len(holdings), 1)
-        net_ret = day_ret - TURNOVER_COST * turnover
-        daily_returns.append(net_ret)
-        equity *= 1.0 + net_ret
-        peak = max(peak, equity)
-        max_dd = max(max_dd, 1.0 - equity / peak)
+        net_ret = period_ret - TURNOVER_COST * turnover
+        net_period_returns.append(net_ret)
+        benchmark_period_returns.append(benchmark_ret)
+        topk_equity *= 1.0 + net_ret
+        benchmark_equity *= 1.0 + benchmark_ret
+        peak = max(peak, topk_equity)
+        max_dd = max(max_dd, 1.0 - topk_equity / peak)
         prev_holdings = holdings
-    annual_return = float(np.mean(daily_returns) * TRADING_DAYS_PER_YEAR) if daily_returns else 0.0
+    periods_per_year = TRADING_DAYS_PER_YEAR / max(horizon, 1)
+    annual_return = float(np.mean(net_period_returns) * periods_per_year) if net_period_returns else 0.0
+    benchmark_annual_return = (
+        float(np.mean(benchmark_period_returns) * periods_per_year) if benchmark_period_returns else 0.0
+    )
+    topk_excess_annual_return = annual_return - benchmark_annual_return
 
     # 综合适应度：RankIC 为主，ICIR 衡量稳定性，TopK 年化衡量多头端可交易性
-    fitness = 5.0 * rank_ic + 0.5 * icir + annual_return
-    passed = rank_ic >= RANK_IC_THRESHOLD and icir >= ICIR_THRESHOLD
+    fitness = 5.0 * rank_ic + 0.5 * icir + topk_excess_annual_return
+    passed = (
+        rank_ic >= RANK_IC_THRESHOLD
+        and icir >= ICIR_THRESHOLD
+        and topk_excess_annual_return > TOPK_EXCESS_THRESHOLD
+        and annual_return > benchmark_annual_return
+    )
     return {
         "rank_ic": round(rank_ic, 4),
         "ic_mean": round(ic_mean, 4),
         "icir": round(icir, 4),
         "topk_annual_return": round(annual_return, 4),
+        "benchmark_annual_return": round(benchmark_annual_return, 4),
+        "topk_excess_annual_return": round(topk_excess_annual_return, 4),
         "topk_max_drawdown": round(max_dd, 4),
         "coverage": round(coverage, 4),
         "fitness": round(fitness, 4),
@@ -128,4 +155,10 @@ def evaluate_factor(
     }
 
 
-__all__ = ["evaluate_factor", "RANK_IC_THRESHOLD", "ICIR_THRESHOLD", "MIN_COVERAGE"]
+__all__ = [
+    "evaluate_factor",
+    "RANK_IC_THRESHOLD",
+    "ICIR_THRESHOLD",
+    "TOPK_EXCESS_THRESHOLD",
+    "MIN_COVERAGE",
+]

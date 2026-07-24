@@ -1,14 +1,121 @@
 from __future__ import annotations
 
-from hashlib import sha256
+import math
+import os
+from collections import Counter
+from dataclasses import dataclass
+from typing import Any
+
+import httpx
 
 
-class DeterministicEmbedder:
-    def __init__(self, vector_size: int = 64) -> None:
-        self.vector_size = vector_size
+@dataclass(frozen=True)
+class EmbeddingMetadata:
+    provider: str
+    model: str
+    dimension: int
+
+
+class EmbeddingError(RuntimeError):
+    pass
+
+
+class OpenAICompatibleEmbedder:
+    def __init__(
+        self,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        model: str | None = None,
+        dimension: int | None = None,
+        client: httpx.Client | None = None,
+    ) -> None:
+        self.base_url = (base_url or os.getenv("EMBEDDING_BASE_URL", "")).rstrip("/")
+        self.api_key = api_key or os.getenv("EMBEDDING_API_KEY", "")
+        self.model = model or os.getenv("EMBEDDING_MODEL", "Qwen3-Embedding")
+        self.dimension = int(dimension or os.getenv("EMBEDDING_DIMENSION", "1024"))
+        self.client = client or httpx.Client(timeout=60)
+        if not self.base_url:
+            raise EmbeddingError("EMBEDDING_BASE_URL is required for openai_compatible embedding provider")
+
+    @property
+    def metadata(self) -> EmbeddingMetadata:
+        return EmbeddingMetadata("openai_compatible", self.model, self.dimension)
 
     def embed(self, text: str) -> list[float]:
-        digest = sha256(text.encode("utf-8")).digest()
-        values = list(digest) * ((self.vector_size // len(digest)) + 1)
-        return [round(value / 255.0, 6) for value in values[: self.vector_size]]
+        headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
+        response = self.client.post(
+            f"{self.base_url}/embeddings",
+            headers=headers,
+            json={"model": self.model, "input": text},
+        )
+        response.raise_for_status()
+        data = response.json()
+        vector = data["data"][0]["embedding"]
+        if len(vector) != self.dimension:
+            raise EmbeddingError(f"embedding dimension mismatch: got {len(vector)}, expected {self.dimension}")
+        return [float(v) for v in vector]
 
+
+class LocalChineseNgramEmbedder:
+    """Deterministic lexical fallback for local tests; not a semantic model."""
+
+    def __init__(self, vector_size: int = 384, model: str = "local-chinese-ngram-v1") -> None:
+        self.vector_size = vector_size
+        self.model = model
+
+    @property
+    def metadata(self) -> EmbeddingMetadata:
+        return EmbeddingMetadata("local_ngram", self.model, self.vector_size)
+
+    def embed(self, text: str) -> list[float]:
+        tokens = _char_ngrams(text)
+        counts = Counter(tokens)
+        values = [0.0] * self.vector_size
+        for token, count in counts.items():
+            idx = _stable_index(token, self.vector_size)
+            values[idx] += float(count)
+        norm = math.sqrt(sum(v * v for v in values))
+        if norm <= 0:
+            return values
+        return [round(v / norm, 8) for v in values]
+
+
+def build_embedder(provider: str | None = None) -> OpenAICompatibleEmbedder | LocalChineseNgramEmbedder:
+    resolved = (provider or os.getenv("EMBEDDING_PROVIDER", "local_ngram")).strip().lower()
+    if resolved in {"openai", "openai_compatible", "compatible"}:
+        return OpenAICompatibleEmbedder()
+    if resolved in {"local", "local_ngram", "dev"}:
+        return LocalChineseNgramEmbedder(vector_size=int(os.getenv("EMBEDDING_DIMENSION", "384")))
+    raise EmbeddingError(f"unsupported embedding provider: {resolved}")
+
+
+def _char_ngrams(text: str) -> list[str]:
+    compact = "".join(str(text or "").lower().split())
+    if not compact:
+        return []
+    tokens = list(compact)
+    tokens.extend(compact[i : i + 2] for i in range(max(len(compact) - 1, 0)))
+    tokens.extend(compact[i : i + 3] for i in range(max(len(compact) - 2, 0)))
+    return tokens
+
+
+def _stable_index(token: str, size: int) -> int:
+    value = 2166136261
+    for char in token:
+        value ^= ord(char)
+        value = (value * 16777619) & 0xFFFFFFFF
+    return value % size
+
+
+# Backward-compatible alias for existing tests/imports.
+DeterministicEmbedder = LocalChineseNgramEmbedder
+
+
+__all__ = [
+    "EmbeddingMetadata",
+    "EmbeddingError",
+    "OpenAICompatibleEmbedder",
+    "LocalChineseNgramEmbedder",
+    "DeterministicEmbedder",
+    "build_embedder",
+]

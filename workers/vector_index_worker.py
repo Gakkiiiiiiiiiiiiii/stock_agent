@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 
 from engines.retrieval.chunker import chunk_text
-from engines.retrieval.embedder import DeterministicEmbedder
+from engines.retrieval.embedder import build_embedder
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from storage.bootstrap import create_all
 from storage.repositories.vector_repository import MemoryRepository, VectorMappingRepository, VectorTaskRepository
@@ -17,7 +17,8 @@ def process_one_task() -> bool:
     try:
         qdrant = FinancialQdrantClient()
         qdrant.ensure_collections()
-        embedder = DeterministicEmbedder()
+        embedder = build_embedder()
+        embedding_meta = embedder.metadata
         if task.postgres_table != "memory_record":
             raise ValueError(f"unsupported postgres_table: {task.postgres_table}")
         memory = MemoryRepository().get(task.postgres_id)
@@ -57,6 +58,9 @@ def process_one_task() -> bool:
                 "chunk_id": f"memory_record_{memory.id}_{chunk['chunk_id']}",
                 "content_hash": chunk["content_hash"],
                 "text": chunk["text"],
+                "embedding_provider": embedding_meta.provider,
+                "embedding_model": embedding_meta.model,
+                "embedding_dimension": embedding_meta.dimension,
             }
             point_id = qdrant.upsert_chunk(task.target_collection, embedder.embed(chunk["text"]), payload)
             VectorMappingRepository().upsert(
@@ -66,8 +70,8 @@ def process_one_task() -> bool:
                 qdrant_collection=task.target_collection,
                 qdrant_point_id=point_id,
                 content_hash=chunk["content_hash"],
-                embedding_model="deterministic-local",
-                reranker_model="local-lexical-reranker",
+                embedding_model=f"{embedding_meta.provider}:{embedding_meta.model}:{embedding_meta.dimension}",
+                reranker_model="local-chinese-ngram-reranker",
             )
         task_repo.mark_success(task.id)
     except Exception as exc:

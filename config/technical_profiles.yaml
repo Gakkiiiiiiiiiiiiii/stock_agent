@@ -1,0 +1,35 @@
+profiles:
+  core_daily_v1:
+    version: 1.0.0
+    frequency: 1d
+    minimum_bars: 260
+    price_adjustment: front
+    indicators:
+      - name: sma
+        alias: ma5
+        params: {window: 5, field: close}
+      - name: sma
+        alias: ma10
+        params: {window: 10, field: close}
+      - name: sma
+        alias: ma20
+        params: {window: 20, field: close}
+      - name: sma
+        alias: ma60
+        params: {window: 60, field: close}
+      - name: ema
+        alias: ema10
+        params: {window: 10, field: close}
+      - name: macd
+        alias: macd_12_26_9
+        params: {fast: 12, slow: 26, signal: 9, field: close}
+      - name: rolling_std
+        alias: volatility20
+        params: {window: 20, field: return}
+      - name: volume_ma
+        alias: volume_ma20
+        params: {window: 20}
+      - name: volume_ratio
+        alias: volume_ratio20
+        params: {window: 20}
+    output_precision: 8

@@ -6,6 +6,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from financial_agent.utils import project_root
 
 
@@ -24,6 +26,7 @@ class QmtBridgeClient:
     """通过独立 Python 3.6 进程访问 xtquant。"""
 
     def __init__(self) -> None:
+        self.base_url = os.getenv("QMT_BRIDGE_BASE_URL", "").strip().rstrip("/")
         self.python_path = self._resolve_path(
             os.getenv("QMT_BRIDGE_PYTHON"),
             DEFAULT_QUANT_ROOT / ".venv-qmt36" / "Scripts" / "python.exe",
@@ -43,11 +46,16 @@ class QmtBridgeClient:
         self.account_id = os.getenv("QMT_ACCOUNT_ID", "").strip()
 
     def healthcheck(self) -> dict[str, Any]:
+        if self.base_url:
+            return self._http_get("health")
         return self._run("health")
 
     def get_quotes(self, symbols: list[str]) -> dict[str, Any]:
         if not symbols:
             return {}
+        if self.base_url:
+            payload = self._http_post("quote", {"symbols": symbols}, timeout_seconds=BRIDGE_TIMEOUT_SECONDS)
+            return payload.get("quotes", {}) or {}
         payload = self._run("quote", "--symbols", ",".join(symbols))
         return payload.get("quotes", {}) or {}
 
@@ -57,6 +65,13 @@ class QmtBridgeClient:
         sector_prefix: str = "GICS2",
         only_a_share: bool = True,
     ) -> list[dict[str, Any]]:
+        if self.base_url:
+            payload = self._http_post(
+                "industry-map",
+                {"symbols": symbols or [], "sector_prefix": sector_prefix, "only_a_share": only_a_share},
+                timeout_seconds=INDUSTRY_MAP_TIMEOUT_SECONDS,
+            )
+            return payload.get("rows", []) or []
         payload = self._run(
             "industry-map",
             "--symbols",
@@ -81,6 +96,21 @@ class QmtBridgeClient:
     ) -> list[dict[str, Any]]:
         if not symbols:
             return []
+        if self.base_url:
+            payload = self._http_post(
+                "history",
+                {
+                    "symbols": symbols,
+                    "period": period,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "dividend_type": dividend_type,
+                    "fill_data": fill_data,
+                    "prefer_cache_first": prefer_cache_first,
+                },
+                timeout_seconds=HISTORY_TIMEOUT_SECONDS,
+            )
+            return payload.get("rows", []) or []
         payload = self._run(
             "history",
             "--symbols",
@@ -100,6 +130,28 @@ class QmtBridgeClient:
             timeout_seconds=HISTORY_TIMEOUT_SECONDS,
         )
         return payload.get("rows", []) or []
+
+    def _http_get(self, path: str, timeout_seconds: int = BRIDGE_TIMEOUT_SECONDS) -> dict[str, Any]:
+        try:
+            response = httpx.get(f"{self.base_url}/{path}", timeout=timeout_seconds)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:  # noqa: BLE001
+            raise QmtBridgeError(f"QMT HTTP bridge request failed: {exc}") from exc
+        if not payload.get("ok"):
+            raise QmtBridgeError(payload.get("error", "QMT HTTP bridge returned failure"))
+        return payload.get("data", {}) or {}
+
+    def _http_post(self, path: str, payload: dict[str, Any], timeout_seconds: int) -> dict[str, Any]:
+        try:
+            response = httpx.post(f"{self.base_url}/{path}", json=payload, timeout=timeout_seconds)
+            response.raise_for_status()
+            data = response.json()
+        except Exception as exc:  # noqa: BLE001
+            raise QmtBridgeError(f"QMT HTTP bridge request failed: {exc}") from exc
+        if not data.get("ok"):
+            raise QmtBridgeError(data.get("error", "QMT HTTP bridge returned failure"))
+        return data.get("data", {}) or {}
 
     def _run(self, command: str, *extra_args: str, timeout_seconds: int | None = None) -> dict[str, Any]:
         self._ensure_runtime_paths()

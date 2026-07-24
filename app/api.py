@@ -5,17 +5,19 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import date as Date
+from datetime import datetime
 from queue import Queue
 from threading import Thread
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
 from app.admin_service import AdminContentService
 from app.agent_orchestrator import AgentOrchestrator
 from app.chat_history_service import ChatHistoryService
 from app.dependencies import init_application
+from app.security import render_metrics, security_and_trace_middleware
 from engines.content.video_ingest_service import VideoIngestService
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
 from financial_agent.models import Position, ThemeLogic, TradeReviewInput
@@ -31,6 +33,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Financial Analysis Agent", version="0.1.0", lifespan=lifespan)
+app.middleware("http")(security_and_trace_middleware)
 orchestrator = AgentOrchestrator()
 admin_service = AdminContentService()
 chat_history_service = ChatHistoryService()
@@ -69,21 +72,29 @@ class RetrievalRequest(BaseModel):
 
 
 class MarketRegimeRequest(BaseModel):
-    up_count: int = 2400
-    down_count: int = 1800
-    index_return_5d: float = 0.01
-    index_return_20d: float = 0.03
-    top_theme_strength: float = 72
-    limit_up_count: int = 28
-    index_volatility: float = 0.02
-    index_drawdown_20d: float = -0.04
-    limit_down_count: int = 8
+    snapshot: dict | None = None
+    as_of: datetime | None = None
+    up_count: int | None = None
+    down_count: int | None = None
+    index_return_5d: float | None = None
+    index_return_20d: float | None = None
+    top_theme_strength: float | None = None
+    limit_up_count: int | None = None
+    index_volatility: float | None = None
+    index_volatility_20d: float | None = None
+    index_drawdown_20d: float | None = None
+    limit_down_count: int | None = None
     previous_regime: str | None = None
 
 
 class KnowledgeDocUpdateRequest(BaseModel):
     path: str
     content: str
+
+
+class ToolProposalRequest(BaseModel):
+    tool_name: str
+    payload: dict
 
 
 class SkillUpdateRequest(BaseModel):
@@ -122,6 +133,21 @@ class BilibiliSummarizeRequest(BaseModel):
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/health/live")
+def health_live() -> dict:
+    return {"status": "ok"}
+
+
+@app.get("/health/ready")
+def health_ready() -> dict:
+    return {"status": "ok", "checks": {"api": "ok"}}
+
+
+@app.get("/metrics")
+def metrics() -> PlainTextResponse:
+    return PlainTextResponse(render_metrics(), media_type="text/plain")
 
 
 @app.get("/admin")
@@ -369,6 +395,36 @@ def market_regime(request: MarketRegimeRequest) -> dict:
 @app.post("/api/v1/knowledge/theme")
 def upsert_theme(theme: ThemeLogic) -> dict:
     return upsert_theme_logic_mcp(theme.model_dump())
+
+
+@app.post("/api/v2/proposals")
+def create_tool_proposal(request: ToolProposalRequest) -> dict:
+    return orchestrator.claude_agent.tool_registry.create_proposal(request.tool_name, request.payload)
+
+
+@app.get("/api/v2/proposals/{proposal_id}")
+def get_tool_proposal(proposal_id: str) -> dict:
+    proposal = orchestrator.claude_agent.tool_registry.proposals.get(proposal_id)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="proposal not found")
+    return proposal
+
+
+@app.post("/api/v2/proposals/{proposal_id}/approve")
+def approve_tool_proposal(proposal_id: str) -> dict:
+    return orchestrator.claude_agent.tool_registry.approve_proposal(proposal_id)
+
+
+@app.get("/api/v2/audit/tools")
+def list_tool_audit(limit: int = 100) -> dict:
+    path = orchestrator.claude_agent.tool_registry.auditor.path
+    if not path.exists():
+        return {"items": []}
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines()[-limit:]:
+        if line.strip():
+            rows.append(json.loads(line))
+    return {"items": rows}
 
 
 @app.get("/api/v1/admin/themes")

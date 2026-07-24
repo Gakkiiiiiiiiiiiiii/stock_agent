@@ -23,7 +23,7 @@ def detect_b1(
     lows: Sequence[float],
     volumes: Sequence[float],
     indicators: dict[str, Sequence[float | None]],
-    sector_strength: float = 50,
+    sector_strength: float | None = 50,
     rps_score: float | None = None,
 ) -> SignalResult:
     close = closes[-1]
@@ -54,7 +54,9 @@ def detect_b1(
     if kdj_j is not None and kdj_j < 30:
         score += 14
         evidence.append("KDJ J 值处于低位")
-    if sector_strength >= 60:
+    if sector_strength is None:
+        risk.append("行业或主题强度缺失，信号置信度降低")
+    elif sector_strength >= 60:
         score += 10
         evidence.append("行业或主题强度不弱")
     else:
@@ -80,7 +82,7 @@ def detect_b2(
     highs: Sequence[float],
     volumes: Sequence[float],
     indicators: dict[str, Sequence[float | None]],
-    sector_strength: float = 50,
+    sector_strength: float | None = 50,
 ) -> SignalResult:
     close = closes[-1]
     prev_close = closes[-2] if len(closes) >= 2 else close
@@ -106,7 +108,9 @@ def detect_b2(
     if ma20 is not None and close > ma20:
         score += 10
         evidence.append("股价站上 MA20")
-    if sector_strength >= 60:
+    if sector_strength is None:
+        risk.append("行业同步性数据缺失")
+    elif sector_strength >= 60:
         score += 15
         evidence.append("行业或主题同步走强")
     else:
@@ -132,7 +136,7 @@ def detect_b3(
     highs: Sequence[float],
     volumes: Sequence[float],
     indicators: dict[str, Sequence[float | None]],
-    theme_strength: float = 50,
+    theme_strength: float | None = 50,
 ) -> SignalResult:
     close = closes[-1]
     ma10 = _last(indicators["ma10"])
@@ -157,7 +161,9 @@ def detect_b3(
         evidence.append("量能没有明显失控")
     else:
         risk.append("量能过热或数据不足")
-    if theme_strength >= 65:
+    if theme_strength is None:
+        risk.append("主题强度数据缺失")
+    elif theme_strength >= 65:
         score += 15
         evidence.append("主题仍在持续")
     if close / recent_high > 0.98 and volume_ratio20 is not None and volume_ratio20 > 1.8:
@@ -206,8 +212,8 @@ def detect_patterns(
     volumes: Sequence[float],
     indicators: dict[str, Sequence[float | None]],
     patterns: Sequence[str] | None = None,
-    sector_strength: float = 50,
-    theme_strength: float = 50,
+    sector_strength: float | None = 50,
+    theme_strength: float | None = 50,
     rps_score: float | None = None,
 ) -> list[SignalResult]:
     selected = set(patterns or ["B1", "B2", "B3", "MACD_TRIPLE_GOLDEN"])
@@ -221,4 +227,3 @@ def detect_patterns(
     if "MACD_TRIPLE_GOLDEN" in selected:
         results.append(detect_macd_triple_golden(indicators))
     return results
-

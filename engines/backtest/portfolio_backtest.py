@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 import numpy as np
 
@@ -20,6 +21,10 @@ from engines.backtest.execution import (
 
 # 调仓时忽略的价值偏差阈值（元），避免无意义的碎单
 _MIN_TRADE_VALUE = 1.0
+
+
+class LookaheadViolation(ValueError):
+    code = "LOOKAHEAD_VIOLATION"
 
 
 def _valid_price(value: float) -> bool:
@@ -70,7 +75,17 @@ class _PortfolioState:
         if value <= _MIN_TRADE_VALUE:
             return 0.0
         cost = cost_of(value, "buy")
-        shares = value / price
+        shares = _round_buy_shares(symbols[idx], value / price)
+        value = shares * price
+        if shares <= 0 or value <= _MIN_TRADE_VALUE:
+            return 0.0
+        cost = cost_of(value, "buy")
+        if value + cost > self.cash + 1e-9:
+            shares = _round_buy_shares(symbols[idx], max(self.cash - cost, 0.0) / price)
+            value = shares * price
+            cost = cost_of(value, "buy")
+            if shares <= 0 or value + cost > self.cash + 1e-9:
+                return 0.0
         self.cash -= value + cost
         book = self.books.setdefault(idx, PositionBook())
         book.add(shares, date_idx)
@@ -93,6 +108,7 @@ def run_topk_backtest(
     rebalance_interval: int = 5,
     top_k: int | None = None,
     initial_cash: float = 1_000_000.0,
+    score_metadata: Sequence[dict] | None = None,
 ) -> dict:
     """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。"""
     scores = np.asarray(scores, dtype=float)
@@ -121,6 +137,7 @@ def run_topk_backtest(
         return price if _valid_price(price) else last_close[idx]
 
     for t in range(n_days):
+        _check_score_time_contract(t, dates, score_metadata)
         # 更新最近有效收盘价
         for i in range(n_symbols):
             if _valid_price(closes[i, t]):
@@ -165,6 +182,38 @@ def run_topk_backtest(
         "holdings_log": holdings_log,
         "dates": list(dates),
     }
+
+
+def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None) -> None:
+    if not score_metadata:
+        return
+    if t >= len(score_metadata) or not score_metadata[t]:
+        return
+    meta = score_metadata[t]
+    available_at = _parse_dt(meta.get("available_at"))
+    execution_time = _parse_dt(meta.get("execution_time") or meta.get("execution_from"))
+    if available_at is None or execution_time is None:
+        raise LookaheadViolation(f"score metadata missing available_at/execution_time at {dates[t]}")
+    if available_at >= execution_time:
+        raise LookaheadViolation(
+            f"LOOKAHEAD_VIOLATION at {dates[t]}: available_at={available_at.isoformat()} "
+            f"execution_time={execution_time.isoformat()}"
+        )
+
+
+def _parse_dt(value) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _round_buy_shares(symbol: str, shares: float) -> float:
+    lot_size = 100
+    if str(symbol).split(".")[0].startswith(("8", "4", "920")):
+        lot_size = 100
+    return float(int(shares // lot_size) * lot_size)
 
 
 def _rebalance_day(
@@ -237,7 +286,7 @@ def _rebalance_day(
         price = opens[idx, t] if _valid_price(opens[idx, t]) else last_close[idx]
         if _valid_price(price):
             equity_open += shares * price
-    target_value = equity_open / len(target)
+    target_value = equity_open * 0.99 / len(target)
 
     def current_value(idx: int) -> float:
         price = opens[idx, t] if _valid_price(opens[idx, t]) else last_close[idx]

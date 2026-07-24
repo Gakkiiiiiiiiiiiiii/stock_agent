@@ -28,6 +28,27 @@ docker compose up --build
 - PostgreSQL: `localhost:5433`
 - Redis: `localhost:6379`
 
+v2.1 Docker 栈默认把 PostgreSQL、Redis、Qdrant 端口绑定在 `127.0.0.1`，容器间通过服务名访问。首次部署请从 `.env.example` 复制 `.env`，修改 `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`QDRANT_API_KEY`、模型 API Key 等默认值。
+
+基础栈：
+
+```powershell
+.\scripts\start-docker-stack.ps1 -Build
+```
+
+如果要同时用 Docker 部署 OpenAI-compatible embedding 服务：
+
+```powershell
+# .env 中设置：
+# EMBEDDING_PROVIDER=openai_compatible
+# EMBEDDING_BASE_URL=http://embedding:8001/v1
+# EMBEDDING_MODEL=BAAI/bge-m3
+# EMBEDDING_DIMENSION=1024
+.\scripts\start-docker-stack.ps1 -WithEmbedding -Build
+```
+
+Qdrant collection 已按 embedding 版本命名为 `financial_*_v2_bge_m3`，避免和旧 64 维本地向量混写。切换 embedding 模型或维度时应新建 collection 版本。
+
 Docker 部署下，以下目录已绑定到宿主机，管理台更新会直接写回当前工程目录：
 
 - `./knowledge_base`

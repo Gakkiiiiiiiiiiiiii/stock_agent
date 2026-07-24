@@ -60,6 +60,7 @@ def test_scan_alpha_factors_skips_nan_symbols(monkeypatch):
 
 
 def test_scan_stock_signals_appends_alpha_top(monkeypatch):
+    monkeypatch.setenv("ENABLE_UNVERIFIED_ALPHA_TOP", "true")
     symbols = [f"60000{i}.SH" for i in range(10)]
 
     def fake_detect(symbol, date=None, patterns=None):
@@ -87,6 +88,22 @@ def test_scan_stock_signals_appends_alpha_top(monkeypatch):
     # 非 top 标的不追加信号
     other = next(item for item in items if item["symbol"] == "600005.SH")
     assert [s for s in other["signals"] if s["pattern"] == "ALPHA_TOP"] == []
+
+
+def test_scan_stock_signals_disables_alpha_top_by_default(monkeypatch):
+    symbols = ["600000.SH"]
+
+    def fake_detect(symbol, date=None, patterns=None):
+        return {"symbol": symbol, "date": "2026-07-17", "signals": []}
+
+    def fake_scan(symbols_arg=None):
+        return {"items": [{"symbol": "600000.SH", "alpha_score": 1.0, "alpha_rank": 1, "factor_count": 2}]}
+
+    monkeypatch.delenv("ENABLE_UNVERIFIED_ALPHA_TOP", raising=False)
+    monkeypatch.setattr(technical_factor_server, "detect_pattern_signal", fake_detect)
+    monkeypatch.setattr(factor_mining_server, "scan_alpha_factors", fake_scan)
+    result = technical_factor_server.scan_stock_signals(symbols)
+    assert result["items"][0]["signals"] == []
 
 
 def test_scan_stock_signals_tolerates_factor_failure(monkeypatch):

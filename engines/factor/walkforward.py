@@ -20,7 +20,7 @@ import numpy as np
 from engines.backtest.metrics import calc_portfolio_metrics
 from engines.backtest.portfolio_backtest import run_topk_backtest
 from engines.factor.alpha import compose_alpha_scores
-from engines.factor.library import active_factors, load_library
+from engines.factor.library import load_library, research_validated_factors
 from engines.factor.miner import FactorMiner
 
 logger = logging.getLogger(__name__)
@@ -110,7 +110,7 @@ def run_walkforward(
                 prev_lib = cur_lib
             else:
                 library = load_library(prev_lib) if prev_lib else {"factors": []}
-            factors = active_factors(library)
+            factors = research_validated_factors(library)
 
             # T 日截面等权合成 alpha_score（因子面板只含 ≤T 的列，无显性前视）
             scores, factor_count = compose_alpha_scores(sub_panel, factors)
