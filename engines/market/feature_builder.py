@@ -65,6 +65,8 @@ class MarketFeatureBuilder:
             "high_position_pool_size": snapshot.get("high_position_pool_size"),
             "high_position_valid_count": snapshot.get("high_position_valid_count"),
             "high_position_quote_coverage": snapshot.get("high_position_quote_coverage"),
+            "high_position_prev_close_mismatch_count": snapshot.get("high_position_prev_close_mismatch_count"),
+            "high_position_prev_close_mismatch_ratio": snapshot.get("high_position_prev_close_mismatch_ratio"),
             "high_position_quality_flags": list(snapshot.get("high_position_quality_flags") or []),
             "estimated_high_position_loss_ratio": estimated_loss_ratio,
             "estimated_high_position_limit_down_ratio": estimated_limit_down_ratio,

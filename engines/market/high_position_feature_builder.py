@@ -7,11 +7,7 @@ from typing import Any
 import numpy as np
 
 from engines.backtest.execution import price_limit_pct
-
-
-MIN_HIGH_POSITION_POOL_SIZE = 10
-MIN_HIGH_POSITION_VALID_COUNT = 10
-MIN_HIGH_POSITION_COVERAGE = 0.8
+from financial_agent.research_config import get_research_config
 
 
 @dataclass(frozen=True)
@@ -23,6 +19,8 @@ class HighPositionFeatures:
     high_position_pool_size: int
     high_position_valid_count: int
     high_position_quote_coverage: float | None
+    high_position_prev_close_mismatch_count: int
+    high_position_prev_close_mismatch_ratio: float | None
     high_position_quality_flags: list[str]
 
     def as_dict(self) -> dict[str, Any]:
@@ -68,8 +66,8 @@ class HighPositionFeatureBuilder:
                     period="1d",
                     start_time=start_day.strftime("%Y%m%d"),
                     end_time=end_day.strftime("%Y%m%d"),
-                    dividend_type="front",
-                    fill_data=True,
+                    dividend_type="none",
+                    fill_data=False,
                     prefer_cache_first=True,
                 )
             )
@@ -88,7 +86,8 @@ class HighPositionFeatureBuilder:
             ret20 = closes[-1] / closes[-21] - 1 if len(closes) > 20 and closes[-21] > 0 else 0.0
             ret60 = closes[-1] / closes[-61] - 1 if len(closes) > 60 and closes[-61] > 0 else ret20
             high60 = float(np.max(highs[-60:])) if len(highs) >= 60 else float(np.max(closes))
-            near_high = closes[-1] >= high60 * 0.95 if high60 > 0 else False
+            config = get_research_config().high_position
+            near_high = closes[-1] >= high60 * config.near_high_ratio if high60 > 0 else False
             recent_limit = _recent_limit_up(symbol, pool_records[-10:])
             amount_mean = float(np.nanmean(amounts[-20:])) if len(amounts) >= 20 else 0.0
             amount_ratio = float(amounts[-1] / amount_mean) if amount_mean > 0 else 0.0
@@ -108,9 +107,10 @@ class HighPositionFeatureBuilder:
         if not stats:
             return _empty(["HIGH_POSITION_FEATURES_UNAVAILABLE"])
 
-        ret20_cut = _quantile([item["ret20"] for item in stats], 0.9)
-        ret60_cut = _quantile([item["ret60"] for item in stats], 0.9)
-        amount_cut = _quantile([item["amount_ratio"] for item in stats], 0.8)
+        config = get_research_config().high_position
+        ret20_cut = _quantile([item["ret20"] for item in stats], config.ret20_quantile)
+        ret60_cut = _quantile([item["ret60"] for item in stats], config.ret60_quantile)
+        amount_cut = _quantile([item["amount_ratio"] for item in stats], config.amount_ratio_quantile)
         pool = []
         for item in stats:
             return_leader = item["ret20"] >= ret20_cut or item["ret60"] >= ret60_cut
@@ -120,12 +120,12 @@ class HighPositionFeatureBuilder:
                 pool.append(item)
 
         flags: list[str] = []
-        if len(pool) < MIN_HIGH_POSITION_POOL_SIZE:
+        if len(pool) < config.min_pool_size:
             flags.append("HIGH_POSITION_POOL_TOO_SMALL")
         if not pool:
             return _empty(flags or ["HIGH_POSITION_FEATURES_UNAVAILABLE"])
 
-        loss = limit_down = breakdown = big_negative = valid = 0
+        loss = limit_down = breakdown = big_negative = valid = mismatch = 0
         for item in pool:
             symbol = item["symbol"]
             quote = quotes.get(symbol) or {}
@@ -134,15 +134,16 @@ class HighPositionFeatureBuilder:
             last_price = _float(quote.get("last_price") or quote.get("price")) or _float(outcome_record.get("close"))
             quote_prev_close = _float(quote.get("last_close") or quote.get("pre_close"))
             open_price = _float(quote.get("open")) or _float(outcome_record.get("open"))
-            if quote_prev_close > 0 and prev_close > 0 and abs(quote_prev_close / prev_close - 1) > 0.01:
-                flags.append("HIGH_POSITION_PREV_CLOSE_MISMATCH")
+            if quote_prev_close > 0 and prev_close > 0 and abs(quote_prev_close / prev_close - 1) > config.prev_close_mismatch_threshold:
+                mismatch += 1
             if last_price <= 0 or prev_close <= 0:
                 continue
             valid += 1
-            pct = last_price / prev_close - 1
+            denominator = quote_prev_close if quote_prev_close > 0 else prev_close
+            pct = last_price / denominator - 1
             if pct < 0:
                 loss += 1
-            if pct <= -price_limit_pct(symbol) + 0.002:
+            if pct <= -price_limit_pct(symbol, is_st=_is_st_quote(quote)) + 0.002:
                 limit_down += 1
             if last_price < item["ma20"]:
                 breakdown += 1
@@ -150,17 +151,24 @@ class HighPositionFeatureBuilder:
                 big_negative += 1
 
         coverage = valid / len(pool) if pool else None
-        if valid < MIN_HIGH_POSITION_VALID_COUNT:
+        mismatch_ratio = mismatch / len(pool) if pool else None
+        if valid < config.min_valid_count:
             flags.append("HIGH_POSITION_VALID_COUNT_LOW")
-        if coverage is not None and coverage < MIN_HIGH_POSITION_COVERAGE:
+        if coverage is not None and coverage < config.min_quote_coverage:
             flags.append("HIGH_POSITION_QUOTE_COVERAGE_LOW")
+        if mismatch_ratio is not None and mismatch_ratio > config.max_mismatch_ratio:
+            flags.append("HIGH_POSITION_PREV_CLOSE_MISMATCH")
         flags = sorted(set(flags))
         if (
-            len(pool) < MIN_HIGH_POSITION_POOL_SIZE
-            or valid < MIN_HIGH_POSITION_VALID_COUNT
-            or (coverage is not None and coverage < MIN_HIGH_POSITION_COVERAGE)
+            len(pool) < config.min_pool_size
+            or valid < config.min_valid_count
+            or (coverage is not None and coverage < config.min_quote_coverage)
+            or (mismatch_ratio is not None and mismatch_ratio > config.max_mismatch_ratio)
         ):
-            return HighPositionFeatures(None, None, None, None, len(pool), valid, _round_or_none(coverage), flags)
+            return HighPositionFeatures(
+                None, None, None, None, len(pool), valid, _round_or_none(coverage),
+                mismatch, _round_or_none(mismatch_ratio), flags,
+            )
 
         return HighPositionFeatures(
             high_position_loss_ratio=round(loss / valid, 6),
@@ -170,12 +178,14 @@ class HighPositionFeatureBuilder:
             high_position_pool_size=len(pool),
             high_position_valid_count=valid,
             high_position_quote_coverage=_round_or_none(coverage),
+            high_position_prev_close_mismatch_count=mismatch,
+            high_position_prev_close_mismatch_ratio=_round_or_none(mismatch_ratio),
             high_position_quality_flags=flags,
         )
 
 
 def _empty(flags: list[str]) -> HighPositionFeatures:
-    return HighPositionFeatures(None, None, None, None, 0, 0, None, sorted(set(flags)))
+    return HighPositionFeatures(None, None, None, None, 0, 0, None, 0, None, sorted(set(flags)))
 
 
 def _split_pool_and_outcome(
@@ -253,6 +263,11 @@ def _float(value) -> float:
 
 def _round_or_none(value: float | None) -> float | None:
     return None if value is None else round(float(value), 6)
+
+
+def _is_st_quote(payload: dict[str, Any]) -> bool:
+    text = str(payload.get("name") or payload.get("stock_name") or payload.get("instrument_name") or "")
+    return "ST" in text.upper() or "＊ST" in text.upper() or "*ST" in text.upper()
 
 
 def _batched(items: list[str], size: int) -> list[list[str]]:

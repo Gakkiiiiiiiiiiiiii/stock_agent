@@ -1,5 +1,8 @@
 data_split:
-  discovery_ratio: 0.7
+  total_days: 500
+  discovery_days: 250
+  final_oos_days: 100
+  max_warmup_days: 130
   final_oos_withheld_from_prompt: true
 
 evaluation:
@@ -10,6 +13,8 @@ evaluation:
   min_topk_excess_annual_return: 0.0
 
 purged_walkforward:
+  n_windows: 3
+  embargo_days: 5
   min_window_pass_ratio: 0.6
   min_positive_rank_ic_ratio: 0.6
   min_oos_excess_return: 0.0
@@ -24,5 +29,18 @@ neutralization:
     - liquidity
 
 paper_trading:
-  scoring_panel_days: 60
-  mining_panel_days: 250
+  scoring_panel_days: 120
+  mining_panel_days: 500
+  scoring_buffer_days: 10
+  remine_days: 5
+
+high_position:
+  min_pool_size: 10
+  min_valid_count: 10
+  min_quote_coverage: 0.8
+  ret20_quantile: 0.9
+  ret60_quantile: 0.9
+  near_high_ratio: 0.95
+  amount_ratio_quantile: 0.8
+  prev_close_mismatch_threshold: 0.01
+  max_mismatch_ratio: 0.05

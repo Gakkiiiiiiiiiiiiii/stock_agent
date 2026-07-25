@@ -26,8 +26,10 @@ from engines.backtest.execution import can_buy, can_sell, cost_of, is_suspended
 from engines.factor.alpha import compose_alpha_scores
 from engines.factor.data import load_factor_panel, load_universe
 from engines.factor.library import load_library, paper_trading_factors
+from engines.factor.lookback import max_lookback_from_rpn
 from engines.factor.miner import FactorMiner
 from engines.market.trading_calendar import next_trading_day
+from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
@@ -100,11 +102,26 @@ def _remine_due(dates: list[str], state_dir: Path, remine_days: int) -> bool:
 
 
 def _scoring_panel_days() -> int:
-    return int(os.getenv("FACTOR_PAPER_SCORING_PANEL_DAYS", DEFAULT_SCORING_PANEL_DAYS))
+    return get_research_config().paper_trading.scoring_panel_days
 
 
 def _mining_panel_days() -> int:
-    return int(os.getenv("FACTOR_PAPER_MINING_PANEL_DAYS", DEFAULT_MINING_PANEL_DAYS))
+    return get_research_config().paper_trading.mining_panel_days
+
+
+def _remine_days_default() -> int:
+    return get_research_config().paper_trading.remine_days
+
+
+def _required_scoring_days(library: dict) -> int:
+    config = get_research_config().paper_trading
+    max_lookback = 1
+    for factor in paper_trading_factors(library):
+        try:
+            max_lookback = max(max_lookback, max_lookback_from_rpn(factor.get("rpn") or []))
+        except ValueError:
+            continue
+    return max(config.scoring_panel_days, max_lookback + config.scoring_buffer_days)
 
 
 def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) -> dict:
@@ -187,13 +204,15 @@ def generate_orders(
     """T-1 收盘后生成并冻结 T 日开盘订单。"""
     state = _state_dir(state_dir)
     state.mkdir(parents=True, exist_ok=True)
-    remine_days = remine_days if remine_days is not None else int(os.getenv("FACTOR_PAPER_REMINE_DAYS", DEFAULT_REMINE_DAYS))
+    remine_days = remine_days if remine_days is not None else _remine_days_default()
     panel_loader = panel_loader or load_factor_panel
     miner_factory = miner_factory or FactorMiner
     symbols = load_universe()
     if not symbols:
         return {"execution_date": execution_date, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
-    panel, dates, symbols, warning = panel_loader(symbols, _scoring_panel_days())
+    library = load_library(library_path)
+    scoring_days = _required_scoring_days(library)
+    panel, dates, symbols, warning = panel_loader(symbols, scoring_days)
     if not panel:
         return {"execution_date": execution_date, "warning": warning or "行情数据不可用（QMT 桥接不可达），无法生成订单"}
     signal_date = dates[-1]
@@ -227,8 +246,23 @@ def generate_orders(
             remine_result = _maybe_remine(mining_panel, mining_symbols, mining_dates, state, remine_days, miner_factory)
         if remine_result.get("warning"):
             warnings.append(remine_result["warning"])
-    library = load_library(library_path)
+    if remine_result.get("accepted"):
+        library = load_library(library_path)
+        refreshed_days = _required_scoring_days(library)
+        if refreshed_days > len(dates):
+            panel, dates, symbols, warning = panel_loader(symbols, refreshed_days)
+            if not panel:
+                return {"execution_date": execution_date, "warning": warning or "重挖后评分面板取数不可用，无法生成订单"}
+            signal_date = dates[-1]
+            signals_path = state / f"signals_{signal_date}.json"
+            orders_path = state / f"orders_{execution_date}.json"
     factors = paper_trading_factors(library)
+    if len(dates) < _required_scoring_days(library):
+        return {
+            "execution_date": execution_date,
+            "signal_date": signal_date,
+            "warning": f"评分面板历史不足：需要至少 {_required_scoring_days(library)} 日，实际 {len(dates)} 日",
+        }
     scores, factor_count = compose_alpha_scores(panel, factors)
     if scores is None:
         return {"execution_date": execution_date, "signal_date": signal_date, "warning": "; ".join(warnings + ["因子库为空或全部不可计算，无法生成订单"])}
@@ -460,15 +494,15 @@ def run_daily(
     """执行单日组池 + 记账，返回摘要 dict（QMT 不可用时 warning 优雅返回）。"""
     state = _state_dir(state_dir)
     state.mkdir(parents=True, exist_ok=True)
-    remine_days = remine_days if remine_days is not None else int(
-        os.getenv("FACTOR_PAPER_REMINE_DAYS", DEFAULT_REMINE_DAYS))
+    remine_days = remine_days if remine_days is not None else _remine_days_default()
     panel_loader = panel_loader or load_factor_panel
     miner_factory = miner_factory or FactorMiner
 
     symbols = load_universe()
     if not symbols:
         return {"date": None, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
-    panel, dates, symbols, warning = panel_loader(symbols, _scoring_panel_days())
+    library = load_library(library_path)
+    panel, dates, symbols, warning = panel_loader(symbols, _required_scoring_days(library))
     if not panel:
         # QMT 桥接不可用（如容器内）等场景：告警并优雅退出
         return {"date": None, "warning": warning or "行情数据不可用（QMT 桥接不可达），今日跳过"}

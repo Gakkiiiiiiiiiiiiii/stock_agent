@@ -32,6 +32,9 @@ SYMBOLS = [f"60000{i}.SH" for i in range(8)]
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     """隔离状态目录 + 假行情 + 单因子库。"""
+    monkeypatch.setenv("FACTOR_PAPER_SCORING_PANEL_DAYS", "20")
+    monkeypatch.setenv("FACTOR_PAPER_MINING_PANEL_DAYS", "500")
+    fpw.get_research_config.cache_clear()
     monkeypatch.setattr(fpw, "load_universe", lambda: list(SYMBOLS))
     monkeypatch.setattr(fpw, "next_trading_day", lambda day: day + timedelta(days=1))
     now_value = {"value": "2026-07-29T15:05:00+08:00"}
@@ -55,12 +58,14 @@ def env(tmp_path, monkeypatch):
             return p, _dates(n_days), list(symbols), None
         return loader
 
-    return {
+    payload = {
         "state": tmp_path / "factor_paper",
         "lib": str(lib),
         "make_loader": make_loader,
         "set_now": lambda value: now_value.__setitem__("value", value),
     }
+    yield payload
+    fpw.get_research_config.cache_clear()
 
 
 def test_first_run_writes_positions_and_state(env):
@@ -266,8 +271,8 @@ def test_remine_uses_long_mining_panel(env):
         miner_factory=OkMiner,
     )
     assert result["skipped"] is False
-    assert requested_days == [60, 250]
-    assert mined_days == [250]
+    assert requested_days == [20, 500]
+    assert mined_days == [500]
     assert result["remine"]["oos_window_count"] == 3
 
 
@@ -299,6 +304,39 @@ def test_invalid_remine_does_not_advance_state(env):
     assert result["remine"]["run_valid"] is False
     assert "FINAL_OOS_WINDOW_UNAVAILABLE" in result["warning"]
     assert not (env["state"] / "remine_state.json").exists()
+
+
+def test_scoring_panel_expands_for_long_lookback_factor(env):
+    (env["state"]).mkdir(parents=True, exist_ok=True)
+    lib_path = env["lib"]
+    with open(lib_path, "w", encoding="utf-8") as fh:
+        fh.write(
+            "factors:\n"
+            "- id: F120\n"
+            "  rpn: [close, ts_mean_120, cs_rank]\n"
+            "  expression: 'close ts_mean_120 cs_rank'\n"
+            "  hypothesis: 长窗口\n"
+            "  metrics: {fitness: 1.0}\n"
+            "  status: ACTIVE\n"
+        )
+    requested_days = []
+
+    def loader(symbols, days):
+        requested_days.append(days)
+        panel = _panel(n_days=days)
+        end_day = date(2026, 7, 29)
+        dates = [(end_day - timedelta(days=days - index - 1)).isoformat() for index in range(days)]
+        return panel, dates, list(symbols), None
+
+    result = fpw.generate_orders(
+        execution_date="2026-07-30",
+        state_dir=env["state"],
+        library_path=lib_path,
+        panel_loader=loader,
+        remine_days=9999,
+    )
+    assert result["skipped"] is False
+    assert requested_days[0] >= 130
 
 
 def test_qmt_unavailable_graceful(env):

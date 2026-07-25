@@ -90,7 +90,11 @@ def test_high_position_feature_builder_outputs_formal_features():
 
     symbols = [f"60000{i}.SH" for i in range(12)]
     quotes = {
-        symbol: {"last_price": 15 - i * 0.1, "last_close": 15, "open": 15.2}
+        symbol: {
+            "last_price": (10 + i + 68 * (0.08 if i < 3 else 0.01)) * (0.98 if i % 2 else 1.02),
+            "last_close": 10 + i + 68 * (0.08 if i < 3 else 0.01),
+            "open": 10 + i + 68 * (0.08 if i < 3 else 0.01),
+        }
         for i, symbol in enumerate(symbols)
     }
     features = HighPositionFeatureBuilder(Bridge()).build(symbols, quotes).as_dict()
@@ -128,6 +132,85 @@ def test_high_position_builder_blocks_small_pool_quality():
     features = HighPositionFeatureBuilder(Bridge()).build(symbols, quotes).as_dict()
     assert features["high_position_loss_ratio"] is None
     assert "HIGH_POSITION_POOL_TOO_SMALL" in features["high_position_quality_flags"]
+
+
+def test_ex_dividend_prev_close_mismatch_blocks_regime():
+    snapshot = {
+        "as_of": "2026-07-25T00:00:00+00:00",
+        "up_count": 100,
+        "down_count": 50,
+        "limit_up_count": 3,
+        "limit_down_count": 1,
+        "index_return_5d": 0.02,
+        "index_return_20d": 0.05,
+        "index_volatility_20d": 0.01,
+        "high_position_loss_ratio": None,
+        "high_position_limit_down_ratio": None,
+        "high_position_breakdown_ratio": None,
+        "high_position_big_negative_count": None,
+        "high_position_prev_close_mismatch_ratio": 0.2,
+        "high_position_quality_flags": ["HIGH_POSITION_PREV_CLOSE_MISMATCH"],
+        "quality_score": 1.0,
+    }
+    result = get_market_regime(snapshot=snapshot, top_theme_strength=80, index_drawdown_20d=-0.01)
+    assert result["regime"]["primary_regime"] == "UNKNOWN"
+    assert "HIGH_POSITION_PREV_CLOSE_MISMATCH" in result["missing_fields"]
+
+
+def test_st_stock_minus_five_percent_is_limit_down():
+    symbols = [f"6001{i:02d}.SH" for i in range(12)]
+    bridge = _HighPositionBridge()
+    quotes = {}
+    for idx, symbol in enumerate(symbols):
+        prev_close = 10 + idx + 68 * 0.08
+        quotes[symbol] = {"last_price": prev_close * 1.01, "last_close": prev_close, "open": prev_close}
+    quotes[symbols[0]] = {
+        "last_price": quotes[symbols[0]]["last_close"] * 0.948,
+        "last_close": quotes[symbols[0]]["last_close"],
+        "open": quotes[symbols[0]]["last_close"],
+        "name": "*ST测试",
+    }
+    features = HighPositionFeatureBuilder(bridge).build(symbols, quotes).as_dict()
+    assert features["high_position_limit_down_ratio"] > 0
+
+
+def test_non_st_stock_minus_five_percent_is_not_limit_down():
+    symbols = [f"6002{i:02d}.SH" for i in range(12)]
+    bridge = _HighPositionBridge()
+    quotes = {}
+    for idx, symbol in enumerate(symbols):
+        prev_close = 10 + idx + 68 * 0.08
+        quotes[symbol] = {"last_price": prev_close * 1.01, "last_close": prev_close, "open": prev_close}
+    quotes[symbols[0]] = {
+        "last_price": quotes[symbols[0]]["last_close"] * 0.948,
+        "last_close": quotes[symbols[0]]["last_close"],
+        "open": quotes[symbols[0]]["last_close"],
+        "name": "普通股票",
+    }
+    features = HighPositionFeatureBuilder(bridge).build(symbols, quotes).as_dict()
+    assert features["high_position_limit_down_ratio"] == 0
+
+
+class _HighPositionBridge:
+    def get_history(self, symbols, period, start_time, end_time, dividend_type, fill_data=True, prefer_cache_first=True):
+        assert dividend_type == "none"
+        assert fill_data is False
+        rows = []
+        for idx, symbol in enumerate(symbols):
+            for day in range(70):
+                trading_day = date(2026, 3, 1) + timedelta(days=day)
+                close = 10 + idx + day * 0.08
+                rows.append(
+                    {
+                        "symbol": symbol,
+                        "trading_date": trading_day.isoformat(),
+                        "open": close,
+                        "high": close * 1.01,
+                        "close": close,
+                        "amount": 1_000_000 * (3 if day == 68 else 1),
+                    }
+                )
+        return rows
 
 
 def test_estimated_high_position_features_do_not_drive_regime(monkeypatch):

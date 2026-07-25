@@ -3,25 +3,44 @@ from __future__ import annotations
 import numpy as np
 
 from engines.factor.fitness import evaluate_factor_range
-from engines.factor.purged_split import build_purged_windows
+from financial_agent.research_config import get_research_config
 
 
-def run_purged_walkforward(factor_panel: np.ndarray, closes: np.ndarray, horizon: int = 5, embargo: int | None = None) -> dict:
+def run_purged_walkforward(
+    factor_panel: np.ndarray,
+    closes: np.ndarray,
+    eval_start: int | None = None,
+    eval_end: int | None = None,
+    horizon: int = 5,
+    n_windows: int | None = None,
+    embargo: int | None = None,
+) -> dict:
+    config = get_research_config().purged_walkforward
+    eval_start = 0 if eval_start is None else max(0, int(eval_start))
+    eval_end = min(factor_panel.shape[1] - horizon, int(eval_end) if eval_end is not None else factor_panel.shape[1] - horizon)
+    n_windows = n_windows or config.n_windows
+    embargo = config.embargo_days if embargo is None else embargo
     windows = []
-    for window in build_purged_windows(factor_panel.shape[1], horizon=horizon, embargo=embargo):
-        start, end = window.test
-        available_end = min(factor_panel.shape[1], end + horizon)
-        if available_end < end + horizon:
+    for index, (start, end) in enumerate(_build_eval_windows(eval_start, eval_end, n_windows=n_windows, embargo=embargo)):
+        if end + horizon > factor_panel.shape[1]:
             metrics = {"passed": False, "warning": "insufficient future horizon for test window"}
         else:
             metrics = evaluate_factor_range(
-                factor_panel[:, :available_end],
-                closes[:, :available_end],
+                factor_panel,
+                closes,
                 eval_start=start,
                 eval_end=end,
                 horizon=horizon,
             )
-        windows.append({"train": window.train, "validation": window.validation, "test": window.test, "metrics": metrics, "passed": bool(metrics.get("passed"))})
+        train = (0, max(eval_start, start - (embargo or 0)))
+        windows.append({
+            "train": train,
+            "validation": (train[1], start),
+            "test": (start, end),
+            "window_index": index,
+            "metrics": metrics,
+            "passed": bool(metrics.get("passed")),
+        })
     rank_ics = [float(item["metrics"].get("rank_ic") or 0.0) for item in windows]
     excess = [float(item["metrics"].get("topk_excess_annual_return", item["metrics"].get("topk_excess_return") or 0.0)) for item in windows]
     positive = [value > 0 for value in rank_ics]
@@ -30,10 +49,10 @@ def run_purged_walkforward(factor_panel: np.ndarray, closes: np.ndarray, horizon
     mean_excess = float(np.mean(excess)) if excess else 0.0
     passed = (
         bool(windows)
-        and window_pass_ratio >= 0.6
-        and positive_rank_ic_ratio >= 0.6
-        and mean_excess > 0
-        and min(rank_ics) > -0.02
+        and window_pass_ratio >= config.min_window_pass_ratio
+        and positive_rank_ic_ratio >= config.min_positive_rank_ic_ratio
+        and mean_excess > config.min_oos_excess_return
+        and min(rank_ics) > config.min_rank_ic_floor
     )
     return {
         "method": "purged_walkforward",
@@ -45,3 +64,21 @@ def run_purged_walkforward(factor_panel: np.ndarray, closes: np.ndarray, horizon
         "oos_excess_return": round(mean_excess, 6),
         "passed": passed,
     }
+
+
+def _build_eval_windows(eval_start: int, eval_end: int, n_windows: int, embargo: int | None) -> list[tuple[int, int]]:
+    width = (eval_end - eval_start) // max(int(n_windows), 1)
+    if width <= 0:
+        return []
+    windows: list[tuple[int, int]] = []
+    cursor = eval_start
+    gap = max(int(embargo or 0), 0)
+    for index in range(max(int(n_windows), 1)):
+        start = cursor
+        end = eval_end if index == n_windows - 1 else min(eval_end, start + width)
+        if end > start:
+            windows.append((start, end))
+        cursor = end + gap
+        if cursor >= eval_end:
+            break
+    return windows

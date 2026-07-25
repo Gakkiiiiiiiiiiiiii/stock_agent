@@ -7,6 +7,7 @@ from engines.factor.fitness import evaluate_factor as evaluate_panel
 from engines.factor.library import active_factors, load_library
 from engines.factor.miner import FactorMiner
 from engines.factor.vm import StackVM
+from financial_agent.research_config import get_research_config
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,8 @@ def mine_factors(
     eval_window 个交易日上评估，因子值仍用全量历史计算。
     """
     symbols = universe or load_universe()
-    panel, dates, symbols, warning = load_factor_panel(symbols, days=days or 250)
+    config = get_research_config()
+    panel, dates, symbols, warning = load_factor_panel(symbols, days=days or config.data_split.total_days)
     if not panel:
         return {"accepted": [], "rejected": [], "warning": warning or "行情数据不可用，无法挖掘因子"}
     miner = FactorMiner()

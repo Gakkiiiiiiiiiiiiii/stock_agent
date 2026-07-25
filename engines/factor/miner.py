@@ -9,13 +9,17 @@ import json
 import logging
 import os
 import re
+from dataclasses import dataclass
+from hashlib import sha256
 from typing import Callable
 
 import numpy as np
 import yaml
 
 from engines.factor import fitness as fitness_mod
+from engines.factor.lookback import max_lookback_from_rpn
 from engines.factor.purged_walkforward import run_purged_walkforward
+from engines.factor.research_split import FactorResearchSplit, build_research_split
 from engines.factor.library import (
     active_factors,
     add_factor,
@@ -36,15 +40,14 @@ from engines.factor.vocab import (
     is_valid_token,
 )
 from engines.factor.vm import StackVM
+from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
 
 _DEFAULT_ROUNDS = 3
 _DEFAULT_CANDIDATES = 8
-_DEFAULT_HORIZON = 5
 _DEFAULT_MAX_CANDIDATES = 40  # 单次挖掘评估候选总数预算（env FACTOR_MINING_MAX_CANDIDATES）
-_DEFAULT_DISCOVERY_RATIO = 0.7
 
 # 饱和早停：连续 2 轮无入库且判重拒绝率 > 0.5 时判定搜索空间饱和
 _EARLY_STOP_ROUNDS = 2
@@ -56,14 +59,28 @@ _BONFERRONI_EVAL_COUNT = 30
 _BONFERRONI_FACTOR = 1.5
 
 
-def evaluate_oos_splits(factor_panel: np.ndarray, closes: np.ndarray, horizon: int = 5) -> dict:
+@dataclass
+class DiscoveryCandidate:
+    rpn: list[str]
+    hypothesis: str
+    discovery_metrics: dict
+    discovery_values: np.ndarray
+    full_values: np.ndarray
+    candidate_hash: str
+    round_index: int
+    evaluated_index: int
+    lookback: int
+
+
+def evaluate_oos_splits(
+    factor_panel: np.ndarray,
+    closes: np.ndarray,
+    eval_start: int,
+    eval_end: int,
+    horizon: int = 5,
+) -> dict:
     """Default OOS gate for mined factors: purged walk-forward with embargo."""
-    return run_purged_walkforward(factor_panel, closes, horizon=horizon)
-
-
-def _discovery_end(n_days: int, horizon: int) -> int:
-    raw = int(n_days * float(os.getenv("FACTOR_MINING_DISCOVERY_RATIO", _DEFAULT_DISCOVERY_RATIO)))
-    return max(horizon * 4, min(raw, n_days - horizon * 4))
+    return run_purged_walkforward(factor_panel, closes, eval_start=eval_start, eval_end=eval_end, horizon=horizon)
 
 
 def _rank_ic_threshold(evaluated: int) -> float:
@@ -221,7 +238,8 @@ class FactorMiner:
         rounds = rounds or int(os.getenv("FACTOR_MINING_ROUNDS", _DEFAULT_ROUNDS))
         candidates_per_round = candidates_per_round or int(
             os.getenv("FACTOR_MINING_CANDIDATES_PER_ROUND", _DEFAULT_CANDIDATES))
-        horizon = horizon or int(os.getenv("FACTOR_MINING_HORIZON_DAYS", _DEFAULT_HORIZON))
+        research_config = get_research_config()
+        horizon = horizon or research_config.evaluation.horizon_days
         max_candidates = int(os.getenv("FACTOR_MINING_MAX_CANDIDATES", _DEFAULT_MAX_CANDIDATES))
 
         if not self.model_client or not self.model_client.available():
@@ -231,28 +249,24 @@ class FactorMiner:
         if closes is None or not symbols:
             return {"accepted": [], "rejected": [], "warning": "特征面板为空，无法挖掘",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0}
-        n_days = closes.shape[1]
-        discovery_end = _discovery_end(n_days, horizon)
-        final_oos_days = n_days - discovery_end
+        split = build_research_split(closes.shape[1], research_config.data_split, horizon)
         diagnostics = {
-            "discovery_days": discovery_end,
-            "final_oos_days": final_oos_days,
+            "discovery_days": split.discovery_days if split else 0,
+            "final_oos_days": split.final_oos_days if split else 0,
+            "warmup_days": split.discovery_warmup_days if split else 0,
             "oos_window_count": 0,
             "run_valid": True,
             "run_failure_code": None,
         }
-        if discovery_end <= horizon * 2 or final_oos_days <= horizon * 2:
+        if split is None:
             return {"accepted": [], "rejected": [], "warning": "样本长度不足，无法拆分 discovery/final OOS",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0,
                     "diagnostics": diagnostics | {"run_valid": False, "run_failure_code": "SAMPLE_SPLIT_UNAVAILABLE"}}
-        discovery_panel = {key: value[:, :discovery_end] for key, value in panel.items()}
-        final_oos_panel = {key: value[:, discovery_end:] for key, value in panel.items()}
-        discovery_closes = closes[:, :discovery_end]
-        final_oos_closes = closes[:, discovery_end:]
 
         library = load_library(self.library_path)
         accepted: list[dict] = []
         rejected: list[dict] = []
+        discovery_candidates: list[DiscoveryCandidate] = []
         last_round_results: list[dict] | None = None
         model_name = getattr(self.model_client, "model", "") or ""
         evaluated = 0                       # 已跑 VM/打分的候选总数（预算与门槛收紧的计数基准）
@@ -264,14 +278,14 @@ class FactorMiner:
         # 预计算库内 active 因子面板用于相关性判重
         active_panels: dict[str, np.ndarray] = {}
         for factor in active_factors(library):
-            panel_values = self.vm.execute(factor.get("rpn") or [], discovery_panel)
+            panel_values = self.vm.execute(factor.get("rpn") or [], panel)
             if panel_values is not None:
-                active_panels[factor["id"]] = panel_values
+                active_panels[factor["id"]] = panel_values[:, split.discovery_start:split.discovery_end]
         # Alpha191 种子面板进判重池：引导 LLM 在种子思路上变异而非照抄
         for seed in _load_seed_entries():
-            panel_values = self.vm.execute(seed["rpn"], discovery_panel)
+            panel_values = self.vm.execute(seed["rpn"], panel)
             if panel_values is not None:
-                active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values
+                active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, split.discovery_start:split.discovery_end]
 
         for round_index in range(1, rounds + 1):
             prompt = self._build_prompt(library, candidates_per_round, horizon, round_index, last_round_results)
@@ -305,23 +319,43 @@ class FactorMiner:
                     budget_hit = True
                     break
                 evaluated += 1
-                discovery_values = self.vm.execute(rpn, discovery_panel)
-                if discovery_values is None:
+                try:
+                    lookback = max_lookback_from_rpn(rpn)
+                except ValueError as exc:
+                    last_round_results.append({"rpn": rpn, "result": "公式非法"})
+                    rejected.append({"rpn": rpn, "reason": "公式非法", "warning": str(exc)})
+                    rejected_rpn.add(rpn_key)
+                    continue
+                if split.discovery_warmup_days < lookback - 1 or split.final_oos_warmup_days < lookback - 1:
+                    reason = {
+                        "reason": "INSUFFICIENT_LOOKBACK_HISTORY",
+                        "required_lookback": lookback,
+                        "available_discovery_warmup": split.discovery_warmup_days,
+                        "available_final_oos_warmup": split.final_oos_warmup_days,
+                    }
+                    last_round_results.append({"rpn": rpn, "result": "历史预热不足", **reason})
+                    rejected.append({"rpn": rpn, **reason})
+                    rejected_rpn.add(rpn_key)
+                    continue
+                full_values = self.vm.execute(rpn, panel)
+                if full_values is None:
                     last_round_results.append({"rpn": rpn, "result": "计算失败"})
                     rejected.append({"rpn": rpn, "reason": "计算失败"})
                     rejected_rpn.add(rpn_key)
                     continue
+                discovery_values = full_values[:, split.discovery_start:split.discovery_end]
                 if is_duplicate(rpn, discovery_values, library, active_panels):
                     last_round_results.append({"rpn": rpn, "result": "与库内因子重复"})
                     rejected.append({"rpn": rpn, "reason": "重复"})
                     rejected_rpn.add(rpn_key)
                     round_dup_rejected += 1
                     continue
-                metrics = fitness_mod.evaluate_factor(
-                    discovery_values,
-                    discovery_closes,
+                metrics = fitness_mod.evaluate_factor_range(
+                    full_values,
+                    closes,
+                    eval_start=split.discovery_start,
+                    eval_end=split.discovery_end,
                     horizon=horizon,
-                    eval_window=eval_window,
                 )
                 metrics = _with_neutralized_metrics(metrics)
                 # 收紧后的门槛只会比基础门槛更严，可直接叠加在 passed 之上
@@ -331,56 +365,21 @@ class FactorMiner:
                     rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
-                final_oos_values = self.vm.execute(rpn, final_oos_panel)
-                if final_oos_values is None:
-                    last_round_results.append({"rpn": rpn, "result": "final OOS 计算失败"})
-                    rejected.append({"rpn": rpn, "reason": "OOS计算失败", "metrics": metrics})
-                    rejected_rpn.add(rpn_key)
-                    continue
-                oos = evaluate_oos_splits(final_oos_values, final_oos_closes, horizon=horizon)
-                diagnostics["oos_window_count"] = max(diagnostics["oos_window_count"], len(oos.get("windows") or []))
-                if not oos.get("windows"):
-                    diagnostics["run_valid"] = False
-                    diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
-                    rejected_metrics = dict(metrics)
-                    rejected_metrics["passed"] = False
-                    rejected_metrics["final_oos_audit"] = {
-                        "passed": False,
-                        "warning": "FINAL_OOS_WINDOW_UNAVAILABLE",
-                    }
-                    last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "final OOS 窗口不可用"})
-                    rejected.append({"rpn": rpn, "reason": "OOS窗口不可用", "metrics": rejected_metrics})
-                    rejected_rpn.add(rpn_key)
-                    continue
-                if not oos.get("passed"):
-                    rejected_metrics = dict(metrics)
-                    rejected_metrics["passed"] = False
-                    rejected_metrics["final_oos_audit"] = oos
-                    last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "final OOS 未通过"})
-                    rejected.append({"rpn": rpn, "reason": "OOS未通过", "metrics": rejected_metrics})
-                    rejected_rpn.add(rpn_key)
-                    continue
-                if lease_guard:
-                    lease_guard()
-                stored_metrics = dict(metrics)
-                stored_metrics["final_oos_audit"] = {
-                    "method": oos.get("method"),
-                    "passed": True,
-                    "window_count": len(oos.get("windows") or []),
-                    "withheld": True,
-                }
-                entry = add_factor(
-                    library, rpn, expression=" ".join(rpn), hypothesis=hypothesis,
-                    metrics=stored_metrics, universe=sorted(symbols) if len(symbols) <= 100 else [],
-                    horizon=horizon, llm_model=model_name,
+                candidate = DiscoveryCandidate(
+                    rpn=rpn,
+                    hypothesis=hypothesis,
+                    discovery_metrics=metrics,
+                    discovery_values=discovery_values,
+                    full_values=full_values,
+                    candidate_hash=_candidate_hash(rpn),
+                    round_index=round_index,
+                    evaluated_index=evaluated,
+                    lookback=lookback,
                 )
-                entry["universe_size"] = len(symbols)
-                if eval_window:
-                    entry["eval_window"] = eval_window
-                active_panels[entry["id"]] = discovery_values
-                accepted.append(entry)
+                discovery_candidates.append(candidate)
+                active_panels[f"CANDIDATE:{candidate.candidate_hash}"] = discovery_values
                 round_accepted += 1
-                last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "已入库"})
+                last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "discovery 通过，进入待验证池"})
 
             if budget_hit:
                 stopped_early = True
@@ -399,9 +398,20 @@ class FactorMiner:
                 )
                 break
 
-        if lease_guard:
-            lease_guard()
-        save_library(library, self.library_path)
+        accepted, oos_rejected, oos_diagnostics = self._run_final_oos_gate(
+            discovery_candidates,
+            library,
+            panel,
+            closes,
+            split,
+            horizon,
+            symbols,
+            model_name,
+            eval_window=eval_window,
+            lease_guard=lease_guard,
+        )
+        rejected.extend(oos_rejected)
+        diagnostics.update(oos_diagnostics)
         return {
             "accepted": accepted,
             "rejected": rejected,
@@ -411,6 +421,99 @@ class FactorMiner:
             "evaluated": evaluated,
             "diagnostics": diagnostics,
         }
+
+    def _run_final_oos_gate(
+        self,
+        candidates: list[DiscoveryCandidate],
+        library: dict,
+        panel: dict[str, np.ndarray],
+        closes: np.ndarray,
+        split: FactorResearchSplit,
+        horizon: int,
+        symbols: list[str],
+        model_name: str,
+        eval_window: int | None = None,
+        lease_guard: Callable[[], None] | None = None,
+    ) -> tuple[list[dict], list[dict], dict]:
+        _ = panel
+        accepted: list[dict] = []
+        rejected: list[dict] = []
+        diagnostics = {
+            "oos_window_count": 0,
+            "run_valid": True,
+            "run_failure_code": None,
+            "discovery_candidate_count": len(candidates),
+        }
+        for candidate in candidates:
+            if lease_guard:
+                lease_guard()
+            oos = evaluate_oos_splits(
+                candidate.full_values,
+                closes,
+                eval_start=split.final_oos_start,
+                eval_end=split.final_oos_end,
+                horizon=horizon,
+            )
+            window_count = len(oos.get("windows") or [])
+            diagnostics["oos_window_count"] = max(diagnostics["oos_window_count"], window_count)
+            if not window_count:
+                diagnostics["run_valid"] = False
+                diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
+                rejected.append({
+                    "rpn": candidate.rpn,
+                    "reason": "OOS窗口不可用",
+                    "candidate_hash": candidate.candidate_hash,
+                    "metrics": {
+                        **candidate.discovery_metrics,
+                        "passed": False,
+                        "final_oos_audit": {"passed": False, "warning": "FINAL_OOS_WINDOW_UNAVAILABLE"},
+                    },
+                })
+                continue
+            if not oos.get("passed"):
+                rejected.append({
+                    "rpn": candidate.rpn,
+                    "reason": "OOS未通过",
+                    "candidate_hash": candidate.candidate_hash,
+                    "metrics": {
+                        **candidate.discovery_metrics,
+                        "passed": False,
+                        "final_oos_audit": oos,
+                    },
+                })
+                continue
+            if lease_guard:
+                lease_guard()
+            stored_metrics = dict(candidate.discovery_metrics)
+            stored_metrics["final_oos_audit"] = {
+                "method": oos.get("method"),
+                "passed": True,
+                "window_count": window_count,
+                "withheld": True,
+            }
+            entry = add_factor(
+                library,
+                candidate.rpn,
+                expression=" ".join(candidate.rpn),
+                hypothesis=candidate.hypothesis,
+                metrics=stored_metrics,
+                universe=sorted(symbols) if len(symbols) <= 100 else [],
+                horizon=horizon,
+                llm_model=model_name,
+            )
+            entry["universe_size"] = len(symbols)
+            entry["candidate_hash"] = candidate.candidate_hash
+            entry["discovery_round"] = candidate.round_index
+            entry["evaluated_index"] = candidate.evaluated_index
+            entry["lookback"] = candidate.lookback
+            if eval_window:
+                entry["eval_window"] = eval_window
+            accepted.append(entry)
+        if accepted:
+            if lease_guard:
+                lease_guard()
+            save_library(library, self.library_path, lease_guard=lease_guard)
+        return accepted, rejected, diagnostics
 
 
 __all__ = ["FactorMiner"]
@@ -442,3 +545,7 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
         "oos_excess_return",
     }
     return {key: value for key, value in (metrics or {}).items() if key not in blocked}
+
+
+def _candidate_hash(rpn: list[str]) -> str:
+    return sha256(json.dumps(list(rpn), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()

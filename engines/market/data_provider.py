@@ -8,6 +8,7 @@ from typing import Any
 from engines.market.high_position_feature_builder import HighPositionFeatureBuilder
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 from engines.backtest.execution import price_limit_pct
+from engines.market.trading_calendar import latest_available_trading_day, previous_trading_day
 from financial_agent.models import KlineRecord, KlineResponse
 
 
@@ -95,7 +96,8 @@ class QmtMarketDataProvider(MarketDataProvider):
                 "source": "qmt",
             }
         index_symbols = ["000001.SH", "399001.SZ", "399006.SZ"]
-        end_day = as_of or date.today()
+        requested_day = as_of or date.today()
+        end_day = latest_available_trading_day(requested_day)
         start_day = end_day - timedelta(days=40)
         try:
             rows = self.bridge.get_history(
@@ -156,6 +158,8 @@ class QmtMarketDataProvider(MarketDataProvider):
         if not grouped:
             warning = "QMT 未返回指数历史数据，市场快照仅保留空结构。"
         quality_flags = list(breadth.get("quality_flags") or [])
+        if end_day != requested_day:
+            quality_flags.append("MARKET_SNAPSHOT_AS_OF_LAST_TRADING_DAY")
         quote_coverage = breadth.get("quote_coverage")
         quality_score = 0.0 if quote_coverage is not None and quote_coverage < 0.9 else None
         return {
@@ -176,6 +180,8 @@ class QmtMarketDataProvider(MarketDataProvider):
             "high_position_pool_size": breadth.get("high_position_pool_size"),
             "high_position_valid_count": breadth.get("high_position_valid_count"),
             "high_position_quote_coverage": breadth.get("high_position_quote_coverage"),
+            "high_position_prev_close_mismatch_count": breadth.get("high_position_prev_close_mismatch_count"),
+            "high_position_prev_close_mismatch_ratio": breadth.get("high_position_prev_close_mismatch_ratio"),
             "high_position_quality_flags": breadth.get("high_position_quality_flags"),
             "requested_quote_count": breadth.get("requested_quote_count"),
             "received_quote_count": breadth.get("received_quote_count"),
@@ -235,11 +241,12 @@ class QmtMarketDataProvider(MarketDataProvider):
         quality_flags = ["MARKET_QUOTE_COVERAGE_LOW"] if quote_coverage is not None and quote_coverage < 0.9 else []
         high_features: dict[str, Any] = {}
         try:
-            outcome_as_of = as_of or date.today()
+            outcome_as_of = latest_available_trading_day(as_of or date.today())
+            pool_as_of = previous_trading_day(outcome_as_of)
             high_features = HighPositionFeatureBuilder(self.bridge).build(
                 symbols,
                 quotes,
-                pool_as_of=outcome_as_of - timedelta(days=1),
+                pool_as_of=pool_as_of,
                 outcome_as_of=outcome_as_of,
             ).as_dict()
             quality_flags.extend(high_features.get("high_position_quality_flags") or [])

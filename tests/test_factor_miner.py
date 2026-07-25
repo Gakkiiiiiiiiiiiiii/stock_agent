@@ -39,7 +39,7 @@ class SequenceFakeModelClient:
         return {"content": self._payloads[index]}
 
 
-def _panel(n_symbols: int = 20, n_days: int = 80, seed: int = 3):
+def _panel(n_symbols: int = 20, n_days: int = 500, seed: int = 3):
     """构造动量自相关数据：ret[t] 与 ret[t-5] 正相关，使 ["ret","cs_rank"] 在 horizon=5 下有效。"""
     rng = np.random.default_rng(seed)
     shock = rng.normal(0, 0.02, size=(n_symbols, n_days))
@@ -108,6 +108,42 @@ def test_miner_prompt_contains_feedback(tmp_path):
     miner.mine(panel, symbols, rounds=2, candidates_per_round=1, horizon=5)
     assert len(client.prompts) == 2
     assert "公式非法" in client.prompts[1]  # 上轮反馈进入下一轮 prompt
+
+
+def test_final_oos_not_called_until_all_llm_rounds_finish(tmp_path, monkeypatch):
+    panel, symbols = _panel()
+    client = SequenceFakeModelClient([
+        [{"rpn": ["ret", "cs_rank"], "hypothesis": "a"}],
+        [{"rpn": ["volume", "cs_rank"], "hypothesis": "b"}],
+    ])
+    oos_prompt_counts = []
+    monkeypatch.setattr("engines.factor.miner.is_duplicate", lambda *a, **k: False)
+
+    def fake_oos(*args, **kwargs):
+        oos_prompt_counts.append(len(client.prompts))
+        return {"passed": True, "windows": [{"test": (0, 1)}]}
+
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", fake_oos)
+    FactorMiner(model_client=client, library_path=str(tmp_path / "lib.yaml")).mine(
+        panel, symbols, rounds=2, candidates_per_round=1, horizon=5
+    )
+    assert len(client.prompts) == 2
+    assert oos_prompt_counts
+    assert all(count == 2 for count in oos_prompt_counts)
+
+
+def test_next_round_prompt_contains_no_oos_outcome_bit(tmp_path, monkeypatch):
+    panel, symbols = _panel()
+    client = FakeModelClient([_good_candidate()])
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": False, "windows": [{"test": (0, 1)}]})
+    FactorMiner(model_client=client, library_path=str(tmp_path / "lib.yaml")).mine(
+        panel, symbols, rounds=2, candidates_per_round=1, horizon=5
+    )
+    assert len(client.prompts) == 2
+    prompt = client.prompts[1]
+    for forbidden in ("final OOS", "OOS通过", "OOS失败", "OOS未通过", "OOS窗口不可用", "已入库"):
+        assert forbidden not in prompt
+    assert "discovery 通过" in prompt
 
 
 def test_miner_returns_warning_when_model_unavailable(tmp_path):
@@ -193,13 +229,13 @@ def test_miner_caches_rejected_rpn(tmp_path, monkeypatch):
     """前轮评估过但被拒绝的公式，后续轮次直接判重复且不再打分。"""
     panel, symbols = _panel()
     calls: list[int] = []
-    real_evaluate = fitness_mod.evaluate_factor
+    real_evaluate = fitness_mod.evaluate_factor_range
 
     def counting_evaluate(*args, **kwargs):
         calls.append(1)
         return real_evaluate(*args, **kwargs)
 
-    monkeypatch.setattr(fitness_mod, "evaluate_factor", counting_evaluate)
+    monkeypatch.setattr(fitness_mod, "evaluate_factor_range", counting_evaluate)
     # 用与种子库低相关、且必然不达门槛的价格均线因子
     # （常量类因子会与种子 turnover_mean_20d 面板全等，会先被判重拦截，无法验证打分缓存）
     client = FakeModelClient([{"rpn": ["close", "ts_mean_5", "cs_rank"], "hypothesis": "价格均线"}])
@@ -219,13 +255,13 @@ def test_rank_ic_threshold_tightening():
 def test_miner_tightens_threshold_after_many_evaluations(tmp_path, monkeypatch):
     """累计评估超过 30 个候选后，rank_ic=0.025（过基础门槛 0.02、不过收紧门槛 0.03）被拒绝。"""
     monkeypatch.setenv("FACTOR_MINING_MAX_CANDIDATES", "100")
-    panel, symbols = _panel(n_days=300)
+    panel, symbols = _panel()
     fake_metrics = {
         "rank_ic": 0.025, "ic_mean": 0.02, "icir": 0.5,
         "topk_annual_return": 0.1, "topk_max_drawdown": 0.05,
         "coverage": 1.0, "fitness": 1.0, "top_k": 5, "passed": True,
     }
-    monkeypatch.setattr(fitness_mod, "evaluate_factor", lambda *a, **k: dict(fake_metrics))
+    monkeypatch.setattr(fitness_mod, "evaluate_factor_range", lambda *a, **k: dict(fake_metrics))
     monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     monkeypatch.setattr("engines.factor.miner.is_duplicate", lambda *a, **k: False)
     # 32 轮、每轮一个互不相同的合法公式（特征 × 窗口组合）

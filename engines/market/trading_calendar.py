@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 
@@ -18,6 +18,29 @@ def next_trading_day(day: date) -> date:
     candidate = day + timedelta(days=1)
     while candidate.weekday() >= 5:
         candidate += timedelta(days=1)
+    return candidate
+
+
+def previous_trading_day(day: date) -> date:
+    """Return the previous A-share trading day before ``day``."""
+    qmt_day = _previous_qmt_index_day(day)
+    if qmt_day is not None:
+        return qmt_day
+    candidate = day - timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
+    return candidate
+
+
+def latest_available_trading_day(as_of: date | datetime | None = None) -> date:
+    """Return the latest completed/available trading day at or before ``as_of``."""
+    day = _as_date(as_of) or date.today()
+    qmt_day = _latest_qmt_index_day(day)
+    if qmt_day is not None:
+        return qmt_day
+    candidate = day
+    while candidate.weekday() >= 5:
+        candidate -= timedelta(days=1)
     return candidate
 
 
@@ -40,6 +63,51 @@ def _next_qmt_index_day(day: date) -> date | None:
     return dates[0] if dates else None
 
 
+def _previous_qmt_index_day(day: date) -> date | None:
+    start = day - timedelta(days=30)
+    end = day - timedelta(days=1)
+    try:
+        rows = QmtBridgeClient().get_history(
+            symbols=["000001.SH"],
+            period="1d",
+            start_time=start.strftime("%Y%m%d"),
+            end_time=end.strftime("%Y%m%d"),
+            dividend_type="none",
+            fill_data=False,
+            prefer_cache_first=True,
+        )
+    except QmtBridgeError:
+        return None
+    dates = sorted({_parse_trade_date(row) for row in rows if _parse_trade_date(row) is not None})
+    return dates[-1] if dates else None
+
+
+def _latest_qmt_index_day(day: date) -> date | None:
+    start = day - timedelta(days=30)
+    try:
+        rows = QmtBridgeClient().get_history(
+            symbols=["000001.SH"],
+            period="1d",
+            start_time=start.strftime("%Y%m%d"),
+            end_time=day.strftime("%Y%m%d"),
+            dividend_type="none",
+            fill_data=False,
+            prefer_cache_first=True,
+        )
+    except QmtBridgeError:
+        return None
+    dates = sorted({_parse_trade_date(row) for row in rows if _parse_trade_date(row) is not None and _parse_trade_date(row) <= day})
+    return dates[-1] if dates else None
+
+
+def _as_date(value: date | datetime | None) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    return value
+
+
 def _parse_trade_date(row: dict) -> date | None:
     raw = row.get("time") or row.get("date") or row.get("trading_date") or row.get("trade_date")
     if raw is None:
@@ -53,4 +121,4 @@ def _parse_trade_date(row: dict) -> date | None:
         return None
 
 
-__all__ = ["next_trading_day"]
+__all__ = ["next_trading_day", "previous_trading_day", "latest_available_trading_day"]
