@@ -1,5 +1,6 @@
 from engines.regime.high_position_retreat_detector import detect_high_position_retreat
 from engines.regime.regime_preclassifier import preclassify_regime
+from engines.market.high_position_feature_builder import HighPositionFeatureBuilder
 from engines.market.feature_builder import MarketFeatureBuilder, pct_to_decimal
 from mcp_servers.market_regime_server import get_market_regime
 
@@ -50,7 +51,7 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
                 "high_position_loss_ratio": 0.1,
                 "high_position_limit_down_ratio": 0.02,
                 "high_position_breakdown_ratio": 0.03,
-                "retreat_days": 1,
+                "high_position_big_negative_count": 1,
             }
 
         def get_sector_strength(self, as_of=None):
@@ -63,6 +64,38 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
     result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
     assert result["missing_fields"] == []
     assert result["regime"]["primary_regime"] != "UNKNOWN"
+
+
+def test_high_position_feature_builder_outputs_formal_features():
+    class Bridge:
+        def get_history(self, symbols, period, start_time, end_time, dividend_type, fill_data=True, prefer_cache_first=True):
+            rows = []
+            for idx, symbol in enumerate(symbols):
+                base = 10 + idx
+                for day in range(70):
+                    close = base + day * (0.08 if idx < 3 else 0.01)
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "trading_date": f"2026-05-{(day % 28) + 1:02d}",
+                            "open": close * 0.99,
+                            "close": close,
+                            "amount": 1_000_000 * (3 if idx < 3 and day == 69 else 1),
+                        }
+                    )
+            return rows
+
+    symbols = [f"60000{i}.SH" for i in range(12)]
+    quotes = {
+        symbol: {"last_price": 15 - i * 0.1, "last_close": 15, "open": 15.2}
+        for i, symbol in enumerate(symbols)
+    }
+    features = HighPositionFeatureBuilder(Bridge()).build(symbols, quotes).as_dict()
+    assert features["high_position_pool_size"] > 0
+    assert features["high_position_loss_ratio"] is not None
+    assert features["high_position_limit_down_ratio"] is not None
+    assert features["high_position_breakdown_ratio"] is not None
+    assert features["high_position_big_negative_count"] is not None
 
 
 def test_estimated_high_position_features_do_not_drive_regime(monkeypatch):
@@ -108,7 +141,7 @@ def test_real_zero_high_position_values_are_preserved(monkeypatch):
                 "high_position_loss_ratio": 0.0,
                 "high_position_limit_down_ratio": 0.0,
                 "high_position_breakdown_ratio": 0.0,
-                "retreat_days": 0,
+                "high_position_big_negative_count": 0,
             }
 
         def get_sector_strength(self, as_of=None):
@@ -119,7 +152,7 @@ def test_real_zero_high_position_values_are_preserved(monkeypatch):
     assert built["high_position_loss_ratio"] == 0.0
     assert built["high_position_limit_down_ratio"] == 0.0
     assert built["high_position_breakdown_ratio"] == 0.0
-    assert built["retreat_days"] == 0
+    assert built["high_position_big_negative_count"] == 0
 
 
 def test_pct_to_decimal_always_converts_percent_fields():
@@ -160,7 +193,7 @@ def test_low_quote_coverage_blocks_regime():
         "high_position_loss_ratio": 0.1,
         "high_position_limit_down_ratio": 0.02,
         "high_position_breakdown_ratio": 0.03,
-        "retreat_days": 1,
+        "high_position_big_negative_count": 1,
         "quality_score": 0.0,
         "quote_coverage": 0.5,
         "quality_flags": ["MARKET_QUOTE_COVERAGE_LOW"],

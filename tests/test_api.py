@@ -29,6 +29,16 @@ def test_ready_health_allows_optional_skipped(monkeypatch):
     assert response.json()["checks"]["redis"] == "skipped"
 
 
+def test_ready_health_skips_optional_qmt_by_default(monkeypatch):
+    monkeypatch.delenv("READY_CHECK_OPTIONAL_QMT", raising=False)
+    monkeypatch.setattr(api_module, "_check_postgres", lambda: "ok")
+    monkeypatch.setattr(api_module, "_check_http", lambda *a, **k: "ok")
+    monkeypatch.setattr(api_module, "_check_redis", lambda *a, **k: "skipped")
+    monkeypatch.setattr(api_module, "_check_qmt", lambda: (_ for _ in ()).throw(AssertionError("qmt should not be checked")))
+    checks = api_module._ready_checks()
+    assert checks["qmt"] == "skipped"
+
+
 def test_stock_analyze_api(monkeypatch):
     monkeypatch.setattr(
         orchestrator,

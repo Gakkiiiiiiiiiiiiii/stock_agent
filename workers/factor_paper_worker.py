@@ -68,6 +68,7 @@ def _parse_datetime(value: str) -> datetime:
 def _validate_frozen_order(order_payload: dict, execution_date: str) -> str | None:
     signal_date = order_payload.get("signal_date")
     generated_at = order_payload.get("generated_at")
+    signal_available_after = order_payload.get("signal_available_after") or f"{signal_date}T15:00:00+08:00"
     must_exist_before = order_payload.get("must_exist_before")
     if order_payload.get("execution_date") != execution_date:
         return "订单文件执行日与当前执行日不一致，跳过执行"
@@ -76,6 +77,8 @@ def _validate_frozen_order(order_payload: dict, execution_date: str) -> str | No
     expected_execution_date = next_trading_day(datetime.fromisoformat(signal_date).date()).isoformat()
     if execution_date != expected_execution_date:
         return f"订单执行日不是信号日的下一交易日：expected={expected_execution_date}"
+    if _parse_datetime(generated_at) < _parse_datetime(signal_available_after):
+        return "订单生成时间早于信号日收盘可用时间，跳过执行"
     if _parse_datetime(generated_at) >= _parse_datetime(must_exist_before):
         return "订单生成时间晚于开盘前冻结截止时间，跳过执行"
     return None
@@ -177,7 +180,14 @@ def generate_orders(
         for rank, i in enumerate(order[:top_k], start=1)
     ]
     generated_at = _now_iso()
+    signal_available_after = f"{signal_date}T15:00:00+08:00"
     must_exist_before = f"{execution_date}T09:30:00+08:00"
+    if _parse_datetime(generated_at) < _parse_datetime(signal_available_after) and not allow_historical_regeneration:
+        return {
+            "execution_date": execution_date,
+            "signal_date": signal_date,
+            "warning": f"订单生成时间早于信号日收盘可用时间：{signal_available_after}",
+        }
     if _parse_datetime(generated_at) >= _parse_datetime(must_exist_before) and not allow_historical_regeneration:
         return {
             "execution_date": execution_date,
@@ -190,6 +200,7 @@ def generate_orders(
         "signal_date": signal_date,
         "execution_date": execution_date,
         "generated_at": generated_at,
+        "signal_available_after": signal_available_after,
         "must_exist_before": must_exist_before,
         "execution_model": "next_open",
         "mode": "historical_replay" if allow_historical_regeneration else "forward_paper",

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from engines.factor.fitness import evaluate_factor
+from engines.factor.fitness import evaluate_factor_range
 from engines.factor.purged_split import build_purged_windows
 
 
@@ -14,10 +14,13 @@ def run_purged_walkforward(factor_panel: np.ndarray, closes: np.ndarray, horizon
         if available_end < end + horizon:
             metrics = {"passed": False, "warning": "insufficient future horizon for test window"}
         else:
-            test_factor = factor_panel[:, :available_end].copy()
-            test_factor[:, :start] = np.nan
-            test_factor[:, end:] = np.nan
-            metrics = evaluate_factor(test_factor, closes[:, :available_end], horizon=horizon, eval_window=available_end - start)
+            metrics = evaluate_factor_range(
+                factor_panel[:, :available_end],
+                closes[:, :available_end],
+                eval_start=start,
+                eval_end=end,
+                horizon=horizon,
+            )
         windows.append({"train": window.train, "validation": window.validation, "test": window.test, "metrics": metrics, "passed": bool(metrics.get("passed"))})
     rank_ics = [float(item["metrics"].get("rank_ic") or 0.0) for item in windows]
     excess = [float(item["metrics"].get("topk_excess_annual_return", item["metrics"].get("topk_excess_return") or 0.0)) for item in windows]

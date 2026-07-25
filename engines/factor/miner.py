@@ -43,6 +43,7 @@ _DEFAULT_ROUNDS = 3
 _DEFAULT_CANDIDATES = 8
 _DEFAULT_HORIZON = 5
 _DEFAULT_MAX_CANDIDATES = 40  # 单次挖掘评估候选总数预算（env FACTOR_MINING_MAX_CANDIDATES）
+_DEFAULT_DISCOVERY_RATIO = 0.7
 
 # 饱和早停：连续 2 轮无入库且判重拒绝率 > 0.5 时判定搜索空间饱和
 _EARLY_STOP_ROUNDS = 2
@@ -57,6 +58,11 @@ _BONFERRONI_FACTOR = 1.5
 def evaluate_oos_splits(factor_panel: np.ndarray, closes: np.ndarray, horizon: int = 5) -> dict:
     """Default OOS gate for mined factors: purged walk-forward with embargo."""
     return run_purged_walkforward(factor_panel, closes, horizon=horizon)
+
+
+def _discovery_end(n_days: int, horizon: int) -> int:
+    raw = int(n_days * float(os.getenv("FACTOR_MINING_DISCOVERY_RATIO", _DEFAULT_DISCOVERY_RATIO)))
+    return max(horizon * 4, min(raw, n_days - horizon * 4))
 
 
 def _rank_ic_threshold(evaluated: int) -> float:
@@ -223,6 +229,10 @@ class FactorMiner:
         if closes is None or not symbols:
             return {"accepted": [], "rejected": [], "warning": "特征面板为空，无法挖掘",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0}
+        discovery_end = _discovery_end(closes.shape[1], horizon)
+        if discovery_end <= horizon * 2 or closes.shape[1] - discovery_end <= horizon * 2:
+            return {"accepted": [], "rejected": [], "warning": "样本长度不足，无法拆分 discovery/final OOS",
+                    "stopped_early": False, "stop_reason": None, "evaluated": 0}
 
         library = load_library(self.library_path)
         accepted: list[dict] = []
@@ -291,20 +301,25 @@ class FactorMiner:
                     rejected_rpn.add(rpn_key)
                     round_dup_rejected += 1
                     continue
-                metrics = fitness_mod.evaluate_factor(panel_values, closes, horizon=horizon, eval_window=eval_window)
+                metrics = fitness_mod.evaluate_factor(
+                    panel_values[:, :discovery_end],
+                    closes[:, :discovery_end],
+                    horizon=horizon,
+                    eval_window=eval_window,
+                )
                 metrics = _with_neutralized_metrics(metrics)
                 # 收紧后的门槛只会比基础门槛更严，可直接叠加在 passed 之上
                 passed = bool(metrics.get("passed")) and metrics["rank_ic"] >= _rank_ic_threshold(evaluated)
                 if not passed:
-                    last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "未达入库门槛"})
+                    last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "discovery 未达入库门槛"})
                     rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
-                oos = evaluate_oos_splits(panel_values, closes, horizon=horizon)
+                oos = evaluate_oos_splits(panel_values[:, discovery_end:], closes[:, discovery_end:], horizon=horizon)
                 if not oos.get("passed"):
                     metrics["passed"] = False
                     metrics["oos"] = oos
-                    last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "OOS 未通过"})
+                    last_round_results.append({"rpn": rpn, "metrics": _hide_final_oos(metrics), "result": "final OOS 未通过"})
                     rejected.append({"rpn": rpn, "reason": "OOS未通过", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
@@ -363,4 +378,12 @@ def _with_neutralized_metrics(metrics: dict) -> dict:
     if out.get("neutralized_rank_ic") is not None and abs(float(out["neutralized_rank_ic"])) < fitness_mod.RANK_IC_THRESHOLD:
         out["passed"] = False
         out.setdefault("failure_reasons", []).append("neutralized_rank_ic_failed")
+    return out
+
+
+def _hide_final_oos(metrics: dict) -> dict:
+    """Keep final OOS private from subsequent candidate-generation prompts."""
+    out = dict(metrics)
+    if "oos" in out:
+        out["oos"] = {"passed": bool((out.get("oos") or {}).get("passed")), "withheld": True}
     return out

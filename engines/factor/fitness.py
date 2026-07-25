@@ -49,6 +49,42 @@ def evaluate_factor(
     """
     n_symbols, n_days = factor_panel.shape
     start_d = max(0, n_days - eval_window) if eval_window else 0
+    return evaluate_factor_range(
+        factor_panel,
+        closes,
+        eval_start=start_d,
+        eval_end=n_days,
+        horizon=horizon,
+        top_k=top_k,
+    )
+
+
+def evaluate_factor_range(
+    factor_panel: np.ndarray,
+    closes: np.ndarray,
+    eval_start: int,
+    eval_end: int,
+    horizon: int = 5,
+    top_k: int | None = None,
+) -> dict:
+    """Evaluate factor dates in [eval_start, eval_end) only.
+
+    The close matrix must include prices through eval_end + horizon so forward
+    returns are observable, but those future observation days are not counted in
+    the coverage denominator.
+    """
+
+    n_symbols, n_days = factor_panel.shape
+    eval_start = max(0, int(eval_start))
+    eval_end = min(int(eval_end), n_days - horizon)
+    if eval_end <= eval_start:
+        return {
+            "rank_ic": 0.0, "ic_mean": 0.0, "icir": 0.0,
+            "topk_annual_return": 0.0, "topk_max_drawdown": 0.0,
+            "coverage": 0.0, "fitness": float("-inf"),
+            "passed": False,
+            "warning": "eval range too short",
+        }
     # TopK 比例化：全 A 大池下固定 5 只过于极端，默认取池子的 1%（下限 5 只）
     resolved_top_k = top_k or max(TOP_K_MIN, int(n_symbols * TOP_K_RATIO))
     fwd = np.full((n_symbols, n_days), np.nan, dtype=float)
@@ -59,9 +95,9 @@ def evaluate_factor(
     ic_list: list[float] = []
     rank_ic_list: list[float] = []
     topk_daily: list[tuple[int, float, float, set[int]]] = []  # (day, TopK日收益, 基准日收益, 持仓索引集合)
-    last_topk_day = start_d - horizon
+    last_topk_day = eval_start - horizon
 
-    for d in range(start_d, n_days):
+    for d in range(eval_start, eval_end):
         f = factor_panel[:, d]
         r = fwd[:, d]
         valid = ~np.isnan(f) & ~np.isnan(r)
@@ -87,7 +123,7 @@ def evaluate_factor(
         benchmark_return = float(np.nanmean(rv))
         topk_daily.append((d, top_return, benchmark_return, top_idx))
 
-    total_days = n_days - start_d
+    total_days = eval_end - eval_start
     coverage = len(ic_list) / total_days if total_days else 0.0
     if coverage < MIN_COVERAGE or not rank_ic_list:
         return {
@@ -157,6 +193,7 @@ def evaluate_factor(
 
 __all__ = [
     "evaluate_factor",
+    "evaluate_factor_range",
     "RANK_IC_THRESHOLD",
     "ICIR_THRESHOLD",
     "TOPK_EXCESS_THRESHOLD",

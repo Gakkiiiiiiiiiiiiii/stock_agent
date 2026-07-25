@@ -287,7 +287,7 @@ class ClaudeToolRegistry:
                             "high_position_loss_ratio": {"type": "number"},
                             "high_position_limit_down_ratio": {"type": "number"},
                             "high_position_breakdown_ratio": {"type": "number"},
-                            "retreat_days": {"type": "integer"},
+                            "high_position_big_negative_count": {"type": "integer"},
                         },
                     },
                 },

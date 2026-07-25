@@ -58,7 +58,7 @@ class JobTaskRepository:
             row = session.execute(text("SELECT * FROM job_task WHERE idempotency_key=:key"), {"key": key}).mappings().first()
             return self._row(row)
 
-    def heartbeat(self, task_id: str, worker_id: str, progress: float | None = None) -> None:
+    def heartbeat(self, task_id: str, worker_id: str, progress: float | None = None) -> bool:
         self._ensure_schema()
         values = {"id": task_id, "worker_id": worker_id, "heartbeat_at": datetime.now(timezone.utc).replace(tzinfo=None)}
         progress_sql = ""
@@ -66,10 +66,11 @@ class JobTaskRepository:
             values["progress"] = progress
             progress_sql = ", progress=:progress"
         with session_scope() as session:
-            session.execute(
-                text(f"UPDATE job_task SET worker_id=:worker_id, heartbeat_at=:heartbeat_at{progress_sql} WHERE id=:id"),
+            result = session.execute(
+                text(f"UPDATE job_task SET heartbeat_at=:heartbeat_at{progress_sql} WHERE id=:id AND status='RUNNING' AND worker_id=:worker_id"),
                 values,
             )
+            return bool(result.rowcount)
 
     def claim_next(self, worker_id: str, task_types: list[str] | None = None, lease_seconds: int = 300) -> dict[str, Any] | None:
         self._ensure_schema()
@@ -152,19 +153,21 @@ class JobTaskRepository:
                 {"id": task_id, "worker_id": worker_id, "now": now},
             )
 
-    def mark_finished(self, task_id: str, status: str, result_ref: str | None = None, error: dict | None = None) -> None:
+    def mark_finished(self, task_id: str, status: str, result_ref: str | None = None, error: dict | None = None, worker_id: str | None = None) -> bool:
         self._ensure_schema()
+        owner_clause = " AND worker_id=:worker_id" if worker_id else ""
         with session_scope() as session:
-            session.execute(
+            result = session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE job_task
                     SET status=:status, result_ref=:result_ref, error=:error, finished_at=:finished_at, progress=:progress
-                    WHERE id=:id
+                    WHERE id=:id{owner_clause}
                     """
                 ),
                 {
                     "id": task_id,
+                    "worker_id": worker_id,
                     "status": status,
                     "result_ref": result_ref,
                     "error": json.dumps(error, ensure_ascii=False) if error else None,
@@ -172,32 +175,38 @@ class JobTaskRepository:
                     "progress": 1 if status == "SUCCEEDED" else 0,
                 },
             )
+            return bool(result.rowcount)
 
-    def mark_failed(self, task_id: str, error: dict | str) -> None:
+    def mark_failed(self, task_id: str, error: dict | str, worker_id: str | None = None) -> bool:
         self._ensure_schema()
         task = self.get(task_id)
         if task is None:
-            return
+            return False
+        if worker_id and task.get("worker_id") != worker_id:
+            return False
         retry_count = int(task.get("retry_count") or 0) + 1
         max_retries = int(task.get("max_retries") or 0)
         status = "FAILED_RETRYABLE" if retry_count <= max_retries else "FAILED_FINAL"
+        owner_clause = " AND worker_id=:worker_id" if worker_id else ""
         with session_scope() as session:
-            session.execute(
+            result = session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE job_task
                     SET status=:status, error=:error, retry_count=:retry_count, finished_at=:finished_at, progress=0
-                    WHERE id=:id
+                    WHERE id=:id{owner_clause}
                     """
                 ),
                 {
                     "id": task_id,
+                    "worker_id": worker_id,
                     "status": status,
                     "error": json.dumps(error, ensure_ascii=False) if not isinstance(error, str) else error,
                     "retry_count": retry_count,
                     "finished_at": datetime.now(timezone.utc).replace(tzinfo=None),
                 },
             )
+            return bool(result.rowcount)
 
     def cancel(self, task_id: str) -> bool:
         self._ensure_schema()

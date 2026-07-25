@@ -93,6 +93,7 @@ class MarketRegimeRequest(BaseModel):
     high_position_loss_ratio: float | None = None
     high_position_limit_down_ratio: float | None = None
     high_position_breakdown_ratio: float | None = None
+    high_position_big_negative_count: int | None = None
     retreat_days: int | None = None
     force_refresh: bool = False
 
@@ -174,13 +175,17 @@ def metrics() -> PlainTextResponse:
 
 
 def _ready_checks() -> dict[str, str]:
+    required = _required_ready_checks()
     checks = {"api": "ok"}
     checks["postgres"] = _check_postgres()
     checks["qdrant"] = _check_http(f"{os.getenv('QDRANT_URL', 'http://localhost:6333').rstrip('/')}/collections", api_key=os.getenv("QDRANT_API_KEY"))
     checks["redis"] = _check_redis(os.getenv("REDIS_URL", ""))
     checks["embedding"] = _check_embedding()
     checks["reranker"] = _check_http(f"{os.getenv('RERANKER_URL', 'http://localhost:8010').rstrip('/')}/health")
-    checks["qmt"] = _check_qmt()
+    if "qmt" in required or os.getenv("READY_CHECK_OPTIONAL_QMT", "false").lower() in {"1", "true", "yes"}:
+        checks["qmt"] = _check_qmt()
+    else:
+        checks["qmt"] = "skipped"
     return checks
 
 

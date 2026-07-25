@@ -34,6 +34,8 @@ def env(tmp_path, monkeypatch):
     """隔离状态目录 + 假行情 + 单因子库。"""
     monkeypatch.setattr(fpw, "load_universe", lambda: list(SYMBOLS))
     monkeypatch.setattr(fpw, "next_trading_day", lambda day: day + timedelta(days=1))
+    now_value = {"value": "2026-07-29T15:05:00+08:00"}
+    monkeypatch.setattr(fpw, "_now_iso", lambda: now_value["value"])
     lib = tmp_path / "lib.yaml"
     lib.write_text(
         "factors:\n"
@@ -53,7 +55,12 @@ def env(tmp_path, monkeypatch):
             return p, _dates(n_days), list(symbols), None
         return loader
 
-    return {"state": tmp_path / "factor_paper", "lib": str(lib), "make_loader": make_loader}
+    return {
+        "state": tmp_path / "factor_paper",
+        "lib": str(lib),
+        "make_loader": make_loader,
+        "set_now": lambda value: now_value.__setitem__("value", value),
+    }
 
 
 def test_first_run_writes_positions_and_state(env):
@@ -122,6 +129,7 @@ def test_bookkeeping_advances_next_day(env):
     fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](30), remine_days=9999)
     # 次日面板多一个交易日
+    env["set_now"]("2026-07-30T15:05:00+08:00")
     fpw.generate_orders(execution_date="2026-07-31", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
     result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                            panel_loader=env["make_loader"](31), remine_days=9999)
@@ -215,6 +223,7 @@ def test_remine_success_writes_state(env):
     remine = json.loads((env["state"] / "remine_state.json").read_text(encoding="utf-8"))
     assert remine["last_remine_date"] == "2026-07-29"
     # 次日（距上次挖掘仅 1 个交易日 < 5）不再触发
+    env["set_now"]("2026-07-30T15:05:00+08:00")
     fpw.generate_orders(execution_date="2026-07-31", state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](31), remine_days=5,
                   miner_factory=OkMiner)
@@ -253,6 +262,18 @@ def test_invalid_frozen_order_metadata_blocks_execution(env):
     result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
     assert result["skipped"] is True
     assert "冻结截止" in result["warning"]
+
+
+def test_order_generation_before_signal_close_rejected(env):
+    env["set_now"]("2026-07-29T14:59:00+08:00")
+    result = fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
+    assert "早于信号日收盘" in result["warning"]
+
+
+def test_order_generation_inside_freeze_window_passes(env):
+    env["set_now"]("2026-07-29T15:01:00+08:00")
+    result = fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
+    assert result["skipped"] is False
 
 
 def test_cli_exit_code_zero(env, monkeypatch, capsys):

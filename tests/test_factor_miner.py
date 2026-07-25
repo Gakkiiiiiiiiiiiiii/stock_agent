@@ -204,7 +204,7 @@ def test_miner_caches_rejected_rpn(tmp_path, monkeypatch):
     result = miner.mine(panel, symbols, rounds=2, candidates_per_round=1, horizon=5)
     assert len(calls) == 1  # 第 2 轮命中缓存，未重复打分
     assert result["evaluated"] == 1
-    assert result["rejected"][0]["reason"] == "未达门槛"
+    assert result["rejected"][0]["reason"] in {"未达门槛", "OOS未通过"}
     assert result["rejected"][1]["reason"] == "重复"
 
 

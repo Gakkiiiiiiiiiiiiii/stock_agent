@@ -25,12 +25,12 @@ class MarketFeatureBuilder:
         up_count = snapshot.get("up_count")
         estimated_high_position = any(
             snapshot.get(name) is None
-            for name in ("high_position_loss_ratio", "high_position_limit_down_ratio", "high_position_breakdown_ratio", "retreat_days")
+            for name in ("high_position_loss_ratio", "high_position_limit_down_ratio", "high_position_breakdown_ratio", "high_position_big_negative_count")
         )
         estimated_loss_ratio = _ratio(down_count, (up_count or 0) + (down_count or 0))
         estimated_limit_down_ratio = _ratio(limit_down_count, (snapshot.get("limit_up_count") or 0) + (limit_down_count or 0))
         estimated_breakdown_ratio = max(0.0, -(index_return_5d or 0.0))
-        estimated_retreat_days = _retreat_days(index_drawdown_20d)
+        estimated_big_negative_count = _retreat_days(index_drawdown_20d)
         quality_flags = list(snapshot.get("quality_flags") or [])
         if estimated_high_position:
             quality_flags.append("HIGH_POSITION_FEATURES_ESTIMATED")
@@ -60,11 +60,12 @@ class MarketFeatureBuilder:
             "high_position_loss_ratio": _value_or_none(snapshot.get("high_position_loss_ratio")),
             "high_position_limit_down_ratio": _value_or_none(snapshot.get("high_position_limit_down_ratio")),
             "high_position_breakdown_ratio": _value_or_none(snapshot.get("high_position_breakdown_ratio")),
-            "retreat_days": snapshot.get("retreat_days") if snapshot.get("retreat_days") is not None else None,
+            "high_position_big_negative_count": snapshot.get("high_position_big_negative_count") if snapshot.get("high_position_big_negative_count") is not None else None,
+            "high_position_pool_size": snapshot.get("high_position_pool_size"),
             "estimated_high_position_loss_ratio": estimated_loss_ratio,
             "estimated_high_position_limit_down_ratio": estimated_limit_down_ratio,
             "estimated_high_position_breakdown_ratio": estimated_breakdown_ratio,
-            "estimated_retreat_days": estimated_retreat_days,
+            "estimated_high_position_big_negative_count": estimated_big_negative_count,
             "quality_score": snapshot.get("quality_score") if snapshot.get("quality_score") is not None else _quality_score(snapshot),
             "quality_flags": sorted(set(quality_flags)),
             "top_theme_strength": top_theme_strength,

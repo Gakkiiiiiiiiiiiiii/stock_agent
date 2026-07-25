@@ -47,3 +47,18 @@ def test_job_claim_respects_lease_timeout():
     reclaimed = repo.claim_next("worker-2", [task_type], lease_seconds=60)
     assert reclaimed["id"] == task["id"]
     assert reclaimed["worker_id"] == "worker-2"
+
+
+def test_stale_worker_cannot_heartbeat_or_finish_after_reclaim():
+    repo = JobTaskRepository()
+    JobTaskRepository._schema_ready = False
+    task_type = f"test_job_{uuid4().hex}"
+    task = repo.create(task_type, {"rounds": 1, "test_id": str(uuid4())}, max_retries=1)
+    repo.claim_next("worker-1", [task_type], lease_seconds=60)
+    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=120)
+    with session_scope() as session:
+        session.execute(text("UPDATE job_task SET heartbeat_at=:heartbeat_at WHERE id=:id"), {"heartbeat_at": stale, "id": task["id"]})
+    repo.claim_next("worker-2", [task_type], lease_seconds=60)
+    assert repo.heartbeat(task["id"], "worker-1") is False
+    assert repo.mark_finished(task["id"], "SUCCEEDED", result_ref="{}", worker_id="worker-1") is False
+    assert repo.get(task["id"])["worker_id"] == "worker-2"

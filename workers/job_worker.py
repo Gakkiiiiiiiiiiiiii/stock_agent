@@ -24,11 +24,11 @@ def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> 
             payload = task.get("payload") or {}
             with heartbeat_loop(repo, task["id"], worker):
                 result = mine_factors(**payload)
-            repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), error=None)
+            repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), error=None, worker_id=worker)
             return True
         raise ValueError(f"unsupported task_type: {task['task_type']}")
     except Exception as exc:  # noqa: BLE001
-        repo.mark_failed(task["id"], {"code": type(exc).__name__, "message": str(exc)})
+        repo.mark_failed(task["id"], {"code": type(exc).__name__, "message": str(exc)}, worker_id=worker)
         return True
 
 

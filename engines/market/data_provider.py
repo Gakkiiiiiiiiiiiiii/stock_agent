@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from functools import lru_cache
 from typing import Any
 
+from engines.market.high_position_feature_builder import HighPositionFeatureBuilder
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 from engines.backtest.execution import price_limit_pct
 from financial_agent.models import KlineRecord, KlineResponse
@@ -149,7 +150,7 @@ class QmtMarketDataProvider(MarketDataProvider):
         avg_20d = average(return_20d)
         avg_vol_20d = average(volatility_20d)
         avg_dd_20d = average(drawdown_20d)
-        breadth = self._build_market_breadth()
+        breadth = self._build_market_breadth(as_of=end_day)
         market_regime, risk_appetite = classify_market_snapshot(intraday=intraday, avg_5d=avg_5d, avg_20d=avg_20d)
         warning = None
         if not grouped:
@@ -168,6 +169,11 @@ class QmtMarketDataProvider(MarketDataProvider):
             "limit_up_count": breadth.get("limit_up_count"),
             "limit_down_count": breadth.get("limit_down_count"),
             "top10_amount_share": breadth.get("top10_amount_share"),
+            "high_position_loss_ratio": breadth.get("high_position_loss_ratio"),
+            "high_position_limit_down_ratio": breadth.get("high_position_limit_down_ratio"),
+            "high_position_breakdown_ratio": breadth.get("high_position_breakdown_ratio"),
+            "high_position_big_negative_count": breadth.get("high_position_big_negative_count"),
+            "high_position_pool_size": breadth.get("high_position_pool_size"),
             "requested_quote_count": breadth.get("requested_quote_count"),
             "received_quote_count": breadth.get("received_quote_count"),
             "quote_coverage": quote_coverage,
@@ -184,7 +190,7 @@ class QmtMarketDataProvider(MarketDataProvider):
             },
         }
 
-    def _build_market_breadth(self) -> dict[str, Any]:
+    def _build_market_breadth(self, as_of: date | None = None) -> dict[str, Any]:
         try:
             rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
         except QmtBridgeError:
@@ -224,6 +230,13 @@ class QmtMarketDataProvider(MarketDataProvider):
         received_quote_count = len(quotes)
         quote_coverage = received_quote_count / requested_quote_count if requested_quote_count else None
         quality_flags = ["MARKET_QUOTE_COVERAGE_LOW"] if quote_coverage is not None and quote_coverage < 0.9 else []
+        high_features: dict[str, Any] = {}
+        try:
+            high_features = HighPositionFeatureBuilder(self.bridge).build(symbols, quotes, as_of=as_of).as_dict()
+            if high_features.get("high_position_pool_size", 0) <= 0:
+                quality_flags.append("HIGH_POSITION_FEATURES_UNAVAILABLE")
+        except QmtBridgeError:
+            quality_flags.append("HIGH_POSITION_FEATURES_UNAVAILABLE")
         return {
             "universe_size": len(symbols),
             "requested_quote_count": requested_quote_count,
@@ -236,6 +249,7 @@ class QmtMarketDataProvider(MarketDataProvider):
             "turnover_amount": round(total_amount, 2) if total_amount else None,
             "top10_amount_share": round(top10_share, 6) if top10_share is not None else None,
             "quality_flags": quality_flags,
+            **high_features,
         }
 
     def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:
