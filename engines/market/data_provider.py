@@ -6,8 +6,8 @@ from functools import lru_cache
 from typing import Any
 
 from engines.market.high_position_feature_builder import HighPositionFeatureBuilder
+from engines.market.price_limit_rules import resolve_price_limit_rule
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
-from engines.backtest.execution import price_limit_pct
 from engines.market.trading_calendar import latest_available_trading_day, previous_trading_day
 from financial_agent.models import KlineRecord, KlineResponse
 
@@ -228,10 +228,17 @@ class QmtMarketDataProvider(MarketDataProvider):
                 up_count += 1
             elif pct < 0:
                 down_count += 1
-            limit = price_limit_pct(symbol=str(payload.get("symbol") or symbol), is_st=is_st_quote(payload))
-            if pct >= limit - 0.002:
+            rule = resolve_price_limit_rule(
+                str(payload.get("symbol") or symbol),
+                trade_date=end_day,
+                quote=payload,
+                is_risk_warning=is_st_quote(payload),
+            )
+            if not rule.has_price_limit:
+                continue
+            if pct >= rule.limit_up_pct - 0.002:
                 limit_up_count += 1
-            elif pct <= -limit + 0.002:
+            elif pct <= -rule.limit_down_pct + 0.002:
                 limit_down_count += 1
         total_amount = sum(amounts)
         top10_share = sum(sorted(amounts, reverse=True)[:10]) / total_amount if total_amount > 0 else None

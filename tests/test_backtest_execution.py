@@ -1,5 +1,6 @@
 import numpy as np
 import pytest
+from datetime import date
 
 from engines.backtest.execution import (
     PositionBook,
@@ -36,32 +37,45 @@ from engines.backtest.reports import render_portfolio_report
 )
 def test_board_and_limit_table(symbol, board, pct):
     assert board_of(symbol) == board
-    assert price_limit_pct(symbol) == pytest.approx(pct)
+    assert price_limit_pct(symbol, trade_date=date(2026, 7, 6)) == pytest.approx(pct)
 
 
-def test_st_limit_always_5pct():
-    assert price_limit_pct("600000.SH", is_st=True) == pytest.approx(0.05)
-    assert price_limit_pct("300750.SZ", is_st=True) == pytest.approx(0.05)
+def test_price_limit_requires_trade_date():
+    with pytest.raises(ValueError):
+        price_limit_pct("600000.SH")
+
+
+def test_main_board_st_limit_is_versioned():
+    assert price_limit_pct("600000.SH", is_st=True, trade_date=date(2026, 7, 3)) == pytest.approx(0.05)
+    assert price_limit_pct("600000.SH", is_st=True, trade_date=date(2026, 7, 6)) == pytest.approx(0.10)
+    assert price_limit_pct("300750.SZ", is_st=True, trade_date=date(2026, 7, 6)) == pytest.approx(0.20)
+
+
+def test_quote_limit_rate_overrides_static_rule():
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12}
+    assert price_limit_pct("600000.SH", trade_date=date(2026, 7, 6), quote=quote) == pytest.approx(0.15)
 
 
 def test_limit_prices_round_to_2dp():
     # 主板 10%：10.00 × 1.1 = 11.00
-    assert limit_up_price(10.0, "600000.SH") == pytest.approx(11.00)
-    assert limit_down_price(10.0, "600000.SH") == pytest.approx(9.00)
+    day = date(2026, 7, 6)
+    assert limit_up_price(10.0, "600000.SH", trade_date=day) == pytest.approx(11.00)
+    assert limit_down_price(10.0, "600000.SH", trade_date=day) == pytest.approx(9.00)
     # 创业板 20%
-    assert limit_up_price(10.0, "300750.SZ") == pytest.approx(12.00)
-    # ST 5%
-    assert limit_up_price(10.0, "600000.SH", is_st=True) == pytest.approx(10.50)
+    assert limit_up_price(10.0, "300750.SZ", trade_date=day) == pytest.approx(12.00)
+    # 主板 ST 新规 10%
+    assert limit_up_price(10.0, "600000.SH", is_st=True, trade_date=day) == pytest.approx(11.00)
     # 保留 2 位小数：10.01 × 1.1 = 11.011 -> 11.01
-    assert limit_up_price(10.01, "600000.SH") == pytest.approx(11.01)
+    assert limit_up_price(10.01, "600000.SH", trade_date=day) == pytest.approx(11.01)
 
 
 def test_limit_up_cannot_buy_limit_down_cannot_sell():
     symbol = "600000.SH"  # 主板 10%，前收 10.00，涨停 11.00 / 跌停 9.00
-    assert can_buy(11.00, 10.0, symbol) is False
-    assert can_buy(10.99, 10.0, symbol) is True
-    assert can_sell(9.00, 10.0, symbol) is False
-    assert can_sell(9.01, 10.0, symbol) is True
+    day = date(2026, 7, 6)
+    assert can_buy(11.00, 10.0, symbol, trade_date=day) is False
+    assert can_buy(10.99, 10.0, symbol, trade_date=day) is True
+    assert can_sell(9.00, 10.0, symbol, trade_date=day) is False
+    assert can_sell(9.01, 10.0, symbol, trade_date=day) is True
 
 
 # ---------- T+1 ----------

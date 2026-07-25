@@ -10,14 +10,17 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Callable
+from uuid import uuid4
 
 import numpy as np
 import yaml
 
 from engines.factor import fitness as fitness_mod
 from engines.factor.lookback import max_lookback_from_rpn
+from engines.factor.oos_audit import append_oos_audit
 from engines.factor.purged_walkforward import run_purged_walkforward
 from engines.factor.research_split import FactorResearchSplit, build_research_split
 from engines.factor.library import (
@@ -25,6 +28,7 @@ from engines.factor.library import (
     add_factor,
     is_duplicate,
     load_library,
+    research_validated_factors,
     save_library,
 )
 from engines.factor.vocab import (
@@ -83,11 +87,11 @@ def evaluate_oos_splits(
     return run_purged_walkforward(factor_panel, closes, eval_start=eval_start, eval_end=eval_end, horizon=horizon)
 
 
-def _rank_ic_threshold(evaluated: int) -> float:
+def _rank_ic_threshold(evaluated: int, base_threshold: float) -> float:
     """按累计评估候选数返回当前 rank_ic 入库门槛。"""
     if evaluated > _BONFERRONI_EVAL_COUNT:
-        return fitness_mod.RANK_IC_THRESHOLD * _BONFERRONI_FACTOR
-    return fitness_mod.RANK_IC_THRESHOLD
+        return base_threshold * _BONFERRONI_FACTOR
+    return base_threshold
 
 _EXAMPLES = [
     {
@@ -232,6 +236,7 @@ class FactorMiner:
         candidates_per_round: int | None = None,
         horizon: int | None = None,
         eval_window: int | None = None,
+        dates: list[str] | None = None,
         lease_guard: Callable[[], None] | None = None,
     ) -> dict:
         """执行挖掘，返回 {accepted, rejected, warning, stopped_early, stop_reason, evaluated} 摘要。"""
@@ -250,10 +255,24 @@ class FactorMiner:
             return {"accepted": [], "rejected": [], "warning": "特征面板为空，无法挖掘",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0}
         split = build_research_split(closes.shape[1], research_config.data_split, horizon)
+        discovery_eval_start = 0
+        discovery_eval_end = 0
+        if split is not None:
+            discovery_eval_end = split.discovery_end
+            discovery_eval_start = (
+                split.discovery_start
+                if eval_window is None
+                else max(split.discovery_start, discovery_eval_end - int(eval_window))
+            )
         diagnostics = {
             "discovery_days": split.discovery_days if split else 0,
             "final_oos_days": split.final_oos_days if split else 0,
             "warmup_days": split.discovery_warmup_days if split else 0,
+            "configured_eval_window": eval_window,
+            "discovery_eval_start": discovery_eval_start,
+            "discovery_eval_end": discovery_eval_end,
+            "actual_discovery_eval_days": max(0, discovery_eval_end - discovery_eval_start),
+            "split_ranges": split.diagnostics(horizon, closes.shape[1]) if split else {},
             "oos_window_count": 0,
             "run_valid": True,
             "run_failure_code": None,
@@ -277,15 +296,15 @@ class FactorMiner:
 
         # 预计算库内 active 因子面板用于相关性判重
         active_panels: dict[str, np.ndarray] = {}
-        for factor in active_factors(library):
+        for factor in research_validated_factors(library):
             panel_values = self.vm.execute(factor.get("rpn") or [], panel)
             if panel_values is not None:
-                active_panels[factor["id"]] = panel_values[:, split.discovery_start:split.discovery_end]
+                active_panels[factor["id"]] = panel_values[:, discovery_eval_start:discovery_eval_end]
         # Alpha191 种子面板进判重池：引导 LLM 在种子思路上变异而非照抄
         for seed in _load_seed_entries():
             panel_values = self.vm.execute(seed["rpn"], panel)
             if panel_values is not None:
-                active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, split.discovery_start:split.discovery_end]
+                active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, discovery_eval_start:discovery_eval_end]
 
         for round_index in range(1, rounds + 1):
             prompt = self._build_prompt(library, candidates_per_round, horizon, round_index, last_round_results)
@@ -326,11 +345,12 @@ class FactorMiner:
                     rejected.append({"rpn": rpn, "reason": "公式非法", "warning": str(exc)})
                     rejected_rpn.add(rpn_key)
                     continue
-                if split.discovery_warmup_days < lookback - 1 or split.final_oos_warmup_days < lookback - 1:
+                available_discovery_warmup = discovery_eval_start - split.warmup_start
+                if available_discovery_warmup < lookback - 1 or split.final_oos_warmup_days < lookback - 1:
                     reason = {
                         "reason": "INSUFFICIENT_LOOKBACK_HISTORY",
                         "required_lookback": lookback,
-                        "available_discovery_warmup": split.discovery_warmup_days,
+                        "available_discovery_warmup": available_discovery_warmup,
                         "available_final_oos_warmup": split.final_oos_warmup_days,
                     }
                     last_round_results.append({"rpn": rpn, "result": "历史预热不足", **reason})
@@ -343,7 +363,7 @@ class FactorMiner:
                     rejected.append({"rpn": rpn, "reason": "计算失败"})
                     rejected_rpn.add(rpn_key)
                     continue
-                discovery_values = full_values[:, split.discovery_start:split.discovery_end]
+                discovery_values = full_values[:, discovery_eval_start:discovery_eval_end]
                 if is_duplicate(rpn, discovery_values, library, active_panels):
                     last_round_results.append({"rpn": rpn, "result": "与库内因子重复"})
                     rejected.append({"rpn": rpn, "reason": "重复"})
@@ -353,13 +373,15 @@ class FactorMiner:
                 metrics = fitness_mod.evaluate_factor_range(
                     full_values,
                     closes,
-                    eval_start=split.discovery_start,
-                    eval_end=split.discovery_end,
+                    eval_start=discovery_eval_start,
+                    eval_end=discovery_eval_end,
                     horizon=horizon,
                 )
                 metrics = _with_neutralized_metrics(metrics)
                 # 收紧后的门槛只会比基础门槛更严，可直接叠加在 passed 之上
-                passed = bool(metrics.get("passed")) and metrics["rank_ic"] >= _rank_ic_threshold(evaluated)
+                passed = bool(metrics.get("passed")) and metrics["rank_ic"] >= _rank_ic_threshold(
+                    evaluated, research_config.evaluation.min_rank_ic
+                )
                 if not passed:
                     last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "discovery 未达入库门槛"})
                     rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
@@ -407,6 +429,7 @@ class FactorMiner:
             horizon,
             symbols,
             model_name,
+            dates=dates,
             eval_window=eval_window,
             lease_guard=lease_guard,
         )
@@ -432,6 +455,7 @@ class FactorMiner:
         horizon: int,
         symbols: list[str],
         model_name: str,
+        dates: list[str] | None = None,
         eval_window: int | None = None,
         lease_guard: Callable[[], None] | None = None,
     ) -> tuple[list[dict], list[dict], dict]:
@@ -444,6 +468,7 @@ class FactorMiner:
             "run_failure_code": None,
             "discovery_candidate_count": len(candidates),
         }
+        research_run_id = f"factor-oos-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         for candidate in candidates:
             if lease_guard:
                 lease_guard()
@@ -457,6 +482,15 @@ class FactorMiner:
             window_count = len(oos.get("windows") or [])
             diagnostics["oos_window_count"] = max(diagnostics["oos_window_count"], window_count)
             if not window_count:
+                audit_ref = self._write_oos_audit(
+                    candidate=candidate,
+                    oos={"passed": False, "warning": "FINAL_OOS_WINDOW_UNAVAILABLE"},
+                    split=split,
+                    horizon=horizon,
+                    symbols=symbols,
+                    dates=dates,
+                    research_run_id=research_run_id,
+                )
                 diagnostics["run_valid"] = False
                 diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
                 rejected.append({
@@ -466,11 +500,20 @@ class FactorMiner:
                     "metrics": {
                         **candidate.discovery_metrics,
                         "passed": False,
-                        "final_oos_audit": {"passed": False, "warning": "FINAL_OOS_WINDOW_UNAVAILABLE"},
+                        "final_oos_audit_ref": audit_ref,
                     },
                 })
                 continue
             if not oos.get("passed"):
+                audit_ref = self._write_oos_audit(
+                    candidate=candidate,
+                    oos=oos,
+                    split=split,
+                    horizon=horizon,
+                    symbols=symbols,
+                    dates=dates,
+                    research_run_id=research_run_id,
+                )
                 rejected.append({
                     "rpn": candidate.rpn,
                     "reason": "OOS未通过",
@@ -478,19 +521,34 @@ class FactorMiner:
                     "metrics": {
                         **candidate.discovery_metrics,
                         "passed": False,
-                        "final_oos_audit": oos,
+                        "final_oos_audit_ref": audit_ref,
                     },
                 })
                 continue
             if lease_guard:
                 lease_guard()
+            audit_ref = self._write_oos_audit(
+                candidate=candidate,
+                oos=oos,
+                split=split,
+                horizon=horizon,
+                symbols=symbols,
+                dates=dates,
+                research_run_id=research_run_id,
+            )
             stored_metrics = dict(candidate.discovery_metrics)
-            stored_metrics["final_oos_audit"] = {
+            stored_metrics["final_oos_summary"] = {
                 "method": oos.get("method"),
                 "passed": True,
                 "window_count": window_count,
+                "mean_rank_ic": oos.get("mean_rank_ic"),
+                "min_rank_ic": oos.get("min_rank_ic"),
+                "window_pass_ratio": oos.get("window_pass_ratio"),
+                "positive_window_ratio": oos.get("positive_window_ratio"),
+                "oos_excess_return": oos.get("oos_excess_return"),
                 "withheld": True,
             }
+            stored_metrics["final_oos_audit_ref"] = audit_ref
             entry = add_factor(
                 library,
                 candidate.rpn,
@@ -512,8 +570,36 @@ class FactorMiner:
         if accepted:
             if lease_guard:
                 lease_guard()
-            save_library(library, self.library_path, lease_guard=lease_guard)
+            merge_result = save_library(library, self.library_path, lease_guard=lease_guard)
+            by_hash = merge_result.persisted_by_hash
+            accepted = [by_hash.get(str(item.get("candidate_hash"))) or item for item in accepted]
         return accepted, rejected, diagnostics
+
+    def _write_oos_audit(
+        self,
+        *,
+        candidate: DiscoveryCandidate,
+        oos: dict,
+        split: FactorResearchSplit,
+        horizon: int,
+        symbols: list[str],
+        dates: list[str] | None,
+        research_run_id: str,
+    ) -> str:
+        return append_oos_audit(
+            {
+                "research_run_id": research_run_id,
+                "candidate_hash": candidate.candidate_hash,
+                "rpn": candidate.rpn,
+                "hypothesis": candidate.hypothesis,
+                "discovery_metrics": candidate.discovery_metrics,
+                "final_oos": oos,
+                "split": split.diagnostics(horizon, candidate.full_values.shape[1]),
+                "date_ranges": _date_ranges(split, horizon, dates),
+                "universe_size": len(symbols),
+                "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
+            }
+        )
 
 
 __all__ = ["FactorMiner"]
@@ -537,6 +623,8 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
         "oos",
         "final_oos",
         "final_oos_audit",
+        "final_oos_summary",
+        "final_oos_audit_ref",
         "windows",
         "mean_rank_ic",
         "min_rank_ic",
@@ -549,3 +637,20 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
 
 def _candidate_hash(rpn: list[str]) -> str:
     return sha256(json.dumps(list(rpn), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _date_ranges(split: FactorResearchSplit, horizon: int, dates: list[str] | None) -> dict:
+    if not dates:
+        return {}
+
+    def rng(start: int, end: int) -> tuple[str | None, str | None]:
+        if end <= start or start >= len(dates):
+            return (None, None)
+        return (str(dates[start]), str(dates[min(end - 1, len(dates) - 1)]))
+
+    return {
+        "history": rng(split.warmup_start, split.discovery_start),
+        "discovery": rng(split.discovery_start, split.discovery_end),
+        "final_oos": rng(split.final_oos_start, split.final_oos_end),
+        "future_return_observation": rng(split.final_oos_end, min(len(dates), split.final_oos_end + horizon)),
+    }

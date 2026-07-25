@@ -26,7 +26,7 @@ class FakeModelClient:
 
 
 @pytest.fixture(autouse=True)
-def _neutralize_seed_library(monkeypatch):
+def _neutralize_seed_library(monkeypatch, tmp_path):
     """真实 Alpha191 种子库参与判重，会与单调趋势面板上的动量因子高相关；
     测试里替换为空 rpn 种子（VM 不可计算即跳过），避免干扰入库。"""
     monkeypatch.setattr(
@@ -41,6 +41,7 @@ def _neutralize_seed_library(monkeypatch):
     monkeypatch.setenv("FACTOR_RESEARCH_DISCOVERY_DAYS", "30")
     monkeypatch.setenv("FACTOR_RESEARCH_FINAL_OOS_DAYS", "5")
     monkeypatch.setenv("FACTOR_PAPER_MINING_PANEL_DAYS", "60")
+    monkeypatch.setenv("FACTOR_OOS_AUDIT_ROOT", str(tmp_path / "audit"))
     from financial_agent.research_config import get_research_config
 
     get_research_config.cache_clear()

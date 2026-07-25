@@ -157,7 +157,7 @@ def test_ex_dividend_prev_close_mismatch_blocks_regime():
     assert "HIGH_POSITION_PREV_CLOSE_MISMATCH" in result["missing_fields"]
 
 
-def test_st_stock_minus_five_percent_is_limit_down():
+def test_main_board_st_minus_five_percent_was_limit_down_before_20260706():
     symbols = [f"6001{i:02d}.SH" for i in range(12)]
     bridge = _HighPositionBridge()
     quotes = {}
@@ -170,11 +170,16 @@ def test_st_stock_minus_five_percent_is_limit_down():
         "open": quotes[symbols[0]]["last_close"],
         "name": "*ST测试",
     }
-    features = HighPositionFeatureBuilder(bridge).build(symbols, quotes).as_dict()
+    features = HighPositionFeatureBuilder(bridge).build(
+        symbols,
+        quotes,
+        pool_as_of=date(2026, 7, 2),
+        outcome_as_of=date(2026, 7, 3),
+    ).as_dict()
     assert features["high_position_limit_down_ratio"] > 0
 
 
-def test_non_st_stock_minus_five_percent_is_not_limit_down():
+def test_main_board_st_minus_five_percent_not_limit_down_from_20260706():
     symbols = [f"6002{i:02d}.SH" for i in range(12)]
     bridge = _HighPositionBridge()
     quotes = {}
@@ -185,9 +190,14 @@ def test_non_st_stock_minus_five_percent_is_not_limit_down():
         "last_price": quotes[symbols[0]]["last_close"] * 0.948,
         "last_close": quotes[symbols[0]]["last_close"],
         "open": quotes[symbols[0]]["last_close"],
-        "name": "普通股票",
+        "name": "*ST测试",
     }
-    features = HighPositionFeatureBuilder(bridge).build(symbols, quotes).as_dict()
+    features = HighPositionFeatureBuilder(bridge).build(
+        symbols,
+        quotes,
+        pool_as_of=date(2026, 7, 3),
+        outcome_as_of=date(2026, 7, 6),
+    ).as_dict()
     assert features["high_position_limit_down_ratio"] == 0
 
 

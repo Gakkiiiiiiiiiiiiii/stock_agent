@@ -6,7 +6,7 @@ from typing import Any
 
 import numpy as np
 
-from engines.backtest.execution import price_limit_pct
+from engines.market.price_limit_rules import resolve_price_limit_rule
 from financial_agent.research_config import get_research_config
 
 
@@ -143,7 +143,13 @@ class HighPositionFeatureBuilder:
             pct = last_price / denominator - 1
             if pct < 0:
                 loss += 1
-            if pct <= -price_limit_pct(symbol, is_st=_is_st_quote(quote)) + 0.002:
+            rule = resolve_price_limit_rule(
+                symbol,
+                trade_date=end_day,
+                quote=quote,
+                is_risk_warning=_is_st_quote(quote),
+            )
+            if rule.has_price_limit and pct <= -rule.limit_down_pct + 0.002:
                 limit_down += 1
             if last_price < item["ma20"]:
                 breakdown += 1
@@ -233,7 +239,11 @@ def _recent_limit_up(symbol: str, records: list[dict[str, Any]]) -> bool:
     for prev, cur in zip(records, records[1:], strict=False):
         prev_close = _float(prev.get("close"))
         cur_close = _float(cur.get("close"))
-        if prev_close > 0 and cur_close / prev_close - 1 >= price_limit_pct(symbol) - 0.002:
+        cur_date = cur.get("date")
+        if cur_date is None:
+            continue
+        rule = resolve_price_limit_rule(symbol, trade_date=cur_date, security_meta=cur)
+        if prev_close > 0 and rule.has_price_limit and cur_close / prev_close - 1 >= rule.limit_up_pct - 0.002:
             return True
     return False
 

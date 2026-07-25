@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import numpy as np
 
+from financial_agent.research_config import EvaluationConfig, get_research_config
+
 MIN_VALID_PER_DAY = 10      # 单日截面有效标的最少数量
 MIN_COVERAGE = 0.6          # 有效 IC 天数占比下限，不足直接淘汰
 TOP_K_RATIO = 0.01          # TopK 组合持仓比例（池子的 1%）
@@ -39,6 +41,7 @@ def evaluate_factor(
     horizon: int = 5,
     top_k: int | None = None,
     eval_window: int | None = None,
+    thresholds: EvaluationConfig | None = None,
 ) -> dict:
     """评估因子面板，返回指标字典。
 
@@ -57,6 +60,7 @@ def evaluate_factor(
         eval_end=valid_end,
         horizon=horizon,
         top_k=top_k,
+        thresholds=thresholds,
     )
 
 
@@ -67,6 +71,7 @@ def evaluate_factor_range(
     eval_end: int,
     horizon: int = 5,
     top_k: int | None = None,
+    thresholds: EvaluationConfig | None = None,
 ) -> dict:
     """Evaluate factor dates in [eval_start, eval_end) only.
 
@@ -76,6 +81,7 @@ def evaluate_factor_range(
     """
 
     n_symbols, n_days = factor_panel.shape
+    thresholds = thresholds or get_research_config().evaluation
     eval_start = max(0, int(eval_start))
     eval_end = min(int(eval_end), n_days - horizon)
     if eval_end <= eval_start:
@@ -128,7 +134,7 @@ def evaluate_factor_range(
 
     total_days = eval_end - eval_start
     coverage = len(ic_list) / total_days if total_days else 0.0
-    if coverage < MIN_COVERAGE or not rank_ic_list:
+    if coverage < thresholds.min_coverage or not rank_ic_list:
         return {
             "rank_ic": 0.0, "ic_mean": 0.0, "icir": 0.0,
             "topk_annual_return": 0.0, "topk_max_drawdown": 0.0,
@@ -176,9 +182,9 @@ def evaluate_factor_range(
     # 综合适应度：RankIC 为主，ICIR 衡量稳定性，TopK 年化衡量多头端可交易性
     fitness = 5.0 * rank_ic + 0.5 * icir + topk_excess_annual_return
     passed = (
-        rank_ic >= RANK_IC_THRESHOLD
-        and icir >= ICIR_THRESHOLD
-        and topk_excess_annual_return > TOPK_EXCESS_THRESHOLD
+        rank_ic >= thresholds.min_rank_ic
+        and icir >= thresholds.min_icir
+        and topk_excess_annual_return > thresholds.min_topk_excess_annual_return
         and annual_return > benchmark_annual_return
     )
     return {

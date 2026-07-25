@@ -73,6 +73,12 @@ class NeutralizationConfig(BaseModel):
     required_exposures: list[str] = ["industry", "log_market_cap", "beta", "liquidity"]
 
 
+class FactorLibraryConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    lock_timeout_seconds: int = 30
+
+
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -82,17 +88,20 @@ class ResearchConfig(BaseModel):
     paper_trading: PaperTradingConfig = PaperTradingConfig()
     high_position: HighPositionConfig = HighPositionConfig()
     neutralization: NeutralizationConfig = NeutralizationConfig()
+    factor_library: FactorLibraryConfig = FactorLibraryConfig()
 
     def validate_runtime(self) -> None:
         required = (
             self.data_split.max_warmup_days
             + self.data_split.discovery_days
             + self.data_split.final_oos_days
+            + self.evaluation.horizon_days
         )
         if self.paper_trading.mining_panel_days < required:
             raise ValueError(
                 "paper_trading.mining_panel_days must be >= "
-                "data_split.max_warmup_days + data_split.discovery_days + data_split.final_oos_days "
+                "data_split.max_warmup_days + data_split.discovery_days + "
+                "data_split.final_oos_days + evaluation.horizon_days "
                 f"({self.paper_trading.mining_panel_days} < {required})"
             )
 
@@ -117,12 +126,17 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "data_split.final_oos_days", _env_int("FACTOR_RESEARCH_FINAL_OOS_DAYS"))
     _set_nested(merged, "data_split.max_warmup_days", _env_int("FACTOR_RESEARCH_MAX_WARMUP_DAYS"))
     _set_nested(merged, "evaluation.horizon_days", _env_int("FACTOR_MINING_HORIZON_DAYS"))
+    _set_nested(merged, "evaluation.min_coverage", _env_float("FACTOR_MIN_COVERAGE"))
+    _set_nested(merged, "evaluation.min_rank_ic", _env_float("FACTOR_MIN_RANK_IC"))
+    _set_nested(merged, "evaluation.min_icir", _env_float("FACTOR_MIN_ICIR"))
+    _set_nested(merged, "evaluation.min_topk_excess_annual_return", _env_float("FACTOR_MIN_TOPK_EXCESS_ANNUAL_RETURN"))
     _set_nested(merged, "purged_walkforward.n_windows", _env_int("FACTOR_OOS_N_WINDOWS"))
     _set_nested(merged, "purged_walkforward.embargo_days", _env_int("FACTOR_OOS_EMBARGO_DAYS"))
     _set_nested(merged, "paper_trading.scoring_panel_days", _env_int("FACTOR_PAPER_SCORING_PANEL_DAYS"))
     _set_nested(merged, "paper_trading.mining_panel_days", _env_int("FACTOR_PAPER_MINING_PANEL_DAYS"))
     _set_nested(merged, "paper_trading.remine_days", _env_int("FACTOR_PAPER_REMINE_DAYS"))
     _set_nested(merged, "paper_trading.scoring_buffer_days", _env_int("FACTOR_PAPER_SCORING_BUFFER_DAYS"))
+    _set_nested(merged, "factor_library.lock_timeout_seconds", _env_int("FACTOR_LIBRARY_LOCK_TIMEOUT_SECONDS"))
     return merged
 
 
@@ -143,6 +157,13 @@ def _env_int(name: str) -> int | None:
     return int(value)
 
 
+def _env_float(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return float(value)
+
+
 __all__ = [
     "ResearchConfig",
     "DataSplitConfig",
@@ -150,5 +171,6 @@ __all__ = [
     "PurgedWalkForwardConfig",
     "PaperTradingConfig",
     "HighPositionConfig",
+    "FactorLibraryConfig",
     "get_research_config",
 ]

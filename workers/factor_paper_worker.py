@@ -17,7 +17,7 @@ import json
 import logging
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -130,7 +130,7 @@ def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) 
         return {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
     miner = miner_factory(model_client=None)
     try:
-        result = miner.mine(panel, symbols)
+        result = miner.mine(panel, symbols, dates=dates)
     except Exception as exc:  # noqa: BLE001
         return {
             "attempted": True,
@@ -365,6 +365,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
     idx = {s: i for i, s in enumerate(symbols)}
     opens, closes, volumes = panel["open"], panel["close"], panel["volume"]
     prev_closes = closes[:, t - 1] if t > 0 else np.full(len(symbols), np.nan)
+    trade_day = date.fromisoformat(trade_date)
 
     cash = float(state["cash"])
     positions = {s: [dict(lot) for lot in lots] for s, lots in (state.get("positions") or {}).items()}
@@ -408,7 +409,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         i = idx.get(symbol)
         if i is None or not tradable(i):
             continue
-        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol):
+        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
             continue
         do_sell(symbol, i, sum(lot["shares"] for lot in positions.get(symbol) or []))
 
@@ -434,7 +435,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         excess = shares_of(symbol) * open_price(i) - target_value
         if excess <= _MIN_TRADE_VALUE or not tradable(i):
             continue
-        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol):
+        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
             continue
         do_sell(symbol, i, excess / float(opens[i, t]))
 
@@ -446,7 +447,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         gap = target_value - shares_of(symbol) * open_price(i)
         if gap <= _MIN_TRADE_VALUE:
             continue
-        if _valid_price(prev_closes[i]) and not can_buy(opens[i, t], prev_closes[i], symbol):
+        if _valid_price(prev_closes[i]) and not can_buy(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
             continue
         do_buy(symbol, i, gap)
 

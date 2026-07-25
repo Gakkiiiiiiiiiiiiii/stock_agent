@@ -8,65 +8,40 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from engines.market.price_limit_rules import board_of, resolve_price_limit_rule, round_to_tick
+
 COMMISSION_RATE = 0.00025  # 佣金万2.5
 COMMISSION_MIN = 5.0  # 佣金最低5元
 STAMP_TAX_RATE = 0.0005  # 印花税0.05%（仅卖出收取）
 SLIPPAGE_RATE = 0.001  # 滑点，双边各千一
 
-_LIMIT_BY_BOARD = {
-    "主板": 0.10,
-    "创业板": 0.20,
-    "科创板": 0.20,
-    "北交所": 0.30,
-}
-_ST_LIMIT = 0.05
+
+def price_limit_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """按交易日解析涨跌幅限制比例。历史回放必须显式传入 trade_date。"""
+    rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
+    return rule.limit_up_pct
 
 
-def _code(symbol: str) -> str:
-    """去掉 .SH/.SZ/.BJ 等交易所后缀，取纯数字代码。"""
-    return str(symbol).split(".")[0].strip()
+def limit_up_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """涨停价：前收价 ×(1+limit)，按交易 tick 半入取整。"""
+    limit = price_limit_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
+    return round_to_tick(prev_close * (1 + limit))
 
 
-def board_of(symbol: str) -> str:
-    """按代码前缀判定板块：60/68 主板，300/301 创业板，688 科创板，8xx/4xx/920 北交所。"""
-    code = _code(symbol)
-    if code.startswith("688"):
-        return "科创板"
-    if code.startswith(("300", "301")):
-        return "创业板"
-    if code.startswith("920") or code.startswith(("8", "4")):
-        return "北交所"
-    if code.startswith(("60", "68")):
-        return "主板"
-    # 00 开头深市主板等其余情况按主板处理
-    return "主板"
+def limit_down_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """跌停价：前收价 ×(1-limit)，按交易 tick 半入取整。"""
+    limit = price_limit_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
+    return round_to_tick(prev_close * (1 - limit))
 
 
-def price_limit_pct(symbol: str, is_st: bool = False) -> float:
-    """涨跌幅限制比例，ST 一律 5%。"""
-    if is_st:
-        return _ST_LIMIT
-    return _LIMIT_BY_BOARD[board_of(symbol)]
-
-
-def limit_up_price(prev_close: float, symbol: str, is_st: bool = False) -> float:
-    """涨停价：前收价 ×(1+limit)，保留 2 位小数。"""
-    return round(prev_close * (1 + price_limit_pct(symbol, is_st)), 2)
-
-
-def limit_down_price(prev_close: float, symbol: str, is_st: bool = False) -> float:
-    """跌停价：前收价 ×(1-limit)，保留 2 位小数。"""
-    return round(prev_close * (1 - price_limit_pct(symbol, is_st)), 2)
-
-
-def can_buy(open_price: float, prev_close: float, symbol: str, is_st: bool = False) -> bool:
+def can_buy(open_price: float, prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> bool:
     """以开盘价成交的假设下，open≥涨停价则当日不可买入。"""
-    return open_price < limit_up_price(prev_close, symbol, is_st)
+    return open_price < limit_up_price(prev_close, symbol, is_st=is_st, trade_date=trade_date, quote=quote)
 
 
-def can_sell(open_price: float, prev_close: float, symbol: str, is_st: bool = False) -> bool:
+def can_sell(open_price: float, prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> bool:
     """以开盘价成交的假设下，open≤跌停价则当日不可卖出。"""
-    return open_price > limit_down_price(prev_close, symbol, is_st)
+    return open_price > limit_down_price(prev_close, symbol, is_st=is_st, trade_date=trade_date, quote=quote)
 
 
 def is_suspended(volume: float | None) -> bool:

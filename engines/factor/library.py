@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -13,6 +14,7 @@ import numpy as np
 import yaml
 
 from engines.factor.lifecycle import FactorLifecycleStatus
+from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
@@ -22,6 +24,36 @@ MAX_CORRELATION = 0.9  # 与库内 active 因子面板逐日截面相关绝对�
 ACTIVE_STATUS = FactorLifecycleStatus.ACTIVE.value
 RESEARCH_STATUS = FactorLifecycleStatus.OOS_PASS.value
 LEGACY_UNVERIFIED_STATUS = FactorLifecycleStatus.LEGACY_UNVERIFIED.value
+
+_STATUS_RANK = {
+    FactorLifecycleStatus.DRAFT.value: 0,
+    FactorLifecycleStatus.COMPUTABLE.value: 1,
+    FactorLifecycleStatus.LEGACY_UNVERIFIED.value: 1,
+    FactorLifecycleStatus.IN_SAMPLE_PASS.value: 2,
+    FactorLifecycleStatus.OOS_PASS.value: 3,
+    FactorLifecycleStatus.PAPER_TRADING.value: 4,
+    FactorLifecycleStatus.APPROVED.value: 5,
+    FactorLifecycleStatus.ACTIVE.value: 6,
+    FactorLifecycleStatus.DEGRADED.value: 7,
+    FactorLifecycleStatus.RETIRED.value: 8,
+}
+
+
+@dataclass
+class LibraryMergeResult:
+    library: dict
+    persisted_entries: list[dict] = field(default_factory=list)
+    inserted_candidate_hashes: set[str] = field(default_factory=set)
+    updated_candidate_hashes: set[str] = field(default_factory=set)
+    reassigned_ids: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def persisted_by_hash(self) -> dict[str, dict]:
+        return {
+            str(item.get("candidate_hash")): item
+            for item in self.persisted_entries
+            if item.get("candidate_hash")
+        }
 
 
 def _default_path() -> Path:
@@ -46,7 +78,7 @@ def _read_library_file(cfg_path: Path) -> dict:
     return data
 
 
-def save_library(data: dict, path: str | Path | None = None, lease_guard: Callable[[], None] | None = None) -> None:
+def save_library(data: dict, path: str | Path | None = None, lease_guard: Callable[[], None] | None = None) -> LibraryMergeResult:
     cfg_path = Path(path) if path else _default_path()
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
     with _file_lock(cfg_path):
@@ -54,24 +86,23 @@ def save_library(data: dict, path: str | Path | None = None, lease_guard: Callab
             lease_guard()
         latest = _read_library_file(cfg_path)
         latest.setdefault("factors", [])
-        if _has_new_factors(latest, data):
-            _merge_factor_lists(latest, data)
-        else:
-            latest = dict(data)
-            latest.setdefault("factors", [])
+        result = merge_library(latest, data)
         if lease_guard:
             lease_guard()
-        payload = yaml.safe_dump(latest, allow_unicode=True, sort_keys=False)
+        payload = yaml.safe_dump(result.library, allow_unicode=True, sort_keys=False)
         fd, tmp_name = tempfile.mkstemp(prefix=f".{cfg_path.name}.", suffix=".tmp", dir=str(cfg_path.parent))
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
             os.replace(tmp_name, cfg_path)
             data.clear()
-            data.update(latest)
+            data.update(result.library)
         finally:
             if os.path.exists(tmp_name):
                 os.remove(tmp_name)
+    return result
 
 
 def next_factor_id(library: dict) -> str:
@@ -83,40 +114,69 @@ def next_factor_id(library: dict) -> str:
     return f"F{max_id + 1:03d}"
 
 
-def _merge_factor_lists(latest: dict, incoming: dict) -> None:
-    latest_factors = latest.setdefault("factors", [])
-    seen_hashes = {str(f.get("candidate_hash")) for f in latest_factors if f.get("candidate_hash")}
-    seen_rpn = {json_key(f.get("rpn") or []) for f in latest_factors}
-    seen_ids = {str(f.get("id")) for f in latest_factors if f.get("id")}
-    for factor in incoming.get("factors", []):
+def merge_library(latest: dict, incoming: dict) -> LibraryMergeResult:
+    merged = dict(latest or {})
+    merged_factors = [dict(item) for item in (latest or {}).get("factors") or []]
+    merged["factors"] = merged_factors
+    result = LibraryMergeResult(library=merged)
+    by_identity = {_factor_identity(item): item for item in merged_factors}
+    used_ids = {str(item.get("id")) for item in merged_factors if item.get("id")}
+
+    for raw in (incoming or {}).get("factors") or []:
+        factor = dict(raw)
+        identity = _factor_identity(factor)
         candidate_hash = str(factor.get("candidate_hash") or "")
-        rpn_key = json_key(factor.get("rpn") or [])
-        if (candidate_hash and candidate_hash in seen_hashes) or rpn_key in seen_rpn:
+        existing = by_identity.get(identity)
+        if existing is not None:
+            _merge_factor(existing, factor)
+            result.persisted_entries.append(existing)
+            if candidate_hash:
+                result.updated_candidate_hashes.add(candidate_hash)
             continue
-        if str(factor.get("id") or "") in seen_ids:
-            factor["id"] = next_factor_id(latest)
-        latest_factors.append(factor)
-        seen_ids.add(str(factor.get("id")))
+
+        old_id = str(factor.get("id") or "")
+        if not old_id or old_id in used_ids:
+            factor["id"] = next_factor_id(merged)
+            if old_id:
+                result.reassigned_ids[old_id] = str(factor["id"])
+        merged_factors.append(factor)
+        by_identity[identity] = factor
+        used_ids.add(str(factor.get("id")))
+        result.persisted_entries.append(factor)
         if candidate_hash:
-            seen_hashes.add(candidate_hash)
-        seen_rpn.add(rpn_key)
+            result.inserted_candidate_hashes.add(candidate_hash)
+    return result
 
 
-def _has_new_factors(latest: dict, incoming: dict) -> bool:
-    latest_factors = latest.get("factors") or []
-    seen_hashes = {str(f.get("candidate_hash")) for f in latest_factors if f.get("candidate_hash")}
-    seen_rpn = {json_key(f.get("rpn") or []) for f in latest_factors}
-    seen_ids = {str(f.get("id")) for f in latest_factors if f.get("id")}
-    for factor in incoming.get("factors", []):
-        candidate_hash = str(factor.get("candidate_hash") or "")
-        if candidate_hash and candidate_hash in seen_hashes:
-            continue
-        if json_key(factor.get("rpn") or []) in seen_rpn:
-            continue
-        if str(factor.get("id") or "") in seen_ids:
-            continue
-        return True
-    return False
+def _factor_identity(factor: dict) -> str:
+    if factor.get("candidate_hash"):
+        return f"hash:{factor['candidate_hash']}"
+    rpn = factor.get("normalized_rpn") or factor.get("rpn") or []
+    if rpn:
+        return f"rpn:{json_key(rpn)}"
+    return f"id:{factor.get('id')}"
+
+
+def _merge_factor(existing: dict, incoming: dict) -> None:
+    old_status = existing.get("status")
+    old_stage = existing.get("validation_stage")
+    existing_metrics = dict(existing.get("metrics") or {})
+    incoming_metrics = dict(incoming.get("metrics") or {})
+    protected_metric_keys = {"final_oos_summary", "final_oos_audit_ref", "final_oos_audit"}
+    merged_metrics = {**existing_metrics, **incoming_metrics}
+    for key in protected_metric_keys:
+        if key in existing_metrics and key not in incoming_metrics:
+            merged_metrics[key] = existing_metrics[key]
+    existing.update({key: value for key, value in incoming.items() if key != "metrics"})
+    existing["metrics"] = merged_metrics
+    existing["status"] = _max_status(old_status, incoming.get("status"))
+    existing["validation_stage"] = _max_status(old_stage, incoming.get("validation_stage"))
+
+
+def _max_status(left, right) -> str:
+    left = str(left or RESEARCH_STATUS)
+    right = str(right or left)
+    return right if _STATUS_RANK.get(right, -1) > _STATUS_RANK.get(left, -1) else left
 
 
 def json_key(value) -> str:
@@ -127,14 +187,15 @@ def json_key(value) -> str:
 
 @contextmanager
 def _file_lock(path: Path):
+    from filelock import FileLock, Timeout
+
+    timeout = get_research_config().factor_library.lock_timeout_seconds
+    lock = FileLock(str(path) + ".lock", timeout=timeout)
     try:
-        from filelock import FileLock
-    except ImportError:
-        yield
-        return
-    lock = FileLock(str(path) + ".lock")
-    with lock:
-        yield
+        with lock:
+            yield
+    except Timeout as exc:
+        raise RuntimeError("FACTOR_LIBRARY_LOCK_TIMEOUT") from exc
 
 
 def _daily_cross_corr(a: np.ndarray, b: np.ndarray) -> float:
@@ -238,6 +299,8 @@ def paper_trading_factors(library: dict, limit: int | None = None) -> list[dict]
 __all__ = [
     "load_library",
     "save_library",
+    "merge_library",
+    "LibraryMergeResult",
     "add_factor",
     "active_factors",
     "research_validated_factors",

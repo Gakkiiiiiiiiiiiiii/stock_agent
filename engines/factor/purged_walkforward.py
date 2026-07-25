@@ -32,11 +32,16 @@ def run_purged_walkforward(
                 eval_end=end,
                 horizon=horizon,
             )
-        train = (0, max(eval_start, start - (embargo or 0)))
+        history_range = (0, max(eval_start, start - (embargo or 0)))
+        embargo_range = (history_range[1], start)
+        test_range = (start, end)
         windows.append({
-            "train": train,
-            "validation": (train[1], start),
-            "test": (start, end),
+            "history_range": history_range,
+            "embargo_range": embargo_range,
+            "test_range": test_range,
+            "train": history_range,
+            "validation": embargo_range,
+            "test": test_range,
             "window_index": index,
             "metrics": metrics,
             "passed": bool(metrics.get("passed")),
@@ -67,15 +72,20 @@ def run_purged_walkforward(
 
 
 def _build_eval_windows(eval_start: int, eval_end: int, n_windows: int, embargo: int | None) -> list[tuple[int, int]]:
-    width = (eval_end - eval_start) // max(int(n_windows), 1)
-    if width <= 0:
+    count = max(int(n_windows), 1)
+    gap = max(int(embargo or 0), 0)
+    total = eval_end - eval_start
+    usable = total - gap * (count - 1)
+    if usable < count:
         return []
+    base = usable // count
+    remainder = usable % count
     windows: list[tuple[int, int]] = []
     cursor = eval_start
-    gap = max(int(embargo or 0), 0)
-    for index in range(max(int(n_windows), 1)):
+    for index in range(count):
         start = cursor
-        end = eval_end if index == n_windows - 1 else min(eval_end, start + width)
+        width = base + (1 if index < remainder else 0)
+        end = min(eval_end, start + width)
         if end > start:
             windows.append((start, end))
         cursor = end + gap

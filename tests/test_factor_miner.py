@@ -1,6 +1,7 @@
 import json
 
 import numpy as np
+import pytest
 
 from engines.factor import fitness as fitness_mod
 from engines.factor.miner import FactorMiner, _rank_ic_threshold
@@ -37,6 +38,11 @@ class SequenceFakeModelClient:
         self.prompts.append(prompt)
         index = min(len(self.prompts), len(self._payloads)) - 1
         return {"content": self._payloads[index]}
+
+
+@pytest.fixture(autouse=True)
+def _audit_tmp(monkeypatch, tmp_path):
+    monkeypatch.setenv("FACTOR_OOS_AUDIT_ROOT", str(tmp_path / "audit"))
 
 
 def _panel(n_symbols: int = 20, n_days: int = 500, seed: int = 3):
@@ -178,8 +184,9 @@ def test_miner_default_oos_uses_purged_walkforward(tmp_path, monkeypatch):
         panel, symbols, rounds=1, candidates_per_round=1, horizon=5
     )
     assert calls
-    assert result["accepted"][0]["metrics"]["final_oos_audit"]["method"] == "purged_walkforward"
-    assert result["accepted"][0]["metrics"]["final_oos_audit"]["withheld"] is True
+    assert result["accepted"][0]["metrics"]["final_oos_summary"]["method"] == "purged_walkforward"
+    assert result["accepted"][0]["metrics"]["final_oos_summary"]["withheld"] is True
+    assert result["accepted"][0]["metrics"]["final_oos_audit_ref"].endswith(".jsonl")
 
 
 def test_neutralized_metrics_present(tmp_path, monkeypatch):
@@ -248,8 +255,8 @@ def test_miner_caches_rejected_rpn(tmp_path, monkeypatch):
 
 
 def test_rank_ic_threshold_tightening():
-    assert _rank_ic_threshold(30) == fitness_mod.RANK_IC_THRESHOLD
-    assert _rank_ic_threshold(31) == fitness_mod.RANK_IC_THRESHOLD * 1.5
+    assert _rank_ic_threshold(30, fitness_mod.RANK_IC_THRESHOLD) == fitness_mod.RANK_IC_THRESHOLD
+    assert _rank_ic_threshold(31, fitness_mod.RANK_IC_THRESHOLD) == fitness_mod.RANK_IC_THRESHOLD * 1.5
 
 
 def test_miner_tightens_threshold_after_many_evaluations(tmp_path, monkeypatch):

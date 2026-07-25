@@ -296,17 +296,18 @@ def _rebalance_day(
     target = set(ranked)
 
     prev_closes = closes[:, t - 1] if t > 0 else None
+    trade_date = _parse_date(dates[t])
 
     def sell_allowed(idx: int) -> bool:
         # 首日无前收价，不做涨跌停约束
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_sell(opens[idx, t], prev_closes[idx], symbols[idx])
+        return can_sell(opens[idx, t], prev_closes[idx], symbols[idx], trade_date=trade_date)
 
     def buy_allowed(idx: int) -> bool:
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_buy(opens[idx, t], prev_closes[idx], symbols[idx])
+        return can_buy(opens[idx, t], prev_closes[idx], symbols[idx], trade_date=trade_date)
 
     # 未持有且开盘涨停买不进的股票不占目标名额，名额顺延给下一只
     if any(not buy_allowed(i) and state.shares_of(i) <= 1e-9 for i in ranked):

@@ -6,6 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
   "anthropic>=0.67",
   "fastapi>=0.111",
+  "filelock>=3.15",
   "httpx>=0.27",
   "pandas>=2.2",
   "psycopg[binary]>=3.2",
@@ -31,6 +32,7 @@ test = [
   "redis>=5.0",
   "psycopg[binary]>=3.2",
   "filelock>=3.15",
+  "yt-dlp>=2025.1.26",
 ]
 media = [
   "faster-whisper>=1.1",

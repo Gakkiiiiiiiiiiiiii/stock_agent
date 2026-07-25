@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-import requests
+import httpx
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -24,7 +24,7 @@ class FinancialQdrantClient:
         return headers
 
     def ensure_collections(self) -> None:
-        response = requests.get(f"{self.url}/collections", headers=self._headers(), timeout=30)
+        response = httpx.get(f"{self.url}/collections", headers=self._headers(), timeout=30)
         response.raise_for_status()
         collections = {
             item["name"]
@@ -33,7 +33,7 @@ class FinancialQdrantClient:
         for collection_name, config in self.config["collections"].items():
             if collection_name not in collections:
                 vector_size = int(config["vector_size"])
-                create_response = requests.put(
+                create_response = httpx.put(
                     f"{self.url}/collections/{collection_name}",
                     headers=self._headers(),
                     json={
@@ -48,7 +48,7 @@ class FinancialQdrantClient:
                 create_response.raise_for_status()
             for field in self.config.get("payload_indexes", []):
                 try:
-                    index_response = requests.put(
+                    index_response = httpx.put(
                         f"{self.url}/collections/{collection_name}/index",
                         headers=self._headers(),
                         params={"wait": "true"},
@@ -62,7 +62,7 @@ class FinancialQdrantClient:
     def upsert_chunk(self, collection: str, vector: list[float], payload: dict) -> str:
         chunk_id = payload.get("chunk_id")
         point_id = str(uuid5(NAMESPACE_URL, str(chunk_id))) if chunk_id else str(uuid4())
-        response = requests.put(
+        response = httpx.put(
             f"{self.url}/collections/{collection}/points",
             params={"wait": "true"},
             headers=self._headers(),
@@ -82,7 +82,7 @@ class FinancialQdrantClient:
 
     def delete_by_payload(self, collection: str, filters: dict) -> None:
         must = [{"key": key, "match": {"value": value}} for key, value in filters.items()]
-        response = requests.post(
+        response = httpx.post(
             f"{self.url}/collections/{collection}/points/delete",
             params={"wait": "true"},
             headers=self._headers(),

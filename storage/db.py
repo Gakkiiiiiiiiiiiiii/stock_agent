@@ -18,7 +18,12 @@ def get_engine() -> Engine:
     url = os.getenv("DATABASE_URL", "sqlite:///./financial_agent.db")
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+psycopg://", 1)
-    connect_args = {"check_same_thread": False} if url.startswith("sqlite") else {}
+    if url.startswith("sqlite"):
+        connect_args = {"check_same_thread": False}
+    elif url.startswith("postgresql+psycopg"):
+        connect_args = {"connect_timeout": 5}
+    else:
+        connect_args = {}
     return create_engine(url, future=True, pool_pre_ping=True, connect_args=connect_args)
 
 
