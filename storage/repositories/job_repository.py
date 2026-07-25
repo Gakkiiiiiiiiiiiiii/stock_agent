@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import text
@@ -74,9 +74,10 @@ class JobTaskRepository:
     def claim_next(self, worker_id: str, task_types: list[str] | None = None, lease_seconds: int = 300) -> dict[str, Any] | None:
         self._ensure_schema()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        lease_cutoff = now - timedelta(seconds=max(int(lease_seconds), 1))
         with session_scope() as session:
-            filters = "status IN ('PENDING', 'FAILED_RETRYABLE')"
-            params: dict[str, Any] = {"worker_id": worker_id, "now": now}
+            filters = "(status IN ('PENDING', 'FAILED_RETRYABLE') OR (status='RUNNING' AND heartbeat_at < :lease_cutoff))"
+            params: dict[str, Any] = {"worker_id": worker_id, "now": now, "lease_cutoff": lease_cutoff}
             if task_types:
                 keys = []
                 for index, task_type in enumerate(task_types):
@@ -84,24 +85,44 @@ class JobTaskRepository:
                     params[key] = task_type
                     keys.append(f":{key}")
                 filters += f" AND task_type IN ({', '.join(keys)})"
+            dialect = session.bind.dialect.name if session.bind is not None else ""
+            if dialect == "postgresql":
+                row = session.execute(
+                    text(
+                        f"""
+                        UPDATE job_task
+                        SET status='RUNNING', worker_id=:worker_id, started_at=coalesce(started_at, :now), heartbeat_at=:now
+                        WHERE id = (
+                            SELECT id FROM job_task
+                            WHERE {filters}
+                            ORDER BY created_at ASC
+                            FOR UPDATE SKIP LOCKED
+                            LIMIT 1
+                        )
+                        RETURNING *
+                        """
+                    ),
+                    params,
+                ).mappings().first()
+                return self._row(row)
             row = session.execute(
                 text(f"SELECT * FROM job_task WHERE {filters} ORDER BY created_at ASC LIMIT 1"),
                 params,
             ).mappings().first()
             if row is None:
                 return None
-            task_id = row["id"]
-            session.execute(
+            result = session.execute(
                 text(
                     """
                     UPDATE job_task
-                    SET status='RUNNING', worker_id=:worker_id, started_at=:now, heartbeat_at=:now
-                    WHERE id=:id AND status IN ('PENDING', 'FAILED_RETRYABLE')
+                    SET status='RUNNING', worker_id=:worker_id, started_at=coalesce(started_at, :now), heartbeat_at=:now
+                    WHERE id=:id
+                      AND (status IN ('PENDING', 'FAILED_RETRYABLE') OR (status='RUNNING' AND heartbeat_at < :lease_cutoff))
                     """
                 ),
-                {"id": task_id, "worker_id": worker_id, "now": now},
+                params | {"id": row["id"]},
             )
-        return self.get(task_id)
+            return self._row(row) | {"status": "RUNNING", "worker_id": worker_id} if result.rowcount else None
 
     def claim(self, task_id: str, worker_id: str) -> dict[str, Any] | None:
         self._ensure_schema()

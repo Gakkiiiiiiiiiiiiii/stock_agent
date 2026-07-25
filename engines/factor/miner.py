@@ -14,7 +14,7 @@ import numpy as np
 import yaml
 
 from engines.factor import fitness as fitness_mod
-from engines.factor.oos import evaluate_oos_splits
+from engines.factor.purged_walkforward import run_purged_walkforward
 from engines.factor.library import (
     active_factors,
     add_factor,
@@ -52,6 +52,11 @@ _EARLY_STOP_DUP_RATE = 0.5
 # 只在此处生效，不修改 fitness.py 的基础阈值常量）
 _BONFERRONI_EVAL_COUNT = 30
 _BONFERRONI_FACTOR = 1.5
+
+
+def evaluate_oos_splits(factor_panel: np.ndarray, closes: np.ndarray, horizon: int = 5) -> dict:
+    """Default OOS gate for mined factors: purged walk-forward with embargo."""
+    return run_purged_walkforward(factor_panel, closes, horizon=horizon)
 
 
 def _rank_ic_threshold(evaluated: int) -> float:

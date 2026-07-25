@@ -5,6 +5,22 @@ retrieval:
     knowledge: financial_knowledge_v2_bge_m3
     memory: financial_memory_v2_bge_m3
     decision_trace: financial_decision_trace_v2_bge_m3
+  collection_manifests:
+    financial_knowledge_v2_bge_m3:
+      provider: sentence_transformers
+      model: BAAI/bge-m3
+      dimension: 1024
+      semantic: true
+    financial_memory_v2_bge_m3:
+      provider: sentence_transformers
+      model: BAAI/bge-m3
+      dimension: 1024
+      semantic: true
+    financial_decision_trace_v2_bge_m3:
+      provider: sentence_transformers
+      model: BAAI/bge-m3
+      dimension: 1024
+      semantic: true
   status_weight:
     approved: 1.0
     validated: 1.0

@@ -29,7 +29,10 @@ def health() -> dict:
 def embeddings(request: EmbeddingRequest) -> dict:
     dimension = int(os.getenv("EMBEDDING_DIMENSION", "1024"))
     provider = os.getenv("EMBEDDING_PROVIDER", "local_ngram")
-    model = request.model or os.getenv("EMBEDDING_MODEL", "local-chinese-ngram-v1")
+    configured_model = os.getenv("EMBEDDING_MODEL", "local-chinese-ngram-v1")
+    if request.model and request.model != configured_model:
+        return {"error": {"code": "EMBEDDING_MODEL_MISMATCH", "message": "request model must match service model", "expected": configured_model, "actual": request.model}}
+    model = configured_model
     if provider.lower() in {"local", "local_ngram", "dev"} and model == "BAAI/bge-m3":
         model = "local-chinese-ngram-v1"
     embedder = LocalChineseNgramEmbedder(vector_size=dimension, model=model) if provider.lower() in {"local", "local_ngram", "dev"} else build_embedder(provider)

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import date as Date
 from datetime import datetime
 from queue import Queue
 from threading import Thread
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+import requests
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
 
@@ -18,10 +20,13 @@ from app.chat_history_service import ChatHistoryService
 from app.dependencies import init_application
 from app.security import render_metrics, security_and_trace_middleware
 from engines.content.video_ingest_service import VideoIngestService
+from engines.market.qmt_bridge_client import QmtBridgeClient
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
 from financial_agent.models import Position, ThemeLogic, TradeReviewInput
 from mcp_servers.knowledge_server import upsert_theme_logic as upsert_theme_logic_mcp
+from storage.db import session_scope
 from storage.repositories.job_repository import JobTaskRepository
+from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -154,13 +159,73 @@ def health_live() -> dict:
 
 
 @app.get("/health/ready")
-def health_ready() -> dict:
-    return {"status": "ok", "checks": {"api": "ok"}}
+def health_ready(response: Response) -> dict:
+    checks = _ready_checks()
+    ready = all(value == "ok" for value in checks.values())
+    if not ready:
+        response.status_code = 503
+    return {"status": "ok" if ready else "degraded", "checks": checks}
 
 
 @app.get("/metrics")
 def metrics() -> PlainTextResponse:
     return PlainTextResponse(render_metrics(), media_type="text/plain")
+
+
+def _ready_checks() -> dict[str, str]:
+    checks = {"api": "ok"}
+    checks["postgres"] = _check_postgres()
+    checks["qdrant"] = _check_http(f"{os.getenv('QDRANT_URL', 'http://localhost:6333').rstrip('/')}/collections", api_key=os.getenv("QDRANT_API_KEY"))
+    checks["redis"] = _check_redis(os.getenv("REDIS_URL", ""))
+    checks["embedding"] = _check_embedding()
+    checks["reranker"] = _check_http(f"{os.getenv('RERANKER_URL', 'http://localhost:8010').rstrip('/')}/health")
+    checks["qmt"] = _check_qmt()
+    return checks
+
+
+def _check_postgres() -> str:
+    try:
+        with session_scope() as session:
+            session.execute(text("SELECT 1"))
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        return f"fail: {exc}"
+
+
+def _check_http(url: str, api_key: str | None = None) -> str:
+    headers = {"api-key": api_key} if api_key else None
+    try:
+        response = requests.get(url, headers=headers, timeout=3)
+        response.raise_for_status()
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        return f"fail: {exc}"
+
+
+def _check_embedding() -> str:
+    base_url = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8001/v1").rstrip("/")
+    health_url = base_url[:-3] if base_url.endswith("/v1") else base_url
+    return _check_http(f"{health_url}/health")
+
+
+def _check_redis(redis_url: str) -> str:
+    if not redis_url:
+        return "skipped"
+    try:
+        import redis
+
+        client = redis.Redis.from_url(redis_url, socket_connect_timeout=3, socket_timeout=3)
+        return "ok" if client.ping() else "fail: ping returned false"
+    except Exception as exc:  # noqa: BLE001
+        return f"fail: {exc}"
+
+
+def _check_qmt() -> str:
+    try:
+        QmtBridgeClient().healthcheck()
+        return "ok"
+    except Exception as exc:  # noqa: BLE001
+        return f"fail: {exc}"
 
 
 @app.get("/admin")

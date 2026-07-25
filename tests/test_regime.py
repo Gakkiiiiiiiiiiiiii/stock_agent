@@ -1,6 +1,6 @@
 from engines.regime.high_position_retreat_detector import detect_high_position_retreat
 from engines.regime.regime_preclassifier import preclassify_regime
-from engines.market.feature_builder import MarketFeatureBuilder
+from engines.market.feature_builder import MarketFeatureBuilder, pct_to_decimal
 from mcp_servers.market_regime_server import get_market_regime
 
 
@@ -8,6 +8,7 @@ def test_high_position_retreat_detector():
     result = detect_high_position_retreat(0.8, 0.6, 0.7, 8)
     assert result["is_high_position_retreat"] is True
     assert result["retreat_score"] >= 0.65
+    assert "high_position_breakdown_rate" in result["evidence"]
 
 
 def test_regime_preclassifier_downtrend():
@@ -31,7 +32,7 @@ def test_market_regime_missing_features_returns_unknown():
 
 def test_market_feature_builder_enables_regime_classification(monkeypatch):
     class Provider:
-        def get_market_snapshot(self):
+        def get_market_snapshot(self, as_of=None, force_refresh=False):
             return {
                 "source": "fake",
                 "up_count": 3200,
@@ -48,7 +49,7 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
                 },
             }
 
-        def get_sector_strength(self):
+        def get_sector_strength(self, as_of=None):
             return [{"sector": "TMT", "strength_score": 86, "change_pct": 3.2}, {"sector": "红利", "strength_score": 62, "change_pct": 0.4}]
 
     monkeypatch.setattr("engines.market.feature_builder.get_market_data_provider", lambda: Provider())
@@ -58,3 +59,28 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
     result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
     assert result["missing_fields"] == []
     assert result["regime"]["primary_regime"] != "UNKNOWN"
+
+
+def test_pct_to_decimal_always_converts_percent_fields():
+    assert pct_to_decimal(0.5) == 0.005
+    assert pct_to_decimal(1.0) == 0.01
+    assert pct_to_decimal(-1.0) == -0.01
+
+
+def test_market_feature_builder_marks_historical_unavailable(monkeypatch):
+    from datetime import datetime
+
+    class Provider:
+        def get_market_snapshot(self, as_of=None, force_refresh=False):
+            assert str(as_of) == "2024-01-10"
+            return {"warning": "HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE", "quality_score": 0.0, "source": "fake"}
+
+        def get_sector_strength(self, as_of=None):
+            assert str(as_of) == "2024-01-10"
+            return []
+
+    monkeypatch.setattr("engines.market.feature_builder.get_market_data_provider", lambda: Provider())
+    built = MarketFeatureBuilder().build(as_of=datetime(2024, 1, 10))
+    result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
+    assert result["regime"]["primary_regime"] == "UNKNOWN"
+    assert "HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE" in result["snapshot"]["warning"]

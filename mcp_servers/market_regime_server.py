@@ -40,6 +40,8 @@ class MarketFeatureSnapshot(BaseModel):
     high_position_breakdown_ratio: float | None = None
     retreat_days: int | None = None
     quality_score: float = 0.0
+    quality_flags: list[str] = []
+    warning: str | None = None
 
 
 def _missing_fields(snapshot: MarketFeatureSnapshot) -> list[str]:
@@ -74,7 +76,7 @@ def _unknown_result(snapshot: MarketFeatureSnapshot, previous_regime: str | None
         "llm_hint": {"regime": "UNKNOWN", "reason": "market feature snapshot is incomplete"},
         "state_machine": state,
         "retreat": None,
-        "quality_flags": ["MARKET_FEATURES_INCOMPLETE"],
+        "quality_flags": sorted(set(["MARKET_FEATURES_INCOMPLETE", *snapshot.quality_flags])),
         "missing_fields": missing_fields,
     }
 
@@ -131,13 +133,18 @@ def get_market_regime(
         name for name in ("high_position_loss_ratio", "high_position_limit_down_ratio", "high_position_breakdown_ratio", "retreat_days")
         if getattr(snapshot_obj, name) is None
     ]
-    if missing_fields or top_theme_strength is None or index_drawdown_20d is None or retreat_missing:
+    quality_blockers = []
+    if snapshot_obj.warning:
+        quality_blockers.append("MARKET_FEATURE_WARNING")
+    if snapshot_obj.quality_score < 0.8:
+        quality_blockers.append("MARKET_FEATURE_QUALITY_LOW")
+    if missing_fields or top_theme_strength is None or index_drawdown_20d is None or retreat_missing or quality_blockers:
         extra_missing = []
         if top_theme_strength is None:
             extra_missing.append("top_theme_strength")
         if index_drawdown_20d is None:
             extra_missing.append("index_drawdown_20d")
-        return _unknown_result(snapshot_obj, previous_regime, missing_fields + extra_missing + retreat_missing)
+        return _unknown_result(snapshot_obj, previous_regime, missing_fields + extra_missing + retreat_missing + quality_blockers)
 
     breadth = compute_breadth(snapshot_obj.up_count, snapshot_obj.down_count)
     crowding_score = compute_crowding_score(top_theme_strength, snapshot_obj.limit_up_count)
@@ -169,7 +176,7 @@ def get_market_regime(
         "llm_hint": llm_hint,
         "state_machine": state,
         "retreat": retreat,
-        "quality_flags": [],
+        "quality_flags": snapshot_obj.quality_flags,
         "missing_fields": [],
     }
 

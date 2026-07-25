@@ -9,6 +9,7 @@ import pandas as pd
 import yaml
 
 from engines.market.data_provider import get_market_data_provider
+from engines.market.trading_calendar import next_trading_day
 from engines.technical.indicators import calc_all
 from engines.technical.profile_loader import load_technical_profile
 from engines.technical.registry import default_indicator_registry
@@ -242,7 +243,7 @@ def _feature_time(day: date) -> str:
 
 
 def _executable_from(day: date) -> str:
-    return f"{(day + timedelta(days=1)).isoformat()}T09:30:00+08:00"
+    return f"{next_trading_day(day).isoformat()}T09:30:00+08:00"
 
 
 def _data_snapshot_id(symbol: str, profile: str, version: str, latest: str, count: int) -> str:

@@ -6,6 +6,7 @@ from functools import lru_cache
 from typing import Any
 
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
+from engines.backtest.execution import price_limit_pct
 from financial_agent.models import KlineRecord, KlineResponse
 
 
@@ -33,10 +34,10 @@ class MarketDataProvider:
     def get_kline(self, symbol: str, start_date: date | None = None, end_date: date | None = None, freq: str = "1d", adjust: str = "qfq") -> KlineResponse:
         raise NotImplementedError
 
-    def get_market_snapshot(self) -> dict[str, Any]:
+    def get_market_snapshot(self, as_of: date | None = None, force_refresh: bool = False) -> dict[str, Any]:
         raise NotImplementedError
 
-    def get_sector_strength(self, top_k: int = 20) -> list[dict[str, Any]]:
+    def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:
         raise NotImplementedError
 
 
@@ -81,9 +82,19 @@ class QmtMarketDataProvider(MarketDataProvider):
             warning=warning,
         )
 
-    def get_market_snapshot(self) -> dict[str, Any]:
+    def get_market_snapshot(self, as_of: date | None = None, force_refresh: bool = False) -> dict[str, Any]:
+        _ = force_refresh
+        if as_of and as_of != date.today():
+            return {
+                "market_regime": "未知",
+                "risk_appetite": "未知",
+                "warning": "HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE",
+                "quality_score": 0.0,
+                "quality_flags": ["HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE"],
+                "source": "qmt",
+            }
         index_symbols = ["000001.SH", "399001.SZ", "399006.SZ"]
-        end_day = date.today()
+        end_day = as_of or date.today()
         start_day = end_day - timedelta(days=40)
         try:
             rows = self.bridge.get_history(
@@ -157,11 +168,11 @@ class QmtMarketDataProvider(MarketDataProvider):
             "warning": warning,
             "source": "qmt",
             "indices": {
-                "intraday_pct": round(intraday, 2),
-                "return_5d_pct": round(avg_5d, 2),
-                "return_20d_pct": round(avg_20d, 2),
-                "volatility_20d_pct": round(avg_vol_20d, 2),
-                "drawdown_20d_pct": round(avg_dd_20d, 2),
+                "intraday_pct": safe_round(intraday, 2),
+                "return_5d_pct": safe_round(avg_5d, 2),
+                "return_20d_pct": safe_round(avg_20d, 2),
+                "volatility_20d_pct": safe_round(avg_vol_20d, 2),
+                "drawdown_20d_pct": safe_round(avg_dd_20d, 2),
             },
         }
 
@@ -181,7 +192,7 @@ class QmtMarketDataProvider(MarketDataProvider):
                 continue
         up_count = down_count = limit_up_count = limit_down_count = 0
         amounts: list[float] = []
-        for payload in quotes.values():
+        for symbol, payload in quotes.items():
             last_price = safe_float(payload.get("last_price") or payload.get("price"))
             last_close = safe_float(payload.get("last_close") or payload.get("pre_close"))
             amount = safe_float(payload.get("amount") or payload.get("turnover") or 0)
@@ -194,9 +205,10 @@ class QmtMarketDataProvider(MarketDataProvider):
                 up_count += 1
             elif pct < 0:
                 down_count += 1
-            if pct >= 0.098:
+            limit = price_limit_pct(symbol=str(payload.get("symbol") or symbol), is_st=is_st_quote(payload))
+            if pct >= limit - 0.002:
                 limit_up_count += 1
-            elif pct <= -0.098:
+            elif pct <= -limit + 0.002:
                 limit_down_count += 1
         total_amount = sum(amounts)
         top10_share = sum(sorted(amounts, reverse=True)[:10]) / total_amount if total_amount > 0 else None
@@ -210,7 +222,9 @@ class QmtMarketDataProvider(MarketDataProvider):
             "top10_amount_share": round(top10_share, 6) if top10_share is not None else None,
         }
 
-    def get_sector_strength(self, top_k: int = 20) -> list[dict[str, Any]]:
+    def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:
+        if as_of and as_of != date.today():
+            return []
         try:
             rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
         except QmtBridgeError:
@@ -366,8 +380,12 @@ def to_qmt_symbol(symbol: str) -> str:
 
 def average(values: list[float]) -> float:
     if not values:
-        return 0.0
+        return None
     return sum(values) / len(values)
+
+
+def safe_round(value: float | None, digits: int = 2) -> float | None:
+    return None if value is None else round(value, digits)
 
 
 def calculate_return_pct(records: list[KlineRecord], lookback: int) -> float | None:
@@ -406,7 +424,9 @@ def calculate_drawdown_pct(records: list[KlineRecord], lookback: int) -> float |
     return (closes[-1] - peak) / peak * 100
 
 
-def classify_market_snapshot(intraday: float, avg_5d: float, avg_20d: float) -> tuple[str, str]:
+def classify_market_snapshot(intraday: float | None, avg_5d: float | None, avg_20d: float | None) -> tuple[str, str]:
+    if intraday is None or avg_5d is None or avg_20d is None:
+        return "未知", "未知"
     if avg_20d >= 5 and avg_5d >= 1 and intraday >= 0:
         return "强势上行", "较高"
     if avg_20d >= 2 and avg_5d >= 0:
@@ -424,6 +444,11 @@ def clamp(value: float, minimum: float, maximum: float) -> float:
 
 def batched(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
+
+
+def is_st_quote(payload: dict[str, Any]) -> bool:
+    text = str(payload.get("name") or payload.get("stock_name") or payload.get("instrument_name") or "")
+    return "ST" in text.upper() or "＊ST" in text.upper() or "*ST" in text.upper()
 
 
 def group_history_rows(rows: list[dict[str, Any]]) -> dict[str, list[KlineRecord]]:

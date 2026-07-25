@@ -19,6 +19,16 @@ class FakeReranker:
         ]
 
 
+class CaptureReranker:
+    def __init__(self):
+        self.candidates = []
+
+    def rerank(self, query, candidates, top_k):
+        _ = (query, top_k)
+        self.candidates = candidates
+        return [{"chunk_id": item["chunk_id"], "payload": item["payload"], "text": item["text"], "rerank_score": 0.8} for item in candidates]
+
+
 class FakeEmbedder:
     def embed(self, query):
         _ = query
@@ -33,6 +43,27 @@ class FakeHydrator:
         ]
 
 
+class EmptyHydrator:
+    def hydrate(self, reranked_hits):
+        return reranked_hits
+
+
+class FakeSparseRetriever:
+    def search(self, query, collections, filters=None, limit=20):
+        _ = (query, collections, filters, limit)
+        return [
+            {
+                "chunk_id": "sparse_only",
+                "text": "黄金 高股息 独立稀疏召回",
+                "payload": {"chunk_id": "sparse_only", "text": "黄金 高股息 独立稀疏召回", "title": "稀疏候选"},
+                "dense_score": 0.0,
+                "score": 0.0,
+                "sparse_recall_score": 1.0,
+                "recall_sources": ["sparse"],
+            }
+        ]
+
+
 def test_hybrid_retriever_prefers_newer_knowledge_when_scores_tie():
     retriever = HybridRetriever(
         qdrant_client=FakeQdrant(),
@@ -43,6 +74,21 @@ def test_hybrid_retriever_prefers_newer_knowledge_when_scores_tie():
     result = retriever.retrieve("半导体怎么看", top_k=2)
     assert result["contexts"][0]["title"] == "新观点"
     assert result["contexts"][1]["title"] == "旧观点"
+
+
+def test_hybrid_retriever_merges_independent_sparse_candidates():
+    reranker = CaptureReranker()
+    retriever = HybridRetriever(
+        qdrant_client=FakeQdrant(),
+        reranker=reranker,
+        embedder=FakeEmbedder(),
+        hydrator=EmptyHydrator(),
+        sparse_retriever=FakeSparseRetriever(),
+    )
+    retriever.retrieve("黄金 高股息", top_k=2)
+    chunk_ids = {item["chunk_id"] for item in reranker.candidates}
+    assert "chunk_1" in chunk_ids
+    assert "sparse_only" in chunk_ids
 
 
 class FakeConflictHydrator:

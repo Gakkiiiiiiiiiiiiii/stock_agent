@@ -1,7 +1,7 @@
 """前向模拟盘：每日按因子库合成 alpha 分数组 TopK 组合并记账。
 
-每日流程：加载股票池 → load_factor_panel(days=60) → 使用 T-1 收盘后可用面板生成
-signals_T-1.json 和 orders_T.json → T 日开盘按 orders_T.json 执行 →
+每日流程：T-1 收盘后显式调用 generate_orders() 冻结
+signals_T-1.json 和 orders_T.json；T 日 run_daily() 只读取已存在的 orders_T.json 执行 →
 按 portfolio_backtest 的执行规则（涨跌停/停牌/T+1/成本）对昨日持仓→今日记账，
 维护 portfolio_state.json 并追加 equity.jsonl。
 
@@ -94,6 +94,95 @@ def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) 
 
 def _panel_until(panel: dict[str, np.ndarray], end_exclusive: int) -> dict[str, np.ndarray]:
     return {key: value[:, :end_exclusive] for key, value in panel.items()}
+
+
+def _library_hash(library: dict) -> str:
+    import hashlib
+
+    return hashlib.sha256(json.dumps(library, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")).hexdigest()
+
+
+def generate_orders(
+    *,
+    execution_date: str,
+    state_dir: str | Path | None = None,
+    library_path: str | None = None,
+    panel_loader=None,
+    miner_factory=None,
+    force: bool = False,
+    remine_days: int | None = None,
+) -> dict:
+    """T-1 收盘后生成并冻结 T 日开盘订单。"""
+    state = _state_dir(state_dir)
+    state.mkdir(parents=True, exist_ok=True)
+    remine_days = remine_days if remine_days is not None else int(os.getenv("FACTOR_PAPER_REMINE_DAYS", DEFAULT_REMINE_DAYS))
+    panel_loader = panel_loader or load_factor_panel
+    miner_factory = miner_factory or FactorMiner
+    symbols = load_universe()
+    if not symbols:
+        return {"execution_date": execution_date, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
+    panel, dates, symbols, warning = panel_loader(symbols, PANEL_DAYS)
+    if not panel:
+        return {"execution_date": execution_date, "warning": warning or "行情数据不可用（QMT 桥接不可达），无法生成订单"}
+    signal_date = dates[-1]
+    signals_path = state / f"signals_{signal_date}.json"
+    orders_path = state / f"orders_{execution_date}.json"
+    if orders_path.exists() and not force:
+        return {"execution_date": execution_date, "signal_date": signal_date, "skipped": True, "orders_file": str(orders_path)}
+    warnings = [warning] if warning else []
+    remine_warning = _maybe_remine(panel, symbols, dates, state, remine_days, miner_factory)
+    if remine_warning:
+        warnings.append(remine_warning)
+    library = load_library(library_path)
+    factors = paper_trading_factors(library)
+    scores, factor_count = compose_alpha_scores(panel, factors)
+    if scores is None:
+        return {"execution_date": execution_date, "signal_date": signal_date, "warning": "; ".join(warnings + ["因子库为空或全部不可计算，无法生成订单"])}
+    top_k = max(TOP_K_MIN, int(len(symbols) * TOP_K_RATIO))
+    valid_idx = np.where(~np.isnan(scores))[0]
+    order = valid_idx[np.argsort(-scores[valid_idx])]
+    picks = [
+        {"symbol": symbols[i], "alpha_score": round(float(scores[i]), 4), "rank": rank}
+        for rank, i in enumerate(order[:top_k], start=1)
+    ]
+    generated_at = _now_iso()
+    factor_ids = [str(item.get("id")) for item in factors]
+    factor_versions = {str(item.get("id")): item.get("version", item.get("updated_at", item.get("discovered_at"))) for item in factors}
+    order_payload = {
+        "signal_date": signal_date,
+        "execution_date": execution_date,
+        "generated_at": generated_at,
+        "must_exist_before": f"{execution_date}T09:30:00+08:00",
+        "execution_model": "next_open",
+        "factor_count": factor_count,
+        "factor_ids": factor_ids,
+        "factor_versions": factor_versions,
+        "library_hash": _library_hash(library),
+        "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
+        "picks": picks,
+    }
+    signal_payload = {
+        "signal_date": signal_date,
+        "generated_at": generated_at,
+        "feature_window_end": signal_date,
+        "top_k": top_k,
+        "factor_count": factor_count,
+        "factor_ids": factor_ids,
+        "library_hash": order_payload["library_hash"],
+        "picks": picks,
+    }
+    _write_json(signals_path, signal_payload)
+    _write_json(orders_path, order_payload)
+    return {
+        "execution_date": execution_date,
+        "signal_date": signal_date,
+        "skipped": False,
+        "signals_file": str(signals_path),
+        "orders_file": str(orders_path),
+        "top_k": len(picks),
+        "factor_count": factor_count,
+        "warning": "; ".join(w for w in warnings if w) or None,
+    }
 
 
 def _sell(positions: dict, symbol: str, shares: float, trade_date: str) -> float:
@@ -253,6 +342,8 @@ def run_daily(
     miner_factory=None,
     force: bool = False,
     remine_days: int | None = None,
+    generate_next_orders: bool = False,
+    next_execution_date: str | None = None,
 ) -> dict:
     """执行单日组池 + 记账，返回摘要 dict（QMT 不可用时 warning 优雅返回）。"""
     state = _state_dir(state_dir)
@@ -273,68 +364,55 @@ def run_daily(
         return {"date": dates[-1] if dates else None, "warning": "前向模拟盘至少需要 T-1 与 T 两个交易日，今日跳过"}
 
     execution_date = dates[-1]
-    signal_date = dates[-2]
-    signal_panel = _panel_until(panel, -1)
-    signal_dates = dates[:-1]
-    signals_path = state / f"signals_{signal_date}.json"
     orders_path = state / f"orders_{execution_date}.json"
-
-    warnings = [warning] if warning else []
-    remine_warning = _maybe_remine(signal_panel, symbols, signal_dates, state, remine_days, miner_factory)
-    if remine_warning:
-        warnings.append(remine_warning)
-
-    generated = False
-    if orders_path.exists() and not force:
-        order_payload = _load_json(orders_path, {})
-        picks = order_payload.get("picks") or []
-        factor_count = int(order_payload.get("factor_count") or 0)
-    else:
-        factors = paper_trading_factors(load_library(library_path))
-        scores, factor_count = compose_alpha_scores(signal_panel, factors)
-        if scores is None:
-            return {"date": execution_date, "signal_date": signal_date,
-                    "warning": "; ".join(warnings + ["因子库为空或全部不可计算，无法生成 T+1 订单"])}
-
-        top_k = max(TOP_K_MIN, int(len(symbols) * TOP_K_RATIO))
-        valid_idx = np.where(~np.isnan(scores))[0]
-        order = valid_idx[np.argsort(-scores[valid_idx])]
-        picks = [
-            {"symbol": symbols[i], "alpha_score": round(float(scores[i]), 4), "rank": rank}
-            for rank, i in enumerate(order[:top_k], start=1)
-        ]
-        signal_payload = {
-            "signal_date": signal_date,
-            "generated_at": _now_iso(),
-            "feature_window_end": signal_date,
-            "top_k": top_k,
-            "factor_count": factor_count,
-            "picks": picks,
-        }
-        order_payload = {
-            "signal_date": signal_date,
+    if not orders_path.exists():
+        generated = None
+        if generate_next_orders and next_execution_date:
+            generated = generate_orders(
+                execution_date=next_execution_date,
+                state_dir=state,
+                library_path=library_path,
+                panel_loader=panel_loader,
+                miner_factory=miner_factory,
+                force=force,
+                remine_days=remine_days,
+            )
+        return {
+            "date": execution_date,
             "execution_date": execution_date,
-            "generated_at": _now_iso(),
-            "execution_model": "next_open",
-            "factor_count": factor_count,
-            "picks": picks,
+            "skipped": True,
+            "warning": f"{execution_date} 开盘前订单不存在，跳过执行",
+            "orders_file": str(orders_path),
+            "generated_next_orders": generated,
         }
-        _write_json(signals_path, signal_payload)
-        _write_json(orders_path, order_payload)
-        generated = True
+    order_payload = _load_json(orders_path, {})
+    signal_date = order_payload.get("signal_date")
+    picks = order_payload.get("picks") or []
+    factor_count = int(order_payload.get("factor_count") or 0)
 
     bookkeeping = _advance_portfolio(panel, dates, symbols, [p["symbol"] for p in picks], state, execution_date)
+    generated_next = None
+    if generate_next_orders and next_execution_date:
+        generated_next = generate_orders(
+            execution_date=next_execution_date,
+            state_dir=state,
+            library_path=library_path,
+            panel_loader=panel_loader,
+            miner_factory=miner_factory,
+            force=force,
+            remine_days=remine_days,
+        )
     return {
         "date": execution_date,
         "signal_date": signal_date,
         "execution_date": execution_date,
-        "skipped": (not generated and not bookkeeping.get("advanced")),
-        "signals_file": str(signals_path),
+        "skipped": not bookkeeping.get("advanced"),
         "orders_file": str(orders_path),
         "top_k": len(picks),
         "factor_count": factor_count,
         "bookkeeping": bookkeeping,
-        "warning": "; ".join(w for w in warnings if w) or None,
+        "generated_next_orders": generated_next,
+        "warning": warning,
     }
 
 

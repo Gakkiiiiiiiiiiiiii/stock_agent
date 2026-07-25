@@ -55,6 +55,12 @@ def env(tmp_path, monkeypatch):
 
 
 def test_first_run_writes_positions_and_state(env):
+    generated = fpw.generate_orders(
+        execution_date="2026-07-30",
+        state_dir=env["state"], library_path=env["lib"],
+        panel_loader=env["make_loader"](29), remine_days=9999,
+    )
+    assert generated["skipped"] is False
     result = fpw.run_daily(
         state_dir=env["state"], library_path=env["lib"],
         panel_loader=env["make_loader"](30), remine_days=9999,
@@ -85,6 +91,7 @@ def test_first_run_writes_positions_and_state(env):
 def test_same_day_idempotent(env):
     kwargs = dict(state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](30), remine_days=9999)
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
     first = fpw.run_daily(**kwargs)
     second = fpw.run_daily(**kwargs)
     assert second["skipped"] is True
@@ -99,18 +106,21 @@ def test_same_day_idempotent(env):
 def test_force_regenerates_but_does_not_double_book(env):
     kwargs = dict(state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](30), remine_days=9999)
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
     fpw.run_daily(**kwargs)
     forced = fpw.run_daily(force=True, **kwargs)
-    assert forced["skipped"] is False
+    assert forced["skipped"] is True
     assert forced["bookkeeping"]["advanced"] is False  # 当日已记账，不重复记账
     lines = (env["state"] / "equity.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
 
 
 def test_bookkeeping_advances_next_day(env):
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
     fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](30), remine_days=9999)
     # 次日面板多一个交易日
+    fpw.generate_orders(execution_date="2026-07-31", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
     result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                            panel_loader=env["make_loader"](31), remine_days=9999)
     assert result["bookkeeping"]["advanced"] is True
@@ -135,6 +145,7 @@ def test_t_day_signal_not_used_at_t_open(env):
     def loader(symbols, days):
         return {k: v[:, :30] for k, v in mutated.items()}, _dates(30), list(symbols), None
 
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
     fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=loader, remine_days=9999)
     order_payload = json.loads((env["state"] / "orders_2026-07-30.json").read_text(encoding="utf-8"))
     assert order_payload["execution_date"] == "2026-07-30"
@@ -151,7 +162,8 @@ def test_remine_warning_does_not_block(env):
             return {"accepted": [], "rejected": [], "warning": "挖掘模型不可用",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0}
 
-    result = fpw.run_daily(
+    result = fpw.generate_orders(
+        execution_date="2026-07-30",
         state_dir=env["state"], library_path=env["lib"],
         panel_loader=env["make_loader"](30), remine_days=0,
         miner_factory=WarningMiner,
@@ -173,16 +185,17 @@ def test_remine_success_writes_state(env):
             return {"accepted": [{"id": "F002"}], "rejected": [], "warning": None,
                     "stopped_early": False, "stop_reason": None, "evaluated": 1}
 
-    fpw.run_daily(
+    fpw.generate_orders(
+        execution_date="2026-07-30",
         state_dir=env["state"], library_path=env["lib"],
         panel_loader=env["make_loader"](30), remine_days=5,
         miner_factory=OkMiner,
     )
     assert calls
     remine = json.loads((env["state"] / "remine_state.json").read_text(encoding="utf-8"))
-    assert remine["last_remine_date"] == "2026-07-29"
+    assert remine["last_remine_date"] == "2026-07-30"
     # 次日（距上次挖掘仅 1 个交易日 < 5）不再触发
-    fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+    fpw.generate_orders(execution_date="2026-07-31", state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](31), remine_days=5,
                   miner_factory=OkMiner)
     assert len(calls) == 1
@@ -196,6 +209,12 @@ def test_qmt_unavailable_graceful(env):
                            panel_loader=loader, remine_days=9999)
     assert result["date"] is None
     assert "QMT" in result["warning"]
+
+
+def test_execution_skips_when_open_orders_missing(env):
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
+    assert result["skipped"] is True
+    assert "订单不存在" in result["warning"]
 
 
 def test_cli_exit_code_zero(env, monkeypatch, capsys):

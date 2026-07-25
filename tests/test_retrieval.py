@@ -49,6 +49,30 @@ def test_deployment_embedding_defaults_are_semantic():
 
     compose = yaml.safe_load(open("docker-compose.yml", encoding="utf-8"))
     api_env = compose["services"]["api"]["environment"]
+    embedding_env = compose["services"]["embedding"]["environment"]
     reranker_env = compose["services"]["reranker"]["environment"]
-    assert api_env["EMBEDDING_PROVIDER"].endswith("sentence_transformers}")
+    assert api_env["EMBEDDING_PROVIDER"].endswith("openai_compatible}")
+    assert embedding_env["EMBEDDING_PROVIDER"].endswith("sentence_transformers}")
     assert reranker_env["RERANKER_PROVIDER"].endswith("sentence_transformers}")
+
+
+def test_embedding_api_rejects_model_override(monkeypatch):
+    from workers.embedding_api import EmbeddingRequest, embeddings
+
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "local_ngram")
+    monkeypatch.setenv("EMBEDDING_MODEL", "model-B")
+    result = embeddings(EmbeddingRequest(input="hello", model="model-A"))
+    assert result["error"]["code"] == "EMBEDDING_MODEL_MISMATCH"
+
+
+def test_collection_manifest_rejects_local_ngram_for_bge_collection():
+    from engines.retrieval.collection_manifest import CollectionManifestError, validate_embedding_manifest
+    from engines.retrieval.embedder import EmbeddingMetadata
+
+    metadata = EmbeddingMetadata(provider="local_ngram", model="local-chinese-ngram-v1", dimension=1024, semantic=False)
+    try:
+        validate_embedding_manifest("financial_memory_v2_bge_m3", metadata)
+    except CollectionManifestError as exc:
+        assert "semantic" in str(exc)
+    else:
+        raise AssertionError("expected manifest mismatch")

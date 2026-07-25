@@ -129,6 +129,22 @@ def test_oos_failure_blocks_promotion(tmp_path, monkeypatch):
     assert result["rejected"][0]["reason"] == "OOS未通过"
 
 
+def test_miner_default_oos_uses_purged_walkforward(tmp_path, monkeypatch):
+    panel, symbols = _panel()
+    calls = []
+
+    def fake_purged(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"passed": True, "method": "purged_walkforward", "windows": []}
+
+    monkeypatch.setattr("engines.factor.miner.run_purged_walkforward", fake_purged)
+    result = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml")).mine(
+        panel, symbols, rounds=1, candidates_per_round=1, horizon=5
+    )
+    assert calls
+    assert result["accepted"][0]["metrics"]["oos"]["method"] == "purged_walkforward"
+
+
 def test_neutralized_metrics_present(tmp_path, monkeypatch):
     monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
     panel, symbols = _panel()

@@ -7,7 +7,7 @@ from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
 from engines.retrieval.reranker_client import RerankerClient
-from engines.retrieval.sparse_retriever import SparseBM25Scorer
+from engines.retrieval.sparse_retriever import PostgresSparseRetriever, SparseBM25Scorer
 
 
 class HybridRetriever:
@@ -18,30 +18,40 @@ class HybridRetriever:
         embedder: LocalChineseNgramEmbedder | None = None,
         hydrator: PostgresHydrator | None = None,
         sparse_scorer: SparseBM25Scorer | None = None,
+        sparse_retriever: PostgresSparseRetriever | None = None,
     ) -> None:
         self.qdrant_client = qdrant_client or FinancialQdrantClient()
         self.reranker = reranker or RerankerClient()
         self.embedder = embedder or build_embedder()
         self.hydrator = hydrator or PostgresHydrator()
         self.sparse_scorer = sparse_scorer or SparseBM25Scorer()
+        self.sparse_retriever = sparse_retriever or PostgresSparseRetriever()
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
         plan = build_retrieval_plan(query=query, task_type=task_type, filters=filters, top_k=top_k)
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
-        candidates: list[dict] = []
+        dense_candidates: list[dict] = []
         for collection in plan["collections"]:
             hits = self.qdrant_client.search(collection=collection, vector=query_vector, limit=plan["top_n_retrieve"], query_filter=query_filter)
             for hit in hits:
-                candidates.append(
+                dense_candidates.append(
                     {
                         "chunk_id": hit.payload.get("chunk_id", str(hit.id)),
                         "text": hit.payload.get("text", ""),
                         "payload": hit.payload,
                         "dense_score": hit.score,
                         "score": hit.score,
+                        "recall_sources": ["dense"],
                     }
                 )
+        sparse_candidates = self.sparse_retriever.search(
+            plan["query"],
+            collections=plan["collections"],
+            filters=plan["filters"],
+            limit=plan["top_n_retrieve"],
+        )
+        candidates = self._merge_recall_candidates(dense_candidates, sparse_candidates)
         candidates = self.sparse_scorer.score_candidates(plan["query"], candidates)
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"])
         reranked = self._merge_candidate_fields(candidates, reranked)
@@ -135,6 +145,30 @@ class HybridRetriever:
             base = by_chunk.get(str(item.get("chunk_id")), {})
             merged.append({**base, **item})
         return merged
+
+    @staticmethod
+    def _merge_recall_candidates(dense: list[dict], sparse: list[dict]) -> list[dict]:
+        merged: dict[str, dict] = {}
+        for rank, item in enumerate(dense, start=1):
+            chunk_id = str(item.get("chunk_id"))
+            merged[chunk_id] = item | {"dense_rank": rank}
+        for rank, item in enumerate(sparse, start=1):
+            chunk_id = str(item.get("chunk_id"))
+            existing = merged.get(chunk_id)
+            if existing is None:
+                merged[chunk_id] = item | {"sparse_rank": rank}
+                continue
+            sources = sorted(set(existing.get("recall_sources") or []) | set(item.get("recall_sources") or ["sparse"]))
+            existing.update(
+                {
+                    "text": existing.get("text") or item.get("text"),
+                    "payload": {**(item.get("payload") or {}), **(existing.get("payload") or {})},
+                    "sparse_recall_score": item.get("sparse_recall_score", 0.0),
+                    "sparse_rank": rank,
+                    "recall_sources": sources,
+                }
+            )
+        return list(merged.values())
 
     @staticmethod
     def _status_score(status: str | None) -> float:

@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app import api as api_module
 from app.api import app, orchestrator
 
 
@@ -10,6 +11,13 @@ def test_health():
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+def test_ready_health_reports_dependency_failure(monkeypatch):
+    monkeypatch.setattr(api_module, "_ready_checks", lambda: {"api": "ok", "qdrant": "fail: unavailable"})
+    response = client.get("/health/ready")
+    assert response.status_code == 503
+    assert response.json()["status"] == "degraded"
 
 
 def test_stock_analyze_api(monkeypatch):

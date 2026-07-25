@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import Counter
 import os
 from functools import lru_cache
+import math
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -60,7 +61,8 @@ def rerank(request: RerankRequest) -> dict:
     semantic_scores = None
     if provider in {"sentence_transformers", "cross_encoder"}:
         pairs = [(request.query, candidate.get("text", "")) for candidate in request.candidates]
-        semantic_scores = [float(value) for value in _cross_encoder().predict(pairs)]
+        raw_scores = [float(value) for value in _cross_encoder().predict(pairs)]
+        semantic_scores = _normalize_scores(raw_scores)
     for index, candidate in enumerate(request.candidates):
         payload = candidate.get("payload", {})
         status_bonus = 0.2 if payload.get("status") in {"approved", "validated"} else 0.0
@@ -80,3 +82,13 @@ def rerank(request: RerankRequest) -> dict:
         )
     ranked.sort(key=lambda item: item["rerank_score"], reverse=True)
     return {"reranked": ranked[: request.top_k]}
+
+
+def _normalize_scores(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    sigmoid = [1.0 / (1.0 + math.exp(-max(min(value, 60.0), -60.0))) for value in values]
+    low, high = min(sigmoid), max(sigmoid)
+    if abs(high - low) < 1e-12:
+        return [round(value, 6) for value in sigmoid]
+    return [round((value - low) / (high - low), 6) for value in sigmoid]

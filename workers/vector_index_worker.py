@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import os
 import time
 
 from engines.retrieval.chunker import chunk_text
+from engines.retrieval.collection_manifest import validate_embedding_manifest
 from engines.retrieval.embedder import build_embedder
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from storage.bootstrap import create_all
@@ -19,6 +21,7 @@ def process_one_task() -> bool:
         qdrant.ensure_collections()
         embedder = build_embedder()
         embedding_meta = embedder.metadata
+        validate_embedding_manifest(task.target_collection, embedding_meta)
         if task.postgres_table != "memory_record":
             raise ValueError(f"unsupported postgres_table: {task.postgres_table}")
         memory = MemoryRepository().get(task.postgres_id)
@@ -71,7 +74,7 @@ def process_one_task() -> bool:
                 qdrant_point_id=point_id,
                 content_hash=chunk["content_hash"],
                 embedding_model=f"{embedding_meta.provider}:{embedding_meta.model}:{embedding_meta.dimension}",
-                reranker_model="local-chinese-ngram-reranker",
+                reranker_model=f"{os.getenv('RERANKER_PROVIDER', 'unknown')}:{os.getenv('RERANKER_MODEL', 'unknown')}",
             )
         task_repo.mark_success(task.id)
     except Exception as exc:

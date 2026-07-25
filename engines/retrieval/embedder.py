@@ -37,10 +37,11 @@ class OpenAICompatibleEmbedder:
         self.client = client or httpx.Client(timeout=60)
         if not self.base_url:
             raise EmbeddingError("EMBEDDING_BASE_URL is required for openai_compatible embedding provider")
+        self._metadata = self._load_service_metadata()
 
     @property
     def metadata(self) -> EmbeddingMetadata:
-        return EmbeddingMetadata("openai_compatible", self.model, self.dimension, True)
+        return self._metadata
 
     def embed(self, text: str) -> list[float]:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -55,6 +56,21 @@ class OpenAICompatibleEmbedder:
         if len(vector) != self.dimension:
             raise EmbeddingError(f"embedding dimension mismatch: got {len(vector)}, expected {self.dimension}")
         return [float(v) for v in vector]
+
+    def _load_service_metadata(self) -> EmbeddingMetadata:
+        root_url = self.base_url.removesuffix("/v1")
+        try:
+            response = self.client.get(f"{root_url}/health")
+            response.raise_for_status()
+            payload = response.json()
+            return EmbeddingMetadata(
+                str(payload.get("provider") or "openai_compatible"),
+                str(payload.get("model") or self.model),
+                int(payload.get("dimension") or self.dimension),
+                bool(payload.get("semantic", True)),
+            )
+        except Exception:
+            return EmbeddingMetadata("openai_compatible", self.model, self.dimension, True)
 
 
 class SentenceTransformersEmbedder:
