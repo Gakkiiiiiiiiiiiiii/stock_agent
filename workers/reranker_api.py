@@ -32,7 +32,7 @@ def _token_score(query: str, text: str) -> float:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok"}
+    return {"status": "ok", "mode": "fallback", "semantic": False}
 
 
 @app.post("/rerank")
@@ -45,11 +45,14 @@ def rerank(request: RerankRequest) -> dict:
         score = semantic_score + status_bonus
         ranked.append(
             {
+                **candidate,
                 "chunk_id": candidate["chunk_id"],
                 "rerank_score": round(score, 4),
                 "semantic_score": round(semantic_score, 4),
                 "payload": payload,
                 "text": candidate.get("text", ""),
+                "mode": "fallback",
+                "semantic": False,
             }
         )
     ranked.sort(key=lambda item: item["rerank_score"], reverse=True)

@@ -22,7 +22,7 @@ def _library():
     return {"factors": [{
         "id": "F001", "rpn": ["close", "cs_rank"], "expression": "close cs_rank",
         "hypothesis": "测试因子", "metrics": {"rank_ic": 0.05, "icir": 0.4, "fitness": 0.6},
-        "universe": [], "horizon": 5, "status": "active",
+        "universe": [], "horizon": 5, "status": "ACTIVE",
     }]}
 
 
@@ -60,6 +60,7 @@ def test_scan_alpha_factors_skips_nan_symbols(monkeypatch):
 
 
 def test_scan_stock_signals_appends_alpha_top(monkeypatch):
+    monkeypatch.setenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "true")
     monkeypatch.setenv("ENABLE_UNVERIFIED_ALPHA_TOP", "true")
     symbols = [f"60000{i}.SH" for i in range(10)]
 
@@ -91,6 +92,7 @@ def test_scan_stock_signals_appends_alpha_top(monkeypatch):
 
 
 def test_scan_stock_signals_disables_alpha_top_by_default(monkeypatch):
+    monkeypatch.setenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "true")
     symbols = ["600000.SH"]
 
     def fake_detect(symbol, date=None, patterns=None):
@@ -107,6 +109,7 @@ def test_scan_stock_signals_disables_alpha_top_by_default(monkeypatch):
 
 
 def test_scan_stock_signals_tolerates_factor_failure(monkeypatch):
+    monkeypatch.setenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "true")
     def fake_detect(symbol, date=None, patterns=None):
         return {"symbol": symbol, "date": "2026-07-17", "signals": []}
 

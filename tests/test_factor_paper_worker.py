@@ -40,7 +40,7 @@ def env(tmp_path, monkeypatch):
         "  expression: 'ret cs_rank'\n"
         "  hypothesis: 动量\n"
         "  metrics: {fitness: 1.0}\n"
-        "  status: active\n",
+        "  status: ACTIVE\n",
         encoding="utf-8",
     )
     panel = _panel()

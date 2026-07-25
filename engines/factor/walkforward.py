@@ -138,6 +138,7 @@ def run_walkforward(
                 rebalance_interval=horizon,
                 top_k=resolved_top_k,
                 initial_cash=equity_curve[-1] if equity_curve else 1_000_000.0,
+                score_metadata=_score_metadata(dates[t], seg_dates),
             )
 
             seg_eq = seg["equity_curve"]
@@ -190,6 +191,21 @@ def run_walkforward(
         "warning": "; ".join(warnings) if warnings else None,
         "disclaimer": DISCLAIMER,
     }
+
+
+def _score_metadata(signal_date: str, execution_dates: list[str]) -> list[dict]:
+    rows = []
+    for execution_date in execution_dates:
+        rows.append(
+            {
+                "feature_time": f"{signal_date}T15:00:00",
+                "available_at": f"{signal_date}T15:05:00",
+                "executable_from": f"{execution_date}T09:30:00",
+                "data_snapshot_id": f"factor_walkforward:{signal_date}",
+                "algorithm_version": "factor_walkforward_v1",
+            }
+        )
+    return rows
 
 
 __all__ = ["run_walkforward", "default_rebalance_points", "DISCLAIMER"]

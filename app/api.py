@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import uuid
 from contextlib import asynccontextmanager
 from datetime import date as Date
 from datetime import datetime
@@ -22,6 +21,7 @@ from engines.content.video_ingest_service import VideoIngestService
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
 from financial_agent.models import Position, ThemeLogic, TradeReviewInput
 from mcp_servers.knowledge_server import upsert_theme_logic as upsert_theme_logic_mcp
+from storage.repositories.job_repository import JobTaskRepository
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +128,14 @@ class BilibiliSummarizeRequest(BaseModel):
     use_diarization: bool = False
     language_hint: str | None = "zh"
     enable_visual_context: bool = True
+
+
+class FactorMineRequest(BaseModel):
+    rounds: int | None = None
+    candidates_per_round: int | None = None
+    universe: list[str] | None = None
+    days: int | None = None
+    eval_window: int | None = None
 
 
 @app.get("/health")
@@ -492,41 +500,52 @@ def admin_list_factors() -> dict:
     return list_factor_library(limit=100)
 
 
-# 因子挖掘任务表：模块级 dict（单进程 uvicorn 即可），task_id -> {status, result, error}
-_factor_mine_tasks: dict[str, dict] = {}
-_FACTOR_MINE_TASK_LIMIT = 100
-
-
 @app.post("/api/v1/admin/factors/mine")
 def admin_mine_factors(rounds: int | None = None, candidates_per_round: int | None = None) -> dict:
-    """提交因子挖掘任务，立即返回 task_id，实际挖掘在后台线程执行。"""
-    task_id = uuid.uuid4().hex[:8]
-    _factor_mine_tasks[task_id] = {"status": "running", "result": None, "error": None}
-    # 任务表超过上限时清理最旧记录（dict 保持插入序）
-    while len(_factor_mine_tasks) > _FACTOR_MINE_TASK_LIMIT:
-        _factor_mine_tasks.pop(next(iter(_factor_mine_tasks)))
-
-    def _run() -> None:
-        try:
-            from mcp_servers.factor_mining_server import mine_factors
-
-            result = mine_factors(rounds=rounds, candidates_per_round=candidates_per_round)
-            _factor_mine_tasks[task_id].update(status="done", result=result)
-        except Exception as exc:  # noqa: BLE001  # 容器内无法访问 QMT 等数据源时优雅落错
-            logger.exception("因子挖掘任务 %s 失败", task_id)
-            _factor_mine_tasks[task_id].update(status="failed", error=str(exc))
-
-    Thread(target=_run, daemon=True).start()
-    return {"task_id": task_id}
+    """提交持久化因子挖掘任务，实际执行由 workers/job_worker.py 领取。"""
+    payload = {key: value for key, value in {"rounds": rounds, "candidates_per_round": candidates_per_round}.items() if value is not None}
+    task = JobTaskRepository().create("factor_mine", payload)
+    return {"task_id": task["id"], "job_id": task["id"], "status": task["status"]}
 
 
 @app.get("/api/v1/admin/factors/mine/{task_id}")
 def admin_mine_factors_status(task_id: str) -> dict:
-    """查询挖掘任务状态：running / done（带 result）/ failed（带 error）。"""
-    task = _factor_mine_tasks.get(task_id)
+    """查询挖掘任务状态。"""
+    task = JobTaskRepository().get(task_id)
     if task is None:
         raise HTTPException(status_code=404, detail="task not found")
-    return {"status": task["status"], "result": task["result"], "error": task["error"]}
+    status_map = {"PENDING": "pending", "RUNNING": "running", "SUCCEEDED": "done", "FAILED_RETRYABLE": "failed", "FAILED_FINAL": "failed", "CANCELLED": "cancelled"}
+    return {"status": status_map.get(task["status"], task["status"]), "result": _parse_job_result(task.get("result_ref")), "error": task.get("error")}
+
+
+@app.post("/api/v2/factors/mine")
+def submit_factor_mine_job(request: FactorMineRequest) -> dict:
+    task = JobTaskRepository().create("factor_mine", request.model_dump(exclude_none=True))
+    return {"job_id": task["id"], "status": task["status"]}
+
+
+@app.get("/api/v2/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    task = JobTaskRepository().get(job_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail="job not found")
+    return task | {"result": _parse_job_result(task.get("result_ref"))}
+
+
+@app.post("/api/v2/jobs/{job_id}/cancel")
+def cancel_job(job_id: str) -> dict:
+    return {"job_id": job_id, "cancelled": JobTaskRepository().cancel(job_id)}
+
+
+def _parse_job_result(value) -> dict | None:
+    if not value:
+        return None
+    if isinstance(value, dict):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, json.JSONDecodeError):
+        return {"result_ref": value}
 
 
 @app.get("/api/v1/admin/skills")

@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from datetime import datetime
 
 import numpy as np
+from pydantic import BaseModel
 
 from engines.backtest.execution import (
     PositionBook,
@@ -25,6 +26,14 @@ _MIN_TRADE_VALUE = 1.0
 
 class LookaheadViolation(ValueError):
     code = "LOOKAHEAD_VIOLATION"
+
+
+class ScoreMetadata(BaseModel):
+    feature_time: datetime
+    available_at: datetime
+    executable_from: datetime
+    data_snapshot_id: str
+    algorithm_version: str
 
 
 def _valid_price(value: float) -> bool:
@@ -109,6 +118,7 @@ def run_topk_backtest(
     top_k: int | None = None,
     initial_cash: float = 1_000_000.0,
     score_metadata: Sequence[dict] | None = None,
+    allow_unsafe_without_metadata: bool = False,
 ) -> dict:
     """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。"""
     scores = np.asarray(scores, dtype=float)
@@ -137,7 +147,7 @@ def run_topk_backtest(
         return price if _valid_price(price) else last_close[idx]
 
     for t in range(n_days):
-        _check_score_time_contract(t, dates, score_metadata)
+        _check_score_time_contract(t, dates, score_metadata, allow_unsafe_without_metadata)
         # 更新最近有效收盘价
         for i in range(n_symbols):
             if _valid_price(closes[i, t]):
@@ -184,7 +194,42 @@ def run_topk_backtest(
     }
 
 
-def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None) -> None:
+def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None, allow_unsafe_without_metadata: bool) -> None:
+    if not score_metadata:
+        if allow_unsafe_without_metadata:
+            return
+        raise LookaheadViolation("score_metadata is mandatory")
+    if t >= len(score_metadata) or not score_metadata[t]:
+        if allow_unsafe_without_metadata:
+            return
+        raise LookaheadViolation(f"score metadata missing at {dates[t]}")
+    meta_raw = dict(score_metadata[t])
+    if "executable_from" not in meta_raw and "execution_time" in meta_raw:
+        meta_raw["executable_from"] = meta_raw["execution_time"]
+    if "data_snapshot_id" not in meta_raw:
+        meta_raw["data_snapshot_id"] = "UNKNOWN"
+    if "algorithm_version" not in meta_raw:
+        meta_raw["algorithm_version"] = "UNKNOWN"
+    try:
+        meta = ScoreMetadata(**meta_raw)
+    except Exception as exc:  # noqa: BLE001
+        raise LookaheadViolation(f"invalid score metadata at {dates[t]}: {exc}") from exc
+    if meta.feature_time > meta.available_at:
+        raise LookaheadViolation(f"LOOKAHEAD_VIOLATION at {dates[t]}: feature_time after available_at")
+    if meta.available_at >= meta.executable_from:
+        raise LookaheadViolation(
+            f"LOOKAHEAD_VIOLATION at {dates[t]}: available_at={meta.available_at.isoformat()} "
+            f"executable_from={meta.executable_from.isoformat()}"
+        )
+    execution_date = _parse_date(dates[t])
+    if execution_date is not None and meta.executable_from.date() != execution_date:
+        raise LookaheadViolation(
+            f"LOOKAHEAD_VIOLATION at {dates[t]}: executable_from date {meta.executable_from.date()} "
+            f"does not match execution date {execution_date}"
+        )
+
+
+def _legacy_check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None) -> None:
     if not score_metadata:
         return
     if t >= len(score_metadata) or not score_metadata[t]:
@@ -199,6 +244,11 @@ def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence
             f"LOOKAHEAD_VIOLATION at {dates[t]}: available_at={available_at.isoformat()} "
             f"execution_time={execution_time.isoformat()}"
         )
+
+
+def _parse_date(value) -> datetime.date | None:
+    parsed = _parse_dt(value)
+    return parsed.date() if parsed is not None else None
 
 
 def _parse_dt(value) -> datetime | None:

@@ -14,6 +14,7 @@ class EmbeddingMetadata:
     provider: str
     model: str
     dimension: int
+    semantic: bool
 
 
 class EmbeddingError(RuntimeError):
@@ -39,7 +40,7 @@ class OpenAICompatibleEmbedder:
 
     @property
     def metadata(self) -> EmbeddingMetadata:
-        return EmbeddingMetadata("openai_compatible", self.model, self.dimension)
+        return EmbeddingMetadata("openai_compatible", self.model, self.dimension, True)
 
     def embed(self, text: str) -> list[float]:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -65,7 +66,7 @@ class LocalChineseNgramEmbedder:
 
     @property
     def metadata(self) -> EmbeddingMetadata:
-        return EmbeddingMetadata("local_ngram", self.model, self.vector_size)
+        return EmbeddingMetadata("local_ngram", self.model, self.vector_size, False)
 
     def embed(self, text: str) -> list[float]:
         tokens = _char_ngrams(text)

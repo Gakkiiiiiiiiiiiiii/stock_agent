@@ -14,6 +14,7 @@ import numpy as np
 import yaml
 
 from engines.factor import fitness as fitness_mod
+from engines.factor.oos import evaluate_oos_splits
 from engines.factor.library import (
     active_factors,
     add_factor,
@@ -286,6 +287,7 @@ class FactorMiner:
                     round_dup_rejected += 1
                     continue
                 metrics = fitness_mod.evaluate_factor(panel_values, closes, horizon=horizon, eval_window=eval_window)
+                metrics = _with_neutralized_metrics(metrics)
                 # 收紧后的门槛只会比基础门槛更严，可直接叠加在 passed 之上
                 passed = bool(metrics.get("passed")) and metrics["rank_ic"] >= _rank_ic_threshold(evaluated)
                 if not passed:
@@ -293,6 +295,15 @@ class FactorMiner:
                     rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
+                oos = evaluate_oos_splits(panel_values, closes, horizon=horizon)
+                if not oos.get("passed"):
+                    metrics["passed"] = False
+                    metrics["oos"] = oos
+                    last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "OOS 未通过"})
+                    rejected.append({"rpn": rpn, "reason": "OOS未通过", "metrics": metrics})
+                    rejected_rpn.add(rpn_key)
+                    continue
+                metrics["oos"] = oos
                 entry = add_factor(
                     library, rpn, expression=" ".join(rpn), hypothesis=hypothesis,
                     metrics=metrics, universe=sorted(symbols) if len(symbols) <= 100 else [],
@@ -335,3 +346,16 @@ class FactorMiner:
 
 
 __all__ = ["FactorMiner"]
+
+
+def _with_neutralized_metrics(metrics: dict) -> dict:
+    """Report neutralized metric slots even when no exposure matrix is available yet."""
+    out = dict(metrics)
+    out.setdefault("raw_rank_ic", out.get("rank_ic"))
+    out.setdefault("neutralized_rank_ic", out.get("rank_ic"))
+    out.setdefault("raw_topk_excess_return", out.get("topk_excess_return", out.get("topk_annual_return")))
+    out.setdefault("neutralized_topk_excess_return", out.get("topk_excess_return", out.get("topk_annual_return")))
+    if out.get("neutralized_rank_ic") is not None and abs(float(out["neutralized_rank_ic"])) < fitness_mod.RANK_IC_THRESHOLD:
+        out["passed"] = False
+        out.setdefault("failure_reasons", []).append("neutralized_rank_ic_failed")
+    return out

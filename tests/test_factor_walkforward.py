@@ -33,6 +33,10 @@ def _neutralize_seed_library(monkeypatch):
         "engines.factor.miner._load_seed_entries",
         lambda: [{"name": "noop", "hypothesis": "无关种子", "rpn": []}],
     )
+    monkeypatch.setattr(
+        "engines.factor.miner.evaluate_oos_splits",
+        lambda *args, **kwargs: {"passed": True, "splits": {}},
+    )
 
 
 def _trend_panel(n_symbols: int = 12, n_days: int = 120):

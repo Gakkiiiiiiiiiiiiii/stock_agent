@@ -35,6 +35,9 @@ class MarketFeatureSnapshot(BaseModel):
     sector_dispersion: float | None = None
     sector_rotation_speed: float | None = None
     high_position_loss_ratio: float | None = None
+    high_position_limit_down_ratio: float | None = None
+    high_position_breakdown_ratio: float | None = None
+    retreat_days: int | None = None
     quality_score: float = 0.0
 
 
@@ -89,7 +92,9 @@ def get_market_regime(
     index_drawdown_20d: float | None = None,
     limit_down_count: int | None = None,
     previous_regime: str | None = None,
+    force_refresh: bool = False,
 ) -> dict:
+    _ = force_refresh
     if snapshot is None:
         snapshot_obj = MarketFeatureSnapshot(
             as_of=as_of or datetime.now(timezone.utc),
@@ -107,20 +112,29 @@ def get_market_regime(
         snapshot_obj = MarketFeatureSnapshot.model_validate(snapshot)
 
     missing_fields = _missing_fields(snapshot_obj)
-    if missing_fields or top_theme_strength is None or index_drawdown_20d is None:
+    retreat_missing = [
+        name for name in ("high_position_loss_ratio", "high_position_limit_down_ratio", "high_position_breakdown_ratio", "retreat_days")
+        if getattr(snapshot_obj, name) is None
+    ]
+    if missing_fields or top_theme_strength is None or index_drawdown_20d is None or retreat_missing:
         extra_missing = []
         if top_theme_strength is None:
             extra_missing.append("top_theme_strength")
         if index_drawdown_20d is None:
             extra_missing.append("index_drawdown_20d")
-        return _unknown_result(snapshot_obj, previous_regime, missing_fields + extra_missing)
+        return _unknown_result(snapshot_obj, previous_regime, missing_fields + extra_missing + retreat_missing)
 
     breadth = compute_breadth(snapshot_obj.up_count, snapshot_obj.down_count)
     crowding_score = compute_crowding_score(top_theme_strength, snapshot_obj.limit_up_count)
     rotation_score = compute_rotation_score(top_theme_strength, breadth)
     range_score = compute_range_score(snapshot_obj.index_volatility_20d, breadth)
     drawdown_risk = compute_drawdown_risk(index_drawdown_20d, snapshot_obj.limit_down_count)
-    retreat = detect_high_position_retreat(0.35, 0.2, 0.22, 2)
+    retreat = detect_high_position_retreat(
+        snapshot_obj.high_position_loss_ratio,
+        snapshot_obj.high_position_limit_down_ratio,
+        snapshot_obj.high_position_breakdown_ratio,
+        snapshot_obj.retreat_days,
+    )
     features = {
         "breadth": breadth,
         "trend_score": compute_trend_score(snapshot_obj.index_return_5d, snapshot_obj.index_return_20d),

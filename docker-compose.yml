@@ -18,8 +18,8 @@ services:
       retries: 10
 
   qdrant:
-    image: qdrant/qdrant:latest
-    container_name: financial_agent_qdrant
+    image: qdrant/qdrant:v1.11.3
+    container_name: stock-agent-qdrant
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
     ports:
@@ -45,8 +45,9 @@ services:
       retries: 10
 
   embedding:
-    image: stock_agent-reranker:latest
-    container_name: financial_agent_embedding
+    build: .
+    image: stock-agent-embedding:0.1.0
+    container_name: stock-agent-embedding
     profiles: ["embedding"]
     command: uvicorn workers.embedding_api:app --host 0.0.0.0 --port 8001
     environment:
@@ -73,7 +74,8 @@ services:
 
   reranker:
     build: .
-    container_name: financial_agent_reranker
+    image: stock-agent-reranker:0.1.0
+    container_name: stock-agent-reranker
     command: uvicorn workers.reranker_api:app --host 0.0.0.0 --port 8010
     env_file:
       - .env
@@ -109,7 +111,8 @@ services:
 
   api:
     build: .
-    container_name: financial_agent_api
+    image: stock-agent-api:0.1.0
+    container_name: stock-agent-api
     env_file:
       - .env
     environment:
@@ -165,7 +168,8 @@ services:
 
   vector_worker:
     build: .
-    container_name: financial_agent_vector_worker
+    image: stock-agent-vector-worker:0.1.0
+    container_name: stock-agent-vector-worker
     command: python workers/vector_index_worker.py
     env_file:
       - .env
@@ -212,6 +216,43 @@ services:
       redis:
         condition: service_healthy
       reranker:
+        condition: service_healthy
+
+  job_worker:
+    build: .
+    image: stock-agent-job-worker:0.1.0
+    container_name: stock-agent-job-worker
+    command: python workers/job_worker.py
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-change_me_agent_pass}@postgres:5432/${POSTGRES_DB:-financial_agent}
+      QDRANT_URL: http://qdrant:6333
+      REDIS_URL: redis://:${REDIS_PASSWORD:-change_me_redis_pass}@redis:6379/0
+      RERANKER_URL: http://reranker:8010
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-local_ngram}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:8001/v1}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-local-chinese-ngram-v1}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
+      QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
+    volumes:
+      - ./app:/app/app
+      - ./agent:/app/agent
+      - ./config:/app/config
+      - ./engines:/app/engines
+      - ./financial_agent:/app/financial_agent
+      - ./knowledge_base:/app/knowledge_base
+      - ./mcp_servers:/app/mcp_servers
+      - ./scripts:/app/scripts
+      - ./skills:/app/skills
+      - ./storage:/app/storage
+      - ./workers:/app/workers
+      - ./pyproject.toml:/app/pyproject.toml:ro
+      - ./README.md:/app/README.md:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
 volumes:

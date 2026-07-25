@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+import math
+import os
+from datetime import date, timedelta
 
 import pandas as pd
 import yaml
@@ -12,6 +14,7 @@ from engines.technical.profile_loader import load_technical_profile
 from engines.technical.registry import default_indicator_registry
 from engines.technical.rule_engine import RuleEngine
 from engines.technical.pattern_detector import detect_patterns
+from engines.technical.rule_validator import RulePackValidationError, RulePackValidator
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
@@ -33,8 +36,11 @@ def calc_technical_indicators(symbol: str, end_date: str | None = None) -> dict:
 def calc_profile_indicators(symbol: str, profile: str = "core_daily_v1", end_date: str | None = None) -> dict:
     provider = get_market_data_provider()
     profile_obj = load_technical_profile(profile)
-    kline = provider.get_kline(symbol, end_date=date.fromisoformat(end_date) if end_date else None)
-    invalid = _validate_kline(kline, symbol, minimum_records=min(profile_obj.minimum_bars, 30))
+    resolved_end = date.fromisoformat(end_date) if end_date else date.today()
+    calendar_days = math.ceil(profile_obj.minimum_bars * 1.6)
+    start_date = resolved_end - timedelta(days=max(400, calendar_days))
+    kline = provider.get_kline(symbol, start_date=start_date, end_date=resolved_end)
+    invalid = _validate_kline(kline, symbol, minimum_records=profile_obj.minimum_bars)
     if invalid is not None:
         return invalid
     frame = pd.DataFrame([item.model_dump() for item in kline.records])
@@ -53,13 +59,14 @@ def calc_profile_indicators(symbol: str, profile: str = "core_daily_v1", end_dat
             output[spec.alias] = result.round(profile_obj.output_precision).where(pd.notna(result), None).tolist()
     return {
         "symbol": symbol,
-        "profile": profile_obj.name,
-        "profile_version": profile_obj.version,
-        "profile_hash": registry.fingerprint(profile_obj),
+        "profile": {"name": profile_obj.name, "version": profile_obj.version, "hash": registry.fingerprint(profile_obj)},
         "data_source": kline.source,
+        "feature_time": _feature_time(kline.records[-1].date),
+        "executable_from": _executable_from(kline.records[-1].date),
         "latest_effective_time": str(kline.records[-1].date),
         "indicators": output,
         "quality_flags": [],
+        "data_snapshot_id": _data_snapshot_id(symbol, profile_obj.name, profile_obj.version, str(kline.records[-1].date), len(kline.records)),
     }
 
 
@@ -68,6 +75,18 @@ def evaluate_technical_rules(symbol: str, rule_pack: str = "core_signals_v1", en
     pack = (cfg.get("rule_packs") or {}).get(rule_pack)
     if pack is None:
         return {"error": f"rule pack not found: {rule_pack}"}
+    profile_obj = load_technical_profile(pack["profile"])
+    registry = default_indicator_registry()
+    try:
+        validation = RulePackValidator(registry).validate(rule_pack, pack, profile_obj)
+    except RulePackValidationError as exc:
+        return {
+            "error": {
+                "code": "RULE_PACK_INVALID",
+                "message": str(exc),
+                "details": [item.__dict__ for item in exc.errors],
+            }
+        }
     result = calc_profile_indicators(symbol, profile=pack["profile"], end_date=end_date)
     if "error" in result:
         return result
@@ -82,18 +101,39 @@ def evaluate_technical_rules(symbol: str, rule_pack: str = "core_signals_v1", en
             rules.append(engine.evaluate_rule(rule, frame).__dict__)
     return {
         "symbol": symbol,
-        "rule_pack": rule_pack,
-        "rule_pack_version": pack.get("version"),
+        "feature_time": result["feature_time"],
+        "executable_from": result["executable_from"],
         "profile": result["profile"],
-        "profile_hash": result["profile_hash"],
+        "rule_pack": {"name": rule_pack, "version": str(pack.get("version") or "1.0.0"), "hash": validation["rule_pack_hash"]},
+        "indicators": result["indicators"],
         "rules": [
             item | {"status": item["status"].value if hasattr(item["status"], "value") else item["status"]}
             for item in rules
         ],
+        "score": round(sum(float(item.get("score_awarded") or 0.0) for item in rules), 4),
+        "quality_flags": result["quality_flags"],
+        "data_snapshot_id": result["data_snapshot_id"],
     }
 
 
+def scan_technical_rules(symbols: list[str], rule_pack: str = "core_signals_v1", end_date: str | None = None) -> dict:
+    return {"items": [evaluate_technical_rules(symbol, rule_pack=rule_pack, end_date=end_date) for symbol in symbols]}
+
+
+def explain_technical_rule(rule_id: str, rule_pack: str = "core_signals_v1") -> dict:
+    cfg = yaml.safe_load((project_root() / "config" / "technical_rule_packs.yaml").read_text(encoding="utf-8")) or {}
+    pack = (cfg.get("rule_packs") or {}).get(rule_pack)
+    if pack is None:
+        return {"error": f"rule pack not found: {rule_pack}"}
+    for rule in pack.get("rules") or []:
+        if str(rule.get("id")) == rule_id:
+            return {"rule_pack": rule_pack, "rule": rule}
+    return {"error": f"rule not found: {rule_id}"}
+
+
 def detect_pattern_signal(symbol: str, date: str | None = None, patterns: list[str] | None = None) -> dict:
+    if not _legacy_patterns_enabled():
+        return {"error": {"code": "LEGACY_TECHNICAL_DISABLED", "message": "legacy pattern detector is disabled by default"}}
     provider = get_market_data_provider()
     kline = provider.get_kline(symbol, end_date=__import__("datetime").date.fromisoformat(date) if date else None)
     invalid = _validate_kline(kline, symbol, minimum_records=30)
@@ -109,6 +149,8 @@ def detect_pattern_signal(symbol: str, date: str | None = None, patterns: list[s
 
 
 def scan_stock_signals(symbols: list[str], patterns: list[str] | None = None) -> dict:
+    if not _legacy_patterns_enabled():
+        return {"error": {"code": "LEGACY_TECHNICAL_DISABLED", "message": "legacy pattern scan is disabled by default"}}
     items = [detect_pattern_signal(symbol, patterns=patterns) for symbol in symbols]
     _merge_alpha_factors(items)
     return {"items": items}
@@ -179,8 +221,32 @@ def _validate_kline(kline, symbol: str, minimum_records: int) -> dict | None:
     if len(kline.records) < minimum_records:
         return {
             "symbol": symbol,
-            "error": f"行情数据不足，至少需要 {minimum_records} 根 K 线",
+            "error": {
+                "code": "INSUFFICIENT_BARS",
+                "message": f"行情数据不足，至少需要 {minimum_records} 根 K 线",
+                "required": minimum_records,
+                "actual": len(kline.records),
+            },
             "data_source": kline.source,
             "warning": kline.warning,
         }
     return None
+
+
+def _legacy_patterns_enabled() -> bool:
+    return os.getenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "false").lower() in {"1", "true", "yes"}
+
+
+def _feature_time(day: date) -> str:
+    return f"{day.isoformat()}T15:00:00+08:00"
+
+
+def _executable_from(day: date) -> str:
+    return f"{(day + timedelta(days=1)).isoformat()}T09:30:00+08:00"
+
+
+def _data_snapshot_id(symbol: str, profile: str, version: str, latest: str, count: int) -> str:
+    import hashlib
+
+    payload = f"{symbol}|{profile}|{version}|{latest}|{count}"
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()

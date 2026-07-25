@@ -1,6 +1,6 @@
 ---
 name: a-share-technical-analysis
-description: 用于分析 A 股个股、ETF、行业指数的技术形态，包括趋势、量价、KDJ、MACD、RPS、B1/B2/B3、买卖点和风险。
+description: 用于分析 A 股个股、ETF、行业指数的技术形态，包括趋势、动量、波动率、量价、MACD、买卖点和风险。
 ---
 
 # A 股技术分析 Skill
@@ -31,11 +31,9 @@ description: 用于分析 A 股个股、ETF、行业指数的技术形态，包�
 
 - retrieve_relevant_context
 - get_kline
-- calc_technical_indicators
-- detect_pattern_signal
-- scan_alpha_factors
+- calc_profile_indicators
+- evaluate_technical_rules
 - get_market_regime
-- route_strategy
 - get_sector_strength
 - search_theme_logic
 - evaluate_portfolio_risk

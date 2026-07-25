@@ -31,7 +31,7 @@ description: 用于每日市场扫描、主题强度分析、候选标的筛选�
 - retrieve_relevant_context
 - get_sector_strength
 - rank_themes_by_score
-- scan_stock_signals
+- scan_technical_rules
 - scan_alpha_factors
 - evaluate_portfolio_risk
 

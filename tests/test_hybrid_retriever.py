@@ -27,10 +27,9 @@ class FakeEmbedder:
 
 class FakeHydrator:
     def hydrate(self, reranked_hits):
-        _ = reranked_hits
         return [
-            {"title": "旧观点", "rerank_score": 0.9, "source_timestamp": 10},
-            {"title": "新观点", "rerank_score": 0.9, "source_timestamp": 20},
+            {"title": "旧观点", "rerank_score": 0.9, "source_timestamp": 10, "dense_score": reranked_hits[0].get("dense_score")},
+            {"title": "新观点", "rerank_score": 0.9, "source_timestamp": 20, "bm25_score": reranked_hits[0].get("bm25_score")},
         ]
 
 
@@ -137,3 +136,31 @@ def test_build_retrieval_plan_marks_recent_market_opportunity_queries():
     assert plan["task_type"] == "market_opportunity_scan"
     assert "bilibili_video_summary" in plan["preferred_source_types"]
     assert plan["top_n_retrieve"] >= 18
+
+
+def test_reranker_candidate_fields_preserved():
+    retriever = HybridRetriever(
+        qdrant_client=FakeQdrant(),
+        reranker=FakeReranker(),
+        embedder=FakeEmbedder(),
+        hydrator=FakeHydrator(),
+    )
+    merged = retriever._merge_candidate_fields(
+        [{"chunk_id": "a", "dense_score": 0.76, "bm25_score": 0.4, "payload": {"x": 1}}],
+        [{"chunk_id": "a", "rerank_score": 0.82}],
+    )
+    assert merged[0]["dense_score"] == 0.76
+    assert merged[0]["bm25_score"] == 0.4
+    assert merged[0]["rerank_score"] == 0.82
+
+
+def test_sparse_score_is_real():
+    retriever = HybridRetriever(
+        qdrant_client=FakeQdrant(),
+        reranker=FakeReranker(),
+        embedder=FakeEmbedder(),
+        hydrator=FakeHydrator(),
+    )
+    scored = retriever.sparse_scorer.score_candidates("黄金 高股息", [{"chunk_id": "a", "text": "黄金 高股息 机会"}])
+    assert scored[0]["bm25_score"] > 0
+    assert scored[0]["sparse_score_source"] == "bm25_candidate_text"

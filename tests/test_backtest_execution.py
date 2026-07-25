@@ -136,6 +136,7 @@ def test_topk_equal_weight_and_cost_direction():
     result = run_topk_backtest(
         scores, opens, highs, lows, closes, volume, symbols, dates,
         rebalance_interval=5, top_k=2, initial_cash=initial,
+        allow_unsafe_without_metadata=True,
     )
     # 首日建仓，等权持有 0、1 号
     day0 = result["holdings_log"][0]
@@ -167,6 +168,7 @@ def test_topk_rotation_sells_after_t1():
     result = run_topk_backtest(
         scores, opens, highs, lows, closes, volume, symbols, dates,
         rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True,
     )
     # t=5 调仓后持有 2、3 号（T+1：t=0 买入的份额此时早已可卖）
     assert set(result["holdings_log"][5]) == {symbols[2], symbols[3]}
@@ -190,6 +192,7 @@ def test_limit_up_and_suspended_excluded_from_buy():
     result = run_topk_backtest(
         scores, opens, highs, lows, closes, volume, symbols, dates,
         rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True,
     )
     # 涨停的 0 号买不进、停牌的 1 号跳过，t=5 调仓后持有 2、3 号
     assert set(result["holdings_log"][5]) == {symbols[2], symbols[3]}

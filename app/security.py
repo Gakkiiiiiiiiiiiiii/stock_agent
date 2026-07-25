@@ -24,7 +24,9 @@ async def security_and_trace_middleware(request: Request, call_next: Callable):
     started = time.perf_counter()
     required_key = os.getenv("API_KEY")
     if required_key and request.url.path not in PUBLIC_PATHS:
-        supplied = request.headers.get("x-api-key") or request.query_params.get("api_key")
+        auth = request.headers.get("authorization") or ""
+        bearer = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else None
+        supplied = request.headers.get("x-api-key") or bearer
         if supplied != required_key:
             METRICS["api_auth_denied_total"] += 1
             return JSONResponse(
@@ -48,7 +50,7 @@ async def security_and_trace_middleware(request: Request, call_next: Callable):
             content={
                 "error": {
                     "code": "INTERNAL_ERROR",
-                    "message": str(exc),
+                    "message": "internal server error",
                     "details": {},
                     "trace_id": trace_id,
                 }

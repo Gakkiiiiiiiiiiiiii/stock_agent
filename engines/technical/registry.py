@@ -5,9 +5,11 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Literal
 from typing import Any
 
 import pandas as pd
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from engines.technical.models import TechnicalProfile
 
@@ -20,10 +22,18 @@ class IndicatorDefinition:
     version: str
     required_fields: tuple[str, ...]
     warmup_bars: int
+    params_model: type[BaseModel]
+    output_schema: dict[str, str]
     calculator: Callable[[pd.DataFrame, dict[str, Any]], pd.Series | pd.DataFrame]
+    null_policy: str = "preserve"
+    numeric_policy: str = "raise_on_invalid"
 
     def validate_params(self, params: dict[str, Any]) -> dict[str, Any]:
-        return dict(params or {})
+        try:
+            parsed = self.params_model(**dict(params or {}))
+        except ValidationError as exc:
+            raise ValueError(f"invalid params for indicator {self.name}: {exc}") from exc
+        return parsed.model_dump()
 
     def calculate(self, frame: pd.DataFrame, params: dict[str, Any]) -> pd.Series | pd.DataFrame:
         return self.calculator(frame, self.validate_params(params))
@@ -63,6 +73,14 @@ class IndicatorRegistry:
             missing = [field for field in definition.required_fields if field not in available]
             if missing:
                 errors.append(f"{spec.alias} missing fields: {missing}")
+            try:
+                params = definition.validate_params(spec.params)
+            except ValueError as exc:
+                errors.append(f"{spec.alias}: {exc}")
+                continue
+            field = params.get("field")
+            if field and field not in available:
+                errors.append(f"{spec.alias} unknown field: {field}")
         return {"valid": not errors, "errors": errors}
 
     def fingerprint(self, profile: TechnicalProfile) -> str:
@@ -79,11 +97,12 @@ class IndicatorRegistry:
 
 def default_indicator_registry() -> IndicatorRegistry:
     registry = IndicatorRegistry()
-    registry.register(IndicatorDefinition("sma", "1.0.0", ("close",), 1, lambda frame, p: frame[p.get("field", "close")].rolling(int(p["window"])).mean()))
-    registry.register(IndicatorDefinition("ema", "1.0.0", ("close",), 1, lambda frame, p: frame[p.get("field", "close")].ewm(span=int(p["window"]), adjust=False).mean()))
-    registry.register(IndicatorDefinition("rolling_std", "1.0.0", ("return",), 1, lambda frame, p: frame[p.get("field", "return")].rolling(int(p["window"])).std()))
-    registry.register(IndicatorDefinition("volume_ma", "1.0.0", ("volume",), 1, lambda frame, p: frame["volume"].rolling(int(p["window"])).mean()))
-    registry.register(IndicatorDefinition("volume_ratio", "1.0.0", ("volume",), 1, lambda frame, p: frame["volume"] / frame["volume"].rolling(int(p["window"])).mean()))
+
+    registry.register(IndicatorDefinition("sma", "1.0.0", OHLCV_FIELDS, 1, WindowFieldParams, {"value": "float"}, lambda frame, p: frame[p["field"]].rolling(int(p["window"])).mean()))
+    registry.register(IndicatorDefinition("ema", "1.0.0", OHLCV_FIELDS, 1, WindowFieldParams, {"value": "float"}, lambda frame, p: frame[p["field"]].ewm(span=int(p["window"]), adjust=False).mean()))
+    registry.register(IndicatorDefinition("rolling_std", "1.0.0", ("return",), 1, RollingStdParams, {"value": "float"}, lambda frame, p: frame[p["field"]].rolling(int(p["window"])).std()))
+    registry.register(IndicatorDefinition("volume_ma", "1.0.0", ("volume",), 1, WindowOnlyParams, {"value": "float"}, lambda frame, p: frame["volume"].rolling(int(p["window"])).mean()))
+    registry.register(IndicatorDefinition("volume_ratio", "1.0.0", ("volume",), 1, WindowOnlyParams, {"value": "float"}, lambda frame, p: frame["volume"] / frame["volume"].rolling(int(p["window"])).mean()))
 
     def macd(frame: pd.DataFrame, p: dict[str, Any]) -> pd.DataFrame:
         close = frame[p.get("field", "close")]
@@ -93,5 +112,40 @@ def default_indicator_registry() -> IndicatorRegistry:
         dea = dif.ewm(span=int(p.get("signal", 9)), adjust=False).mean()
         return pd.DataFrame({"dif": dif, "dea": dea, "hist": (dif - dea) * 2}, index=frame.index)
 
-    registry.register(IndicatorDefinition("macd", "1.0.0", ("close",), 26, macd))
+    registry.register(IndicatorDefinition("macd", "1.0.0", ("close",), 26, MacdParams, {"dif": "float", "dea": "float", "hist": "float"}, macd))
     return registry
+
+
+OHLCVField = Literal["open", "high", "low", "close", "volume", "amount"]
+OHLCV_FIELDS = ("open", "high", "low", "close", "volume", "amount")
+
+
+class StrictParams(BaseModel):
+    model_config = {"extra": "forbid"}
+
+
+class WindowFieldParams(StrictParams):
+    window: int = Field(ge=2, le=1000)
+    field: OHLCVField = "close"
+
+
+class RollingStdParams(StrictParams):
+    window: int = Field(ge=2, le=1000)
+    field: Literal["return"] = "return"
+
+
+class WindowOnlyParams(StrictParams):
+    window: int = Field(ge=2, le=1000)
+
+
+class MacdParams(StrictParams):
+    fast: int = Field(default=12, ge=2, le=200)
+    slow: int = Field(default=26, ge=3, le=400)
+    signal: int = Field(default=9, ge=2, le=200)
+    field: OHLCVField = "close"
+
+    @model_validator(mode="after")
+    def validate_windows(self) -> "MacdParams":
+        if self.fast >= self.slow:
+            raise ValueError("fast must be smaller than slow")
+        return self

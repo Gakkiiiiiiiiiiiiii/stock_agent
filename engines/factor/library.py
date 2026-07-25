@@ -8,15 +8,16 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from engines.factor.lifecycle import FactorLifecycleStatus
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
 
 LIBRARY_PATH = "config/factor_library.yaml"
 MAX_CORRELATION = 0.9  # 与库内 active 因子面板逐日截面相关绝对值上限，超过视为重复
-ACTIVE_STATUS = "active"
-RESEARCH_STATUS = "UNIT_VALIDATED"
-LEGACY_UNVERIFIED_STATUS = "LEGACY_UNVERIFIED"
+ACTIVE_STATUS = FactorLifecycleStatus.ACTIVE.value
+RESEARCH_STATUS = FactorLifecycleStatus.OOS_PASS.value
+LEGACY_UNVERIFIED_STATUS = FactorLifecycleStatus.LEGACY_UNVERIFIED.value
 
 
 def _default_path() -> Path:
@@ -97,7 +98,7 @@ def add_factor(
 ) -> dict:
     """追加入库条目并返回该条目。
 
-    新挖出的因子只完成了公式校验和样本内评估，不能直接进入 active。
+    新挖出的因子只完成研究准入，不能直接进入 ACTIVE。
     """
     entry = {
         "id": next_factor_id(library),
@@ -124,7 +125,12 @@ def active_factors(library: dict, limit: int | None = None) -> list[dict]:
 
 def research_validated_factors(library: dict, limit: int | None = None) -> list[dict]:
     """返回可用于研究预检的因子，不包含旧版未核验因子。"""
-    allowed = {ACTIVE_STATUS, RESEARCH_STATUS}
+    allowed = {
+        FactorLifecycleStatus.OOS_PASS.value,
+        FactorLifecycleStatus.PAPER_TRADING.value,
+        FactorLifecycleStatus.APPROVED.value,
+        FactorLifecycleStatus.ACTIVE.value,
+    }
     factors = [f for f in library.get("factors", []) if f.get("status") in allowed]
     factors.sort(key=lambda f: (f.get("metrics") or {}).get("fitness", float("-inf")), reverse=True)
     return factors[:limit] if limit else factors

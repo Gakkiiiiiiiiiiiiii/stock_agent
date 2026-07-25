@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from collections.abc import Callable
 from typing import Any
 
@@ -27,6 +29,8 @@ ToolExecutor = Callable[[dict[str, Any]], dict[str, Any]]
 
 
 class ClaudeToolRegistry:
+    _executor_pool = ThreadPoolExecutor(max_workers=8)
+
     def __init__(self, analysis_model_client: AnalysisModelClient | None = None) -> None:
         self.analysis_model_client = analysis_model_client or AnalysisModelClient()
         self.proposals = ProposalStore()
@@ -112,6 +116,37 @@ class ClaudeToolRegistry:
                     },
                 },
                 lambda payload: technical_factor_server.evaluate_technical_rules(**payload),
+            ),
+            "scan_technical_rules": (
+                {
+                    "name": "scan_technical_rules",
+                    "description": "Batch evaluate approved technical rule-pack DSL for symbols.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "symbols": {"type": "array", "items": {"type": "string"}},
+                            "rule_pack": {"type": "string"},
+                            "end_date": {"type": "string"},
+                        },
+                        "required": ["symbols"],
+                    },
+                },
+                lambda payload: technical_factor_server.scan_technical_rules(**payload),
+            ),
+            "explain_technical_rule": (
+                {
+                    "name": "explain_technical_rule",
+                    "description": "Explain an approved technical DSL rule by id.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "rule_id": {"type": "string"},
+                            "rule_pack": {"type": "string"},
+                        },
+                        "required": ["rule_id"],
+                    },
+                },
+                lambda payload: technical_factor_server.explain_technical_rule(**payload),
             ),
             "detect_pattern_signal": (
                 {
@@ -243,7 +278,14 @@ class ClaudeToolRegistry:
                 {
                     "name": "get_market_regime",
                     "description": "Infer current market regime, state transitions, and high-position retreat risk.",
-                    "input_schema": {"type": "object", "properties": {}},
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "as_of": {"type": "string"},
+                            "previous_regime": {"type": "string"},
+                            "force_refresh": {"type": "boolean"},
+                        },
+                    },
                 },
                 lambda payload: market_regime_server.get_market_regime(**payload),
             ),
@@ -443,6 +485,9 @@ class ClaudeToolRegistry:
                 lambda payload: factor_mining_server.scan_alpha_factors(**payload),
             ),
         }
+        if os.getenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "false").lower() not in {"1", "true", "yes"}:
+            for legacy_name in ("calc_technical_indicators", "detect_pattern_signal", "scan_stock_signals"):
+                self._tools.pop(legacy_name, None)
         self._policies: dict[str, ToolPolicy] = self._default_policies()
 
     def anthropic_tools(self) -> list[dict[str, Any]]:
@@ -485,11 +530,16 @@ class ClaudeToolRegistry:
         started = time.perf_counter()
         _, executor = self._tools[name]
         try:
-            result = executor(payload)
+            future = self._executor_pool.submit(executor, payload)
+            result = future.result(timeout=policy.timeout_seconds)
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             result = self._limit_output(result, policy.output_limit_bytes)
             self._audit(name, payload, policy, "succeeded", confirmation_id, elapsed_ms, result)
             return result
+        except TimeoutError:
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            self._audit(name, payload, policy, "failed", confirmation_id, elapsed_ms, {"error": "TOOL_TIMEOUT"})
+            return {"error": {"code": "TOOL_TIMEOUT", "message": f"tool {name} timed out after {policy.timeout_seconds}s", "tool_name": name}}
         except Exception as exc:  # noqa: BLE001
             elapsed_ms = int((time.perf_counter() - started) * 1000)
             self._audit(name, payload, policy, "failed", confirmation_id, elapsed_ms, {"error": type(exc).__name__})
@@ -529,7 +579,7 @@ class ClaudeToolRegistry:
         writes = {"upsert_theme_logic"}
         policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
             "get_kline", "get_market_snapshot", "get_sector_strength", "calc_technical_indicators",
-            "calc_profile_indicators", "evaluate_technical_rules",
+            "calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules", "explain_technical_rule",
             "detect_pattern_signal", "scan_stock_signals", "search_theme_logic", "retrieve_relevant_context",
             "get_theme_related_stocks", "evaluate_theme_trigger", "rank_themes_by_score", "get_market_regime",
             "route_strategy", "adjust_signal", "evaluate_portfolio_risk", "ask_research_model",

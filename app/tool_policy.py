@@ -76,21 +76,23 @@ class ProposalStore:
         if not token:
             raise ToolPolicyError("CONFIRMATION_REQUIRED", f"tool {tool_name} requires confirmation_token")
         diff_hash = self._hash_payload(payload)
-        for row in reversed(self._read_all()):
-            token_payload = row.get("token_payload") or {}
-            if row.get("confirmation_token") != token:
-                continue
-            if row.get("status") != "APPROVED":
-                continue
-            if token_payload.get("tool_name") != tool_name or token_payload.get("diff_hash") != diff_hash:
-                raise ToolPolicyError("CONFIRMATION_MISMATCH", "confirmation token is not bound to this tool payload")
-            if int(token_payload.get("expires_at") or 0) < int(time.time()):
-                raise ToolPolicyError("CONFIRMATION_EXPIRED", "confirmation token expired")
-            used = dict(row)
-            used["status"] = "USED"
-            self._append(used)
-            return str(row["proposal_id"])
-        raise ToolPolicyError("CONFIRMATION_INVALID", "confirmation token is invalid or already used")
+        row = next((item for item in reversed(self._read_all()) if item.get("confirmation_token") == token), None)
+        if row is None:
+            raise ToolPolicyError("CONFIRMATION_INVALID", "confirmation token is invalid or already used")
+        status = row.get("status")
+        if status in {"USED", "REVOKED"}:
+            raise ToolPolicyError("CONFIRMATION_INVALID", "confirmation token is invalid or already used")
+        if status != "APPROVED":
+            raise ToolPolicyError("CONFIRMATION_INVALID", "confirmation token is invalid or already used")
+        token_payload = row.get("token_payload") or {}
+        if token_payload.get("tool_name") != tool_name or token_payload.get("diff_hash") != diff_hash:
+            raise ToolPolicyError("CONFIRMATION_MISMATCH", "confirmation token is not bound to this tool payload")
+        if int(token_payload.get("expires_at") or 0) < int(time.time()):
+            raise ToolPolicyError("CONFIRMATION_EXPIRED", "confirmation token expired")
+        used = dict(row)
+        used["status"] = "USED"
+        self._append(used)
+        return str(row["proposal_id"])
 
     def get(self, proposal_id: str) -> dict[str, Any] | None:
         for row in reversed(self._read_all()):

@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import date
 
+import pandas as pd
+import yaml
+
 from engines.market.data_provider import get_market_data_provider
-from engines.technical.indicators import calc_all
-from engines.technical.pattern_detector import detect_patterns
+from engines.technical.profile_loader import load_technical_profile
+from engines.technical.registry import default_indicator_registry
+from engines.technical.rule_engine import RuleEngine
+from engines.technical.rule_validator import RulePackValidator
 from engines.theme.theme_score import rank_themes
 from financial_agent.models import ThemeScoreInput
+from financial_agent.utils import project_root
 from storage.repositories.theme_repository import ThemeRepository
 
 
@@ -20,26 +26,61 @@ class LocalFallbackOrchestrator:
         kline_guard = self._validate_kline_for_analysis(kline, as_of=as_of)
         if kline_guard is not None:
             return {"symbol": symbol, **kline_guard}
-        if len(kline.records) < 30:
-            return {"symbol": symbol, "error": "行情数据不足，至少需要 30 根 K 线"}
-        highs = [item.high for item in kline.records]
-        lows = [item.low for item in kline.records]
-        closes = [item.close for item in kline.records]
-        volumes = [item.volume for item in kline.records]
-        indicators = calc_all(highs, lows, closes, volumes)
-        signals = detect_patterns(closes, highs, lows, volumes, indicators, patterns=patterns, sector_strength=70, theme_strength=70)
+        profile = load_technical_profile("core_daily_v1")
+        if len(kline.records) < profile.minimum_bars:
+            return {
+                "symbol": symbol,
+                "error": {
+                    "code": "INSUFFICIENT_BARS",
+                    "required": profile.minimum_bars,
+                    "actual": len(kline.records),
+                },
+            }
+        registry = default_indicator_registry()
+        frame = pd.DataFrame([item.model_dump() for item in kline.records])
+        frame["return"] = frame["close"].pct_change()
+        validation = registry.validate_profile(profile, fields=set(frame.columns))
+        if not validation["valid"]:
+            return {"symbol": symbol, "error": {"code": "TECHNICAL_PROFILE_INVALID", "details": validation["errors"]}}
+        indicator_frame = pd.DataFrame(index=frame.index)
+        latest_indicators: dict[str, float | None] = {}
+        for spec in profile.indicators:
+            result = registry.get(spec.name).calculate(frame, spec.params)
+            if isinstance(result, pd.DataFrame):
+                for column in result.columns:
+                    key = f"{spec.alias}.{column}"
+                    indicator_frame[key] = result[column]
+                    value = result[column].iloc[-1]
+                    latest_indicators[key] = None if pd.isna(value) else round(float(value), profile.output_precision)
+            else:
+                indicator_frame[spec.alias] = result
+                value = result.iloc[-1]
+                latest_indicators[spec.alias] = None if pd.isna(value) else round(float(value), profile.output_precision)
+        rule_pack_name, rule_pack = self._load_rule_pack_for_profile(profile.name)
+        RulePackValidator(registry).validate(rule_pack_name, rule_pack, profile)
+        evaluations = []
+        engine = RuleEngine()
+        for rule in rule_pack.get("rules") or []:
+            if rule.get("enabled", True):
+                item = engine.evaluate_rule(rule, indicator_frame)
+                evaluations.append(item)
+        close = float(frame["close"].iloc[-1])
         return {
             "symbol": symbol,
             "date": str(kline.records[-1].date),
             "technical": {
-                "close": closes[-1],
-                "ma20": indicators["ma20"][-1],
-                "ltl": indicators["ltl"][-1],
-                "kdj_j": indicators["kdj_j"][-1],
-                "signals": [item.model_dump() for item in signals],
+                "close": close,
+                "profile": {"name": profile.name, "version": profile.version, "hash": registry.fingerprint(profile)},
+                "rule_pack": {"name": rule_pack_name, "version": str(rule_pack.get("version") or "1.0.0")},
+                "indicators": latest_indicators,
+                "rules": [
+                    item.__dict__ | {"status": item.status.value}
+                    for item in evaluations
+                ],
+                "score": round(sum(item.score_awarded for item in evaluations), 4),
             },
-            "summary": self._stock_summary(signals),
-            "risk": {"warnings": sorted({warning for item in signals for warning in item.risk})},
+            "summary": self._stock_summary(evaluations),
+            "risk": {"warnings": []},
             "orchestration": "local-fallback",
         }
 
@@ -100,9 +141,18 @@ class LocalFallbackOrchestrator:
         }
 
     @staticmethod
-    def _stock_summary(signals) -> str:
-        triggered = [item for item in signals if item.triggered]
+    @staticmethod
+    def _load_rule_pack_for_profile(profile_name: str) -> tuple[str, dict]:
+        cfg = yaml.safe_load((project_root() / "config" / "technical_rule_packs.yaml").read_text(encoding="utf-8")) or {}
+        for name, pack in (cfg.get("rule_packs") or {}).items():
+            if pack.get("profile") == profile_name and str(pack.get("status") or "").lower() == "approved":
+                return name, pack
+        raise ValueError(f"approved rule pack not found for profile: {profile_name}")
+
+    @staticmethod
+    def _stock_summary(evaluations) -> str:
+        triggered = [item for item in evaluations if item.status.value == "TRUE"]
         if not triggered:
-            return "当前未出现高置信 B1/B2/B3 或三金叉信号，宜等待更明确确认。"
-        names = "、".join(item.pattern for item in triggered)
-        return f"当前触发 {names}，仍需结合行业强度、成交额和证伪条件执行。"
+            return "当前规则引擎未触发高置信技术信号，宜等待更明确确认。"
+        names = "、".join(item.rule_id for item in triggered)
+        return f"当前触发 {names}，需结合成交额、市场状态和证伪条件执行。"

@@ -2,8 +2,7 @@
 
 本项目根据 `artitect/金融分析Agent架构详细设计文档.md` 及优化版 v1.3 实现一个可容器化部署的金融分析 Agent：
 
-- 技术指标引擎：MA、EMA、MACD、KDJ、STL、LTL、RPS。
-- 技术信号识别：B1、B2、B3、MACD 三金叉、RPS 强势池。
+- 技术分析引擎：基于版本化 Technical Profile、指标注册表和规则 DSL，支持趋势、动量、波动率、量价、MACD 等通用技术规则。
 - PostgreSQL 事实主库 + Qdrant 语义索引 + reranker 精排。
 - vector index worker：事实写入后异步切分、embedding、索引。
 - 市场状态识别、策略路由、信号升降级、组合构建。

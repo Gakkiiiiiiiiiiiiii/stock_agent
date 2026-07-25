@@ -7,6 +7,7 @@ from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
 from engines.retrieval.reranker_client import RerankerClient
+from engines.retrieval.sparse_retriever import SparseBM25Scorer
 
 
 class HybridRetriever:
@@ -16,11 +17,13 @@ class HybridRetriever:
         reranker: RerankerClient | None = None,
         embedder: LocalChineseNgramEmbedder | None = None,
         hydrator: PostgresHydrator | None = None,
+        sparse_scorer: SparseBM25Scorer | None = None,
     ) -> None:
         self.qdrant_client = qdrant_client or FinancialQdrantClient()
         self.reranker = reranker or RerankerClient()
         self.embedder = embedder or build_embedder()
         self.hydrator = hydrator or PostgresHydrator()
+        self.sparse_scorer = sparse_scorer or SparseBM25Scorer()
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
         plan = build_retrieval_plan(query=query, task_type=task_type, filters=filters, top_k=top_k)
@@ -39,7 +42,9 @@ class HybridRetriever:
                         "score": hit.score,
                     }
                 )
+        candidates = self.sparse_scorer.score_candidates(plan["query"], candidates)
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"])
+        reranked = self._merge_candidate_fields(candidates, reranked)
         reranked = self._apply_hybrid_score(reranked)
         hydrated = self.hydrator.hydrate(reranked)
         contexts = self._resolve_viewpoint_conflicts(hydrated)
@@ -121,6 +126,15 @@ class HybridRetriever:
             )
         items.sort(key=lambda entry: entry.get("final_score", 0.0), reverse=True)
         return items
+
+    @staticmethod
+    def _merge_candidate_fields(candidates: list[dict], reranked: list[dict]) -> list[dict]:
+        by_chunk = {str(item.get("chunk_id")): item for item in candidates}
+        merged = []
+        for item in reranked:
+            base = by_chunk.get(str(item.get("chunk_id")), {})
+            merged.append({**base, **item})
+        return merged
 
     @staticmethod
     def _status_score(status: str | None) -> float:

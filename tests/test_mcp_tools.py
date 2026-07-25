@@ -24,6 +24,8 @@ def test_search_theme_alias():
 
 
 def test_detect_pattern_signal_tool(monkeypatch):
+    monkeypatch.setenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "true")
+
     class _SampleProvider:
         def get_kline(self, symbol, **kwargs):
             return KlineResponse(symbol=symbol, records=sample_kline(symbol, days=140), source="sample")
@@ -32,3 +34,9 @@ def test_detect_pattern_signal_tool(monkeypatch):
     result = detect_pattern_signal("SAMPLE", patterns=["B1"])
     assert result["symbol"] == "SAMPLE"
     assert result["signals"][0]["pattern"] == "B1"
+
+
+def test_legacy_pattern_signal_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", raising=False)
+    result = detect_pattern_signal("SAMPLE", patterns=["B1"])
+    assert result["error"]["code"] == "LEGACY_TECHNICAL_DISABLED"
