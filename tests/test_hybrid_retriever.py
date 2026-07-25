@@ -200,6 +200,15 @@ def test_reranker_candidate_fields_preserved():
     assert merged[0]["rerank_score"] == 0.82
 
 
+def test_source_priority_sorts_by_final_score_before_rerank_score():
+    contexts = [
+        {"title": "low final", "rerank_score": 0.99, "final_score": 0.2, "source_type": "theme_logic", "source_timestamp": 20},
+        {"title": "high final", "rerank_score": 0.2, "final_score": 0.8, "source_type": "theme_logic", "source_timestamp": 10},
+    ]
+    ordered = HybridRetriever._apply_source_priority(contexts, [])
+    assert ordered[0]["title"] == "high final"
+
+
 def test_sparse_score_is_real():
     retriever = HybridRetriever(
         qdrant_client=FakeQdrant(),

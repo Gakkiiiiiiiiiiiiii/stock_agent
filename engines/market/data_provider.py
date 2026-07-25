@@ -154,6 +154,9 @@ class QmtMarketDataProvider(MarketDataProvider):
         warning = None
         if not grouped:
             warning = "QMT 未返回指数历史数据，市场快照仅保留空结构。"
+        quality_flags = list(breadth.get("quality_flags") or [])
+        quote_coverage = breadth.get("quote_coverage")
+        quality_score = 0.0 if quote_coverage is not None and quote_coverage < 0.9 else None
         return {
             "market_regime": market_regime,
             "risk_appetite": risk_appetite,
@@ -165,6 +168,11 @@ class QmtMarketDataProvider(MarketDataProvider):
             "limit_up_count": breadth.get("limit_up_count"),
             "limit_down_count": breadth.get("limit_down_count"),
             "top10_amount_share": breadth.get("top10_amount_share"),
+            "requested_quote_count": breadth.get("requested_quote_count"),
+            "received_quote_count": breadth.get("received_quote_count"),
+            "quote_coverage": quote_coverage,
+            "quality_flags": quality_flags,
+            "quality_score": quality_score,
             "warning": warning,
             "source": "qmt",
             "indices": {
@@ -212,14 +220,22 @@ class QmtMarketDataProvider(MarketDataProvider):
                 limit_down_count += 1
         total_amount = sum(amounts)
         top10_share = sum(sorted(amounts, reverse=True)[:10]) / total_amount if total_amount > 0 else None
+        requested_quote_count = len(symbols)
+        received_quote_count = len(quotes)
+        quote_coverage = received_quote_count / requested_quote_count if requested_quote_count else None
+        quality_flags = ["MARKET_QUOTE_COVERAGE_LOW"] if quote_coverage is not None and quote_coverage < 0.9 else []
         return {
             "universe_size": len(symbols),
+            "requested_quote_count": requested_quote_count,
+            "received_quote_count": received_quote_count,
+            "quote_coverage": round(quote_coverage, 6) if quote_coverage is not None else None,
             "up_count": up_count,
             "down_count": down_count,
             "limit_up_count": limit_up_count,
             "limit_down_count": limit_down_count,
             "turnover_amount": round(total_amount, 2) if total_amount else None,
             "top10_amount_share": round(top10_share, 6) if top10_share is not None else None,
+            "quality_flags": quality_flags,
         }
 
     def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:

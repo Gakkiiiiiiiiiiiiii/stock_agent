@@ -47,6 +47,10 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
                     "volatility_20d_pct": 1.2,
                     "drawdown_20d_pct": -1.0,
                 },
+                "high_position_loss_ratio": 0.1,
+                "high_position_limit_down_ratio": 0.02,
+                "high_position_breakdown_ratio": 0.03,
+                "retreat_days": 1,
             }
 
         def get_sector_strength(self, as_of=None):
@@ -59,6 +63,63 @@ def test_market_feature_builder_enables_regime_classification(monkeypatch):
     result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
     assert result["missing_fields"] == []
     assert result["regime"]["primary_regime"] != "UNKNOWN"
+
+
+def test_estimated_high_position_features_do_not_drive_regime(monkeypatch):
+    class Provider:
+        def get_market_snapshot(self, as_of=None, force_refresh=False):
+            return {
+                "source": "fake",
+                "up_count": 3200,
+                "down_count": 900,
+                "limit_up_count": 65,
+                "limit_down_count": 2,
+                "indices": {
+                    "return_5d_pct": 2.0,
+                    "return_20d_pct": 5.0,
+                    "volatility_20d_pct": 1.2,
+                    "drawdown_20d_pct": -1.0,
+                },
+            }
+
+        def get_sector_strength(self, as_of=None):
+            return [{"sector": "TMT", "strength_score": 86, "change_pct": 3.2}]
+
+    monkeypatch.setattr("engines.market.feature_builder.get_market_data_provider", lambda: Provider())
+    built = MarketFeatureBuilder().build()
+    assert "HIGH_POSITION_FEATURES_ESTIMATED" in built["quality_flags"]
+    assert built["high_position_loss_ratio"] is None
+    assert built["estimated_high_position_loss_ratio"] is not None
+    result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
+    assert result["regime"]["primary_regime"] == "UNKNOWN"
+    assert "high_position_loss_ratio" in result["missing_fields"]
+
+
+def test_real_zero_high_position_values_are_preserved(monkeypatch):
+    class Provider:
+        def get_market_snapshot(self, as_of=None, force_refresh=False):
+            return {
+                "source": "fake",
+                "up_count": 10,
+                "down_count": 10,
+                "limit_up_count": 1,
+                "limit_down_count": 1,
+                "indices": {"return_5d_pct": 0.5, "return_20d_pct": 1.0, "volatility_20d_pct": 1.0, "drawdown_20d_pct": -1.0},
+                "high_position_loss_ratio": 0.0,
+                "high_position_limit_down_ratio": 0.0,
+                "high_position_breakdown_ratio": 0.0,
+                "retreat_days": 0,
+            }
+
+        def get_sector_strength(self, as_of=None):
+            return [{"sector": "TMT", "strength_score": 50, "change_pct": 0.0}]
+
+    monkeypatch.setattr("engines.market.feature_builder.get_market_data_provider", lambda: Provider())
+    built = MarketFeatureBuilder().build()
+    assert built["high_position_loss_ratio"] == 0.0
+    assert built["high_position_limit_down_ratio"] == 0.0
+    assert built["high_position_breakdown_ratio"] == 0.0
+    assert built["retreat_days"] == 0
 
 
 def test_pct_to_decimal_always_converts_percent_fields():
@@ -84,3 +145,26 @@ def test_market_feature_builder_marks_historical_unavailable(monkeypatch):
     result = get_market_regime(snapshot=built, top_theme_strength=built["top_theme_strength"], index_drawdown_20d=built["index_drawdown_20d"])
     assert result["regime"]["primary_regime"] == "UNKNOWN"
     assert "HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE" in result["snapshot"]["warning"]
+
+
+def test_low_quote_coverage_blocks_regime():
+    snapshot = {
+        "as_of": "2026-07-25T00:00:00+00:00",
+        "up_count": 100,
+        "down_count": 50,
+        "limit_up_count": 3,
+        "limit_down_count": 1,
+        "index_return_5d": 0.02,
+        "index_return_20d": 0.05,
+        "index_volatility_20d": 0.01,
+        "high_position_loss_ratio": 0.1,
+        "high_position_limit_down_ratio": 0.02,
+        "high_position_breakdown_ratio": 0.03,
+        "retreat_days": 1,
+        "quality_score": 0.0,
+        "quote_coverage": 0.5,
+        "quality_flags": ["MARKET_QUOTE_COVERAGE_LOW"],
+    }
+    result = get_market_regime(snapshot=snapshot, top_theme_strength=80, index_drawdown_20d=-0.01)
+    assert result["regime"]["primary_regime"] == "UNKNOWN"
+    assert "MARKET_QUOTE_COVERAGE_LOW" in result["missing_fields"]

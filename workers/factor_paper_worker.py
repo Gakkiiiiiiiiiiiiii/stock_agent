@@ -5,7 +5,7 @@ signals_T-1.json 和 orders_T.json；T 日 run_daily() 只读取已存在的 ord
 按 portfolio_backtest 的执行规则（涨跌停/停牌/T+1/成本）对昨日持仓→今日记账，
 维护 portfolio_state.json 并追加 equity.jsonl。
 
-同日幂等：orders 文件已存在则跳过组池；当日已记账则跳过记账；--force 可重跑组池。
+同日幂等：正式模式下 orders 文件冻结后不可覆盖；当日已记账则跳过记账。
 行情不可用（如容器内无 QMT 桥接）时优雅告警并返回退出码 0。
 
 CLI：python -m workers.factor_paper_worker [--force] [--state-dir PATH]
@@ -27,6 +27,7 @@ from engines.factor.alpha import compose_alpha_scores
 from engines.factor.data import load_factor_panel, load_universe
 from engines.factor.library import load_library, paper_trading_factors
 from engines.factor.miner import FactorMiner
+from engines.market.trading_calendar import next_trading_day
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,26 @@ def _load_json(path: Path, default):
 def _write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _parse_datetime(value: str) -> datetime:
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+
+
+def _validate_frozen_order(order_payload: dict, execution_date: str) -> str | None:
+    signal_date = order_payload.get("signal_date")
+    generated_at = order_payload.get("generated_at")
+    must_exist_before = order_payload.get("must_exist_before")
+    if order_payload.get("execution_date") != execution_date:
+        return "订单文件执行日与当前执行日不一致，跳过执行"
+    if not signal_date or not generated_at or not must_exist_before:
+        return "订单文件缺少冻结元数据，跳过执行"
+    expected_execution_date = next_trading_day(datetime.fromisoformat(signal_date).date()).isoformat()
+    if execution_date != expected_execution_date:
+        return f"订单执行日不是信号日的下一交易日：expected={expected_execution_date}"
+    if _parse_datetime(generated_at) >= _parse_datetime(must_exist_before):
+        return "订单生成时间晚于开盘前冻结截止时间，跳过执行"
+    return None
 
 
 def _valid_price(value: float) -> bool:
@@ -110,6 +131,7 @@ def generate_orders(
     panel_loader=None,
     miner_factory=None,
     force: bool = False,
+    allow_historical_regeneration: bool = False,
     remine_days: int | None = None,
 ) -> dict:
     """T-1 收盘后生成并冻结 T 日开盘订单。"""
@@ -127,8 +149,17 @@ def generate_orders(
     signal_date = dates[-1]
     signals_path = state / f"signals_{signal_date}.json"
     orders_path = state / f"orders_{execution_date}.json"
-    if orders_path.exists() and not force:
+    expected_execution_date = next_trading_day(datetime.fromisoformat(signal_date).date()).isoformat()
+    if execution_date != expected_execution_date:
+        return {
+            "execution_date": execution_date,
+            "signal_date": signal_date,
+            "warning": f"执行日必须是信号日的下一交易日：expected={expected_execution_date}",
+        }
+    if orders_path.exists() and not allow_historical_regeneration:
         return {"execution_date": execution_date, "signal_date": signal_date, "skipped": True, "orders_file": str(orders_path)}
+    if orders_path.exists() and allow_historical_regeneration:
+        logger.warning("historical regeneration enabled for frozen order file: %s", orders_path)
     warnings = [warning] if warning else []
     remine_warning = _maybe_remine(panel, symbols, dates, state, remine_days, miner_factory)
     if remine_warning:
@@ -146,14 +177,22 @@ def generate_orders(
         for rank, i in enumerate(order[:top_k], start=1)
     ]
     generated_at = _now_iso()
+    must_exist_before = f"{execution_date}T09:30:00+08:00"
+    if _parse_datetime(generated_at) >= _parse_datetime(must_exist_before) and not allow_historical_regeneration:
+        return {
+            "execution_date": execution_date,
+            "signal_date": signal_date,
+            "warning": f"订单生成时间已晚于开盘前冻结截止时间：{must_exist_before}",
+        }
     factor_ids = [str(item.get("id")) for item in factors]
     factor_versions = {str(item.get("id")): item.get("version", item.get("updated_at", item.get("discovered_at"))) for item in factors}
     order_payload = {
         "signal_date": signal_date,
         "execution_date": execution_date,
         "generated_at": generated_at,
-        "must_exist_before": f"{execution_date}T09:30:00+08:00",
+        "must_exist_before": must_exist_before,
         "execution_model": "next_open",
+        "mode": "historical_replay" if allow_historical_regeneration else "forward_paper",
         "factor_count": factor_count,
         "factor_ids": factor_ids,
         "factor_versions": factor_versions,
@@ -375,6 +414,7 @@ def run_daily(
                 panel_loader=panel_loader,
                 miner_factory=miner_factory,
                 force=force,
+                allow_historical_regeneration=False,
                 remine_days=remine_days,
             )
         return {
@@ -386,6 +426,15 @@ def run_daily(
             "generated_next_orders": generated,
         }
     order_payload = _load_json(orders_path, {})
+    validation_error = _validate_frozen_order(order_payload, execution_date)
+    if validation_error:
+        return {
+            "date": execution_date,
+            "execution_date": execution_date,
+            "skipped": True,
+            "warning": validation_error,
+            "orders_file": str(orders_path),
+        }
     signal_date = order_payload.get("signal_date")
     picks = order_payload.get("picks") or []
     factor_count = int(order_payload.get("factor_count") or 0)
@@ -400,6 +449,7 @@ def run_daily(
             panel_loader=panel_loader,
             miner_factory=miner_factory,
             force=force,
+            allow_historical_regeneration=False,
             remine_days=remine_days,
         )
     return {
@@ -418,7 +468,7 @@ def run_daily(
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="因子前向模拟盘：每日组池 + 记账")
-    parser.add_argument("--force", action="store_true", help="当日已生成持仓时强制重跑组池")
+    parser.add_argument("--force", action="store_true", help="当日已记账时仍尝试执行；不会覆盖已冻结订单")
     parser.add_argument("--state-dir", default=None, help="状态目录（默认 storage/runtime/factor_paper）")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

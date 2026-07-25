@@ -1,7 +1,8 @@
 from fastapi.testclient import TestClient
+import time
 
 from app.api import app
-from workers.job_worker import process_one_job
+from workers.job_worker import heartbeat_loop, process_one_job
 
 client = TestClient(app)
 
@@ -45,3 +46,15 @@ def test_factor_mine_task_failure(monkeypatch):
 def test_factor_mine_unknown_task():
     response = client.get("/api/v1/admin/factors/mine/deadbeef")
     assert response.status_code == 404
+
+
+def test_heartbeat_loop_updates_while_job_runs():
+    calls = []
+
+    class Repo:
+        def heartbeat(self, task_id, worker_id, progress=None):
+            calls.append((task_id, worker_id, progress))
+
+    with heartbeat_loop(Repo(), "task-1", "worker-1", interval=0.01):
+        time.sleep(0.035)
+    assert len(calls) >= 2

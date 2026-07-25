@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import json
 import socket
+import threading
 import time
+from contextlib import contextmanager
 from typing import Any
 
 from storage.bootstrap import create_all
@@ -20,7 +22,8 @@ def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> 
             from mcp_servers.factor_mining_server import mine_factors
 
             payload = task.get("payload") or {}
-            result = mine_factors(**payload)
+            with heartbeat_loop(repo, task["id"], worker):
+                result = mine_factors(**payload)
             repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), error=None)
             return True
         raise ValueError(f"unsupported task_type: {task['task_type']}")
@@ -34,6 +37,24 @@ def main() -> None:
     while True:
         if not process_one_job():
             time.sleep(2)
+
+
+@contextmanager
+def heartbeat_loop(repo: JobTaskRepository, task_id: str, worker_id: str, interval: int = 30):
+    stop = threading.Event()
+
+    def beat() -> None:
+        while not stop.wait(interval):
+            repo.heartbeat(task_id, worker_id)
+
+    thread = threading.Thread(target=beat, name=f"heartbeat-{task_id}", daemon=True)
+    repo.heartbeat(task_id, worker_id)
+    thread.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        thread.join(timeout=interval)
 
 
 if __name__ == "__main__":

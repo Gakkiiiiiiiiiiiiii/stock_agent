@@ -20,15 +20,25 @@ def run_purged_walkforward(factor_panel: np.ndarray, closes: np.ndarray, horizon
             metrics = evaluate_factor(test_factor, closes[:, :available_end], horizon=horizon, eval_window=available_end - start)
         windows.append({"train": window.train, "validation": window.validation, "test": window.test, "metrics": metrics, "passed": bool(metrics.get("passed"))})
     rank_ics = [float(item["metrics"].get("rank_ic") or 0.0) for item in windows]
-    excess = [float(item["metrics"].get("topk_excess_return", item["metrics"].get("topk_annual_return") or 0.0)) for item in windows]
+    excess = [float(item["metrics"].get("topk_excess_annual_return", item["metrics"].get("topk_excess_return") or 0.0)) for item in windows]
     positive = [value > 0 for value in rank_ics]
-    passed = bool(windows) and (sum(positive) / len(positive)) >= 0.6 and min(rank_ics) > -0.02
+    window_pass_ratio = sum(1 for item in windows if item.get("passed")) / len(windows) if windows else 0.0
+    positive_rank_ic_ratio = sum(positive) / len(positive) if positive else 0.0
+    mean_excess = float(np.mean(excess)) if excess else 0.0
+    passed = (
+        bool(windows)
+        and window_pass_ratio >= 0.6
+        and positive_rank_ic_ratio >= 0.6
+        and mean_excess > 0
+        and min(rank_ics) > -0.02
+    )
     return {
         "method": "purged_walkforward",
         "windows": windows,
         "mean_rank_ic": round(float(np.mean(rank_ics)), 6) if rank_ics else 0.0,
         "min_rank_ic": round(float(np.min(rank_ics)), 6) if rank_ics else 0.0,
-        "positive_window_ratio": round(sum(positive) / len(positive), 6) if positive else 0.0,
-        "oos_excess_return": round(float(np.mean(excess)), 6) if excess else 0.0,
+        "window_pass_ratio": round(window_pass_ratio, 6),
+        "positive_window_ratio": round(positive_rank_ic_ratio, 6),
+        "oos_excess_return": round(mean_excess, 6),
         "passed": passed,
     }

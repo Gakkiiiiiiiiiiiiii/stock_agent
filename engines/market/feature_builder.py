@@ -27,6 +27,10 @@ class MarketFeatureBuilder:
             snapshot.get(name) is None
             for name in ("high_position_loss_ratio", "high_position_limit_down_ratio", "high_position_breakdown_ratio", "retreat_days")
         )
+        estimated_loss_ratio = _ratio(down_count, (up_count or 0) + (down_count or 0))
+        estimated_limit_down_ratio = _ratio(limit_down_count, (snapshot.get("limit_up_count") or 0) + (limit_down_count or 0))
+        estimated_breakdown_ratio = max(0.0, -(index_return_5d or 0.0))
+        estimated_retreat_days = _retreat_days(index_drawdown_20d)
         quality_flags = list(snapshot.get("quality_flags") or [])
         if estimated_high_position:
             quality_flags.append("HIGH_POSITION_FEATURES_ESTIMATED")
@@ -35,6 +39,9 @@ class MarketFeatureBuilder:
         feature = {
             "as_of": as_of or datetime.now(timezone.utc),
             "universe_size": snapshot.get("universe_size"),
+            "requested_quote_count": snapshot.get("requested_quote_count"),
+            "received_quote_count": snapshot.get("received_quote_count"),
+            "quote_coverage": snapshot.get("quote_coverage"),
             "up_count": up_count,
             "down_count": down_count,
             "limit_up_count": snapshot.get("limit_up_count"),
@@ -50,10 +57,14 @@ class MarketFeatureBuilder:
             "top10_amount_share": snapshot.get("top10_amount_share"),
             "sector_dispersion": _sector_dispersion(sectors),
             "sector_rotation_speed": snapshot.get("sector_rotation_speed"),
-            "high_position_loss_ratio": snapshot.get("high_position_loss_ratio") or _ratio(down_count, (up_count or 0) + (down_count or 0)),
-            "high_position_limit_down_ratio": snapshot.get("high_position_limit_down_ratio") or _ratio(limit_down_count, (snapshot.get("limit_up_count") or 0) + (limit_down_count or 0)),
-            "high_position_breakdown_ratio": snapshot.get("high_position_breakdown_ratio") or max(0.0, -(index_return_5d or 0.0)),
-            "retreat_days": snapshot.get("retreat_days") or _retreat_days(index_drawdown_20d),
+            "high_position_loss_ratio": _value_or_none(snapshot.get("high_position_loss_ratio")),
+            "high_position_limit_down_ratio": _value_or_none(snapshot.get("high_position_limit_down_ratio")),
+            "high_position_breakdown_ratio": _value_or_none(snapshot.get("high_position_breakdown_ratio")),
+            "retreat_days": snapshot.get("retreat_days") if snapshot.get("retreat_days") is not None else None,
+            "estimated_high_position_loss_ratio": estimated_loss_ratio,
+            "estimated_high_position_limit_down_ratio": estimated_limit_down_ratio,
+            "estimated_high_position_breakdown_ratio": estimated_breakdown_ratio,
+            "estimated_retreat_days": estimated_retreat_days,
             "quality_score": snapshot.get("quality_score") if snapshot.get("quality_score") is not None else _quality_score(snapshot),
             "quality_flags": sorted(set(quality_flags)),
             "top_theme_strength": top_theme_strength,
@@ -75,6 +86,10 @@ def pct_to_decimal(value) -> float | None:
 
 
 def _decimal_or_none(value) -> float | None:
+    return None if value is None else float(value)
+
+
+def _value_or_none(value) -> float | None:
     return None if value is None else float(value)
 
 

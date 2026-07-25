@@ -1,5 +1,6 @@
 """前向模拟盘 worker 测试：幂等、落库结构、记账推进、重挖开关。"""
 import json
+from datetime import timedelta
 
 import numpy as np
 import pytest
@@ -32,6 +33,7 @@ SYMBOLS = [f"60000{i}.SH" for i in range(8)]
 def env(tmp_path, monkeypatch):
     """隔离状态目录 + 假行情 + 单因子库。"""
     monkeypatch.setattr(fpw, "load_universe", lambda: list(SYMBOLS))
+    monkeypatch.setattr(fpw, "next_trading_day", lambda day: day + timedelta(days=1))
     lib = tmp_path / "lib.yaml"
     lib.write_text(
         "factors:\n"
@@ -153,7 +155,7 @@ def test_t_day_signal_not_used_at_t_open(env):
     assert "600000.SH" not in [item["symbol"] for item in order_payload["picks"]]
 
 
-def test_remine_warning_does_not_block(env):
+def test_generate_orders_rejects_non_next_trading_day(env):
     class WarningMiner:
         def __init__(self, model_client=None):
             pass
@@ -166,6 +168,24 @@ def test_remine_warning_does_not_block(env):
         execution_date="2026-07-30",
         state_dir=env["state"], library_path=env["lib"],
         panel_loader=env["make_loader"](30), remine_days=0,
+        miner_factory=WarningMiner,
+    )
+    assert result["warning"] and "下一交易日" in result["warning"]
+
+
+def test_remine_warning_does_not_block(env):
+    class WarningMiner:
+        def __init__(self, model_client=None):
+            pass
+
+        def mine(self, panel, symbols, **kwargs):
+            return {"accepted": [], "rejected": [], "warning": "挖掘模型不可用",
+                    "stopped_early": False, "stop_reason": None, "evaluated": 0}
+
+    result = fpw.generate_orders(
+        execution_date="2026-07-30",
+        state_dir=env["state"], library_path=env["lib"],
+        panel_loader=env["make_loader"](29), remine_days=0,
         miner_factory=WarningMiner,
     )
     assert result["skipped"] is False  # 组池照常完成
@@ -188,12 +208,12 @@ def test_remine_success_writes_state(env):
     fpw.generate_orders(
         execution_date="2026-07-30",
         state_dir=env["state"], library_path=env["lib"],
-        panel_loader=env["make_loader"](30), remine_days=5,
+        panel_loader=env["make_loader"](29), remine_days=5,
         miner_factory=OkMiner,
     )
     assert calls
     remine = json.loads((env["state"] / "remine_state.json").read_text(encoding="utf-8"))
-    assert remine["last_remine_date"] == "2026-07-30"
+    assert remine["last_remine_date"] == "2026-07-29"
     # 次日（距上次挖掘仅 1 个交易日 < 5）不再触发
     fpw.generate_orders(execution_date="2026-07-31", state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](31), remine_days=5,
@@ -215,6 +235,24 @@ def test_execution_skips_when_open_orders_missing(env):
     result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
     assert result["skipped"] is True
     assert "订单不存在" in result["warning"]
+
+
+def test_frozen_order_cannot_be_overwritten_with_force(env):
+    first = fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
+    second = fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), force=True, remine_days=9999)
+    assert first["skipped"] is False
+    assert second["skipped"] is True
+
+
+def test_invalid_frozen_order_metadata_blocks_execution(env):
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](29), remine_days=9999)
+    path = env["state"] / "orders_2026-07-30.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["generated_at"] = "2026-07-30T09:31:00+08:00"
+    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=env["make_loader"](30), remine_days=9999)
+    assert result["skipped"] is True
+    assert "冻结截止" in result["warning"]
 
 
 def test_cli_exit_code_zero(env, monkeypatch, capsys):

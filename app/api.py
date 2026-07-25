@@ -9,7 +9,7 @@ from datetime import datetime
 from queue import Queue
 from threading import Thread
 
-import requests
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Response
 from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
 from pydantic import BaseModel
@@ -24,9 +24,9 @@ from engines.market.qmt_bridge_client import QmtBridgeClient
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
 from financial_agent.models import Position, ThemeLogic, TradeReviewInput
 from mcp_servers.knowledge_server import upsert_theme_logic as upsert_theme_logic_mcp
+from sqlalchemy import text
 from storage.db import session_scope
 from storage.repositories.job_repository import JobTaskRepository
-from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +161,8 @@ def health_live() -> dict:
 @app.get("/health/ready")
 def health_ready(response: Response) -> dict:
     checks = _ready_checks()
-    ready = all(value == "ok" for value in checks.values())
+    required = _required_ready_checks()
+    ready = all(checks.get(name) == "ok" for name in required)
     if not ready:
         response.status_code = 503
     return {"status": "ok" if ready else "degraded", "checks": checks}
@@ -183,23 +184,36 @@ def _ready_checks() -> dict[str, str]:
     return checks
 
 
+def _required_ready_checks() -> set[str]:
+    configured = os.getenv("READY_REQUIRED_CHECKS")
+    if configured is None:
+        required = {"api", "postgres", "qdrant", "embedding", "reranker"}
+        if os.getenv("REDIS_URL"):
+            required.add("redis")
+        return required
+    raw = configured
+    return {item.strip() for item in raw.split(",") if item.strip()}
+
+
 def _check_postgres() -> str:
     try:
         with session_scope() as session:
             session.execute(text("SELECT 1"))
         return "ok"
     except Exception as exc:  # noqa: BLE001
-        return f"fail: {exc}"
+        logger.warning("ready check failed: postgres: %s", exc)
+        return "failed"
 
 
 def _check_http(url: str, api_key: str | None = None) -> str:
     headers = {"api-key": api_key} if api_key else None
     try:
-        response = requests.get(url, headers=headers, timeout=3)
+        response = httpx.get(url, headers=headers, timeout=3)
         response.raise_for_status()
         return "ok"
     except Exception as exc:  # noqa: BLE001
-        return f"fail: {exc}"
+        logger.warning("ready check failed: http endpoint %s: %s", _redact_url(url), exc)
+        return "failed"
 
 
 def _check_embedding() -> str:
@@ -215,9 +229,10 @@ def _check_redis(redis_url: str) -> str:
         import redis
 
         client = redis.Redis.from_url(redis_url, socket_connect_timeout=3, socket_timeout=3)
-        return "ok" if client.ping() else "fail: ping returned false"
+        return "ok" if client.ping() else "failed"
     except Exception as exc:  # noqa: BLE001
-        return f"fail: {exc}"
+        logger.warning("ready check failed: redis: %s", exc)
+        return "failed"
 
 
 def _check_qmt() -> str:
@@ -225,7 +240,16 @@ def _check_qmt() -> str:
         QmtBridgeClient().healthcheck()
         return "ok"
     except Exception as exc:  # noqa: BLE001
-        return f"fail: {exc}"
+        logger.warning("ready check failed: qmt: %s", exc)
+        return "failed"
+
+
+def _redact_url(url: str) -> str:
+    try:
+        parsed = httpx.URL(url)
+        return str(parsed.copy_with(password="***") if parsed.password else parsed)
+    except Exception:
+        return "<invalid-url>"
 
 
 @app.get("/admin")

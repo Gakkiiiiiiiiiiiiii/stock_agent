@@ -108,7 +108,8 @@ class HybridRetriever:
         priority_map = {source_type: len(preferred_source_types) - index for index, source_type in enumerate(preferred_source_types)}
         contexts.sort(
             key=lambda item: (
-                float(item.get("rerank_score") or 0.0) + cls._source_priority_bonus(item.get("source_type"), priority_map),
+                float(item.get("final_score") if item.get("final_score") is not None else item.get("rerank_score") or 0.0)
+                + cls._source_priority_bonus(item.get("source_type"), priority_map),
                 int(item.get("source_timestamp") or 0),
             ),
             reverse=True,

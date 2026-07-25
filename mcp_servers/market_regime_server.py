@@ -20,6 +20,9 @@ from engines.regime.regime_state_machine import resolve_regime_transition
 class MarketFeatureSnapshot(BaseModel):
     as_of: datetime
     universe_size: int | None = None
+    requested_quote_count: int | None = None
+    received_quote_count: int | None = None
+    quote_coverage: float | None = None
     up_count: int | None = None
     down_count: int | None = None
     limit_up_count: int | None = None
@@ -138,6 +141,10 @@ def get_market_regime(
         quality_blockers.append("MARKET_FEATURE_WARNING")
     if snapshot_obj.quality_score < 0.8:
         quality_blockers.append("MARKET_FEATURE_QUALITY_LOW")
+    if snapshot_obj.quote_coverage is not None and snapshot_obj.quote_coverage < 0.9:
+        quality_blockers.append("MARKET_QUOTE_COVERAGE_LOW")
+    if "MARKET_QUOTE_COVERAGE_LOW" in snapshot_obj.quality_flags:
+        quality_blockers.append("MARKET_QUOTE_COVERAGE_LOW")
     if missing_fields or top_theme_strength is None or index_drawdown_20d is None or retreat_missing or quality_blockers:
         extra_missing = []
         if top_theme_strength is None:

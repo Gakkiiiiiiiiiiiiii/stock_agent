@@ -128,7 +128,7 @@ class JobTaskRepository:
         self._ensure_schema()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         with session_scope() as session:
-            session.execute(
+            result = session.execute(
                 text(
                     """
                     UPDATE job_task
@@ -138,6 +138,8 @@ class JobTaskRepository:
                 ),
                 {"id": task_id, "worker_id": worker_id, "now": now},
             )
+            if not result.rowcount:
+                return None
         task = self.get(task_id)
         return task if task and task.get("status") == "RUNNING" else None
 

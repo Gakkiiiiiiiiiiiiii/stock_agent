@@ -35,7 +35,6 @@ class PostgresHydrator:
                     "postgres_id": payload.get("postgres_id"),
                     "title": payload.get("title"),
                     "status": payload.get("status"),
-                    "rerank_score": item["rerank_score"],
                     "source_type": payload.get("source_type"),
                     "related_strategy": payload.get("related_strategy"),
                     "related_theme": payload.get("related_theme"),
@@ -44,6 +43,11 @@ class PostgresHydrator:
                     "source_timestamp": payload.get("source_timestamp"),
                     "content": record["content"] if record else item["text"],
                     "record": record,
+                    "dense_score": item.get("dense_score"),
+                    "bm25_score": item.get("bm25_score"),
+                    "sparse_recall_score": item.get("sparse_recall_score"),
+                    "rerank_score": item.get("rerank_score"),
+                    "final_score": item.get("final_score"),
                 }
             )
         return records

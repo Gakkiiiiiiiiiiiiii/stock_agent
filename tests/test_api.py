@@ -14,10 +14,19 @@ def test_health():
 
 
 def test_ready_health_reports_dependency_failure(monkeypatch):
-    monkeypatch.setattr(api_module, "_ready_checks", lambda: {"api": "ok", "qdrant": "fail: unavailable"})
+    monkeypatch.setattr(api_module, "_ready_checks", lambda: {"api": "ok", "qdrant": "failed"})
     response = client.get("/health/ready")
     assert response.status_code == 503
     assert response.json()["status"] == "degraded"
+    assert response.json()["checks"]["qdrant"] == "failed"
+
+
+def test_ready_health_allows_optional_skipped(monkeypatch):
+    monkeypatch.setenv("READY_REQUIRED_CHECKS", "api")
+    monkeypatch.setattr(api_module, "_ready_checks", lambda: {"api": "ok", "redis": "skipped"})
+    response = client.get("/health/ready")
+    assert response.status_code == 200
+    assert response.json()["checks"]["redis"] == "skipped"
 
 
 def test_stock_analyze_api(monkeypatch):
