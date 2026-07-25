@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date
+import math
+from datetime import date, timedelta
 
 import pandas as pd
 import yaml
@@ -22,11 +23,14 @@ class LocalFallbackOrchestrator:
         self.themes = ThemeRepository()
 
     def analyze_stock(self, symbol: str, as_of: date | None = None, patterns: list[str] | None = None) -> dict:
-        kline = self.market.get_kline(symbol, end_date=as_of)
+        profile = load_technical_profile("core_daily_v1")
+        end_date = as_of or date.today()
+        calendar_days = math.ceil(profile.minimum_bars * 1.6)
+        start_date = end_date - timedelta(days=max(400, calendar_days))
+        kline = self.market.get_kline(symbol, start_date=start_date, end_date=end_date)
         kline_guard = self._validate_kline_for_analysis(kline, as_of=as_of)
         if kline_guard is not None:
             return {"symbol": symbol, **kline_guard}
-        profile = load_technical_profile("core_daily_v1")
         if len(kline.records) < profile.minimum_bars:
             return {
                 "symbol": symbol,

@@ -112,6 +112,8 @@ class QmtMarketDataProvider(MarketDataProvider):
         intraday_changes: list[float] = []
         return_5d: list[float] = []
         return_20d: list[float] = []
+        volatility_20d: list[float] = []
+        drawdown_20d: list[float] = []
         for symbol in index_symbols:
             quote = quotes.get(symbol) or {}
             last_price = safe_float(quote.get("last_price"))
@@ -125,9 +127,18 @@ class QmtMarketDataProvider(MarketDataProvider):
                 return_5d.append(pct_5d)
             if pct_20d is not None:
                 return_20d.append(pct_20d)
+            vol = calculate_volatility_pct(records, 20)
+            dd = calculate_drawdown_pct(records, 20)
+            if vol is not None:
+                volatility_20d.append(vol)
+            if dd is not None:
+                drawdown_20d.append(dd)
         intraday = average(intraday_changes)
         avg_5d = average(return_5d)
         avg_20d = average(return_20d)
+        avg_vol_20d = average(volatility_20d)
+        avg_dd_20d = average(drawdown_20d)
+        breadth = self._build_market_breadth()
         market_regime, risk_appetite = classify_market_snapshot(intraday=intraday, avg_5d=avg_5d, avg_20d=avg_20d)
         warning = None
         if not grouped:
@@ -135,18 +146,68 @@ class QmtMarketDataProvider(MarketDataProvider):
         return {
             "market_regime": market_regime,
             "risk_appetite": risk_appetite,
-            "turnover": None,
-            "up_count": None,
-            "down_count": None,
-            "limit_up_count": None,
-            "limit_down_count": None,
+            "turnover": breadth.get("turnover_amount"),
+            "turnover_amount": breadth.get("turnover_amount"),
+            "universe_size": breadth.get("universe_size"),
+            "up_count": breadth.get("up_count"),
+            "down_count": breadth.get("down_count"),
+            "limit_up_count": breadth.get("limit_up_count"),
+            "limit_down_count": breadth.get("limit_down_count"),
+            "top10_amount_share": breadth.get("top10_amount_share"),
             "warning": warning,
             "source": "qmt",
             "indices": {
                 "intraday_pct": round(intraday, 2),
                 "return_5d_pct": round(avg_5d, 2),
                 "return_20d_pct": round(avg_20d, 2),
+                "volatility_20d_pct": round(avg_vol_20d, 2),
+                "drawdown_20d_pct": round(avg_dd_20d, 2),
             },
+        }
+
+    def _build_market_breadth(self) -> dict[str, Any]:
+        try:
+            rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
+        except QmtBridgeError:
+            return {}
+        symbols = sorted({str(row.get("symbol") or "").strip() for row in rows if row.get("symbol")})
+        if not symbols:
+            return {}
+        quotes: dict[str, Any] = {}
+        for chunk in batched(symbols, 200):
+            try:
+                quotes.update(self.bridge.get_quotes(chunk))
+            except QmtBridgeError:
+                continue
+        up_count = down_count = limit_up_count = limit_down_count = 0
+        amounts: list[float] = []
+        for payload in quotes.values():
+            last_price = safe_float(payload.get("last_price") or payload.get("price"))
+            last_close = safe_float(payload.get("last_close") or payload.get("pre_close"))
+            amount = safe_float(payload.get("amount") or payload.get("turnover") or 0)
+            if amount > 0:
+                amounts.append(amount)
+            if last_price <= 0 or last_close <= 0:
+                continue
+            pct = (last_price - last_close) / last_close
+            if pct > 0:
+                up_count += 1
+            elif pct < 0:
+                down_count += 1
+            if pct >= 0.098:
+                limit_up_count += 1
+            elif pct <= -0.098:
+                limit_down_count += 1
+        total_amount = sum(amounts)
+        top10_share = sum(sorted(amounts, reverse=True)[:10]) / total_amount if total_amount > 0 else None
+        return {
+            "universe_size": len(symbols),
+            "up_count": up_count,
+            "down_count": down_count,
+            "limit_up_count": limit_up_count,
+            "limit_down_count": limit_down_count,
+            "turnover_amount": round(total_amount, 2) if total_amount else None,
+            "top10_amount_share": round(top10_share, 6) if top10_share is not None else None,
         }
 
     def get_sector_strength(self, top_k: int = 20) -> list[dict[str, Any]]:
@@ -316,6 +377,33 @@ def calculate_return_pct(records: list[KlineRecord], lookback: int) -> float | N
     if base <= 0:
         return None
     return (records[-1].close - base) / base * 100
+
+
+def calculate_volatility_pct(records: list[KlineRecord], lookback: int) -> float | None:
+    if len(records) <= lookback:
+        return None
+    returns = []
+    window = records[-lookback - 1 :]
+    for prev, cur in zip(window, window[1:], strict=False):
+        if prev.close > 0 and cur.close > 0:
+            returns.append(cur.close / prev.close - 1)
+    if len(returns) < 2:
+        return None
+    mean = sum(returns) / len(returns)
+    variance = sum((item - mean) ** 2 for item in returns) / (len(returns) - 1)
+    return (variance ** 0.5) * 100
+
+
+def calculate_drawdown_pct(records: list[KlineRecord], lookback: int) -> float | None:
+    if len(records) <= lookback:
+        return None
+    closes = [item.close for item in records[-lookback:] if item.close > 0]
+    if not closes:
+        return None
+    peak = max(closes)
+    if peak <= 0:
+        return None
+    return (closes[-1] - peak) / peak * 100
 
 
 def classify_market_snapshot(intraday: float, avg_5d: float, avg_20d: float) -> tuple[str, str]:

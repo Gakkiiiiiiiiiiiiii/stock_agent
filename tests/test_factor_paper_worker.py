@@ -61,13 +61,15 @@ def test_first_run_writes_positions_and_state(env):
     )
     assert result["skipped"] is False
     assert result["top_k"] == 5  # max(5, 8*1%)
-    payload = json.loads((env["state"] / "positions_2026-07-30.json").read_text(encoding="utf-8"))
-    assert payload["date"] == "2026-07-30"
-    assert payload["generated_at"] and payload["top_k"] == 5
-    assert len(payload["picks"]) == 5
-    assert payload["picks"][0]["symbol"] == "600007.SH"  # ret 最高
-    assert payload["picks"][0]["rank"] == 1
-    assert payload["picks"][0]["alpha_score"] == pytest.approx(1.0)
+    signal_payload = json.loads((env["state"] / "signals_2026-07-29.json").read_text(encoding="utf-8"))
+    order_payload = json.loads((env["state"] / "orders_2026-07-30.json").read_text(encoding="utf-8"))
+    assert signal_payload["signal_date"] == "2026-07-29"
+    assert order_payload["signal_date"] == "2026-07-29"
+    assert order_payload["execution_date"] == "2026-07-30"
+    assert len(order_payload["picks"]) == 5
+    assert order_payload["picks"][0]["symbol"] == "600007.SH"  # T-1 ret 最高
+    assert order_payload["picks"][0]["rank"] == 1
+    assert order_payload["picks"][0]["alpha_score"] == pytest.approx(1.0)
     state = json.loads((env["state"] / "portfolio_state.json").read_text(encoding="utf-8"))
     assert state["last_date"] == "2026-07-30"
     assert state["cash"] < fpw.INITIAL_CASH  # 已买入
@@ -86,13 +88,12 @@ def test_same_day_idempotent(env):
     first = fpw.run_daily(**kwargs)
     second = fpw.run_daily(**kwargs)
     assert second["skipped"] is True
-    assert "跳过" in second["message"]
-    # positions 文件未被重写
-    payload = json.loads((env["state"] / "positions_2026-07-30.json").read_text(encoding="utf-8"))
+    # orders 文件未被重写
+    payload = json.loads((env["state"] / "orders_2026-07-30.json").read_text(encoding="utf-8"))
     assert payload["generated_at"]
     lines = (env["state"] / "equity.jsonl").read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
-    assert first["positions_file"] == second["positions_file"]
+    assert first["orders_file"] == second["orders_file"]
 
 
 def test_force_regenerates_but_does_not_double_book(env):
@@ -123,6 +124,22 @@ def test_bookkeeping_advances_next_day(env):
     # 全标的上涨且持仓未变，净值应高于首日
     day1 = json.loads(lines[0])
     assert day2["equity"] > day1["equity"]
+
+
+def test_t_day_signal_not_used_at_t_open(env):
+    panel = _panel()
+    mutated = {key: value.copy() for key, value in panel.items()}
+    mutated["ret"][0, -1] = 99.0
+    mutated["close"][0, -1] *= 10
+
+    def loader(symbols, days):
+        return {k: v[:, :30] for k, v in mutated.items()}, _dates(30), list(symbols), None
+
+    fpw.run_daily(state_dir=env["state"], library_path=env["lib"], panel_loader=loader, remine_days=9999)
+    order_payload = json.loads((env["state"] / "orders_2026-07-30.json").read_text(encoding="utf-8"))
+    assert order_payload["execution_date"] == "2026-07-30"
+    assert order_payload["picks"][0]["symbol"] == "600007.SH"
+    assert "600000.SH" not in [item["symbol"] for item in order_payload["picks"]]
 
 
 def test_remine_warning_does_not_block(env):
@@ -163,7 +180,7 @@ def test_remine_success_writes_state(env):
     )
     assert calls
     remine = json.loads((env["state"] / "remine_state.json").read_text(encoding="utf-8"))
-    assert remine["last_remine_date"] == "2026-07-30"
+    assert remine["last_remine_date"] == "2026-07-29"
     # 次日（距上次挖掘仅 1 个交易日 < 5）不再触发
     fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                   panel_loader=env["make_loader"](31), remine_days=5,

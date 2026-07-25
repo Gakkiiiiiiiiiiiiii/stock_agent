@@ -1,12 +1,11 @@
 """前向模拟盘：每日按因子库合成 alpha 分数组 TopK 组合并记账。
 
-每日流程：加载股票池 → load_factor_panel(days=60) → 重挖开关（距上次挖掘满
-FACTOR_PAPER_REMINE_DAYS 个交易日先跑 FactorMiner，LLM 不可用只告警不阻塞）→
-当前因子库等权合成 alpha_score → TopK（池子 1%）→ 落库 positions_YYYY-MM-DD.json
-→ 按 portfolio_backtest 的执行规则（涨跌停/停牌/T+1/成本）对昨日持仓→今日记账，
+每日流程：加载股票池 → load_factor_panel(days=60) → 使用 T-1 收盘后可用面板生成
+signals_T-1.json 和 orders_T.json → T 日开盘按 orders_T.json 执行 →
+按 portfolio_backtest 的执行规则（涨跌停/停牌/T+1/成本）对昨日持仓→今日记账，
 维护 portfolio_state.json 并追加 equity.jsonl。
 
-同日幂等：positions 文件已存在则跳过组池；当日已记账则跳过记账；--force 可重跑组池。
+同日幂等：orders 文件已存在则跳过组池；当日已记账则跳过记账；--force 可重跑组池。
 行情不可用（如容器内无 QMT 桥接）时优雅告警并返回退出码 0。
 
 CLI：python -m workers.factor_paper_worker [--force] [--state-dir PATH]
@@ -26,7 +25,7 @@ import numpy as np
 from engines.backtest.execution import can_buy, can_sell, cost_of, is_suspended
 from engines.factor.alpha import compose_alpha_scores
 from engines.factor.data import load_factor_panel, load_universe
-from engines.factor.library import active_factors, load_library
+from engines.factor.library import load_library, paper_trading_factors
 from engines.factor.miner import FactorMiner
 from financial_agent.utils import project_root
 
@@ -91,6 +90,10 @@ def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) 
         "accepted": len(result.get("accepted") or []),
     })
     return None
+
+
+def _panel_until(panel: dict[str, np.ndarray], end_exclusive: int) -> dict[str, np.ndarray]:
+    return {key: value[:, :end_exclusive] for key, value in panel.items()}
 
 
 def _sell(positions: dict, symbol: str, shares: float, trade_date: str) -> float:
@@ -266,42 +269,70 @@ def run_daily(
     if not panel:
         # QMT 桥接不可用（如容器内）等场景：告警并优雅退出
         return {"date": None, "warning": warning or "行情数据不可用（QMT 桥接不可达），今日跳过"}
+    if len(dates) < 2:
+        return {"date": dates[-1] if dates else None, "warning": "前向模拟盘至少需要 T-1 与 T 两个交易日，今日跳过"}
 
-    trade_date = dates[-1]
-    positions_path = state / f"positions_{trade_date}.json"
-    if positions_path.exists() and not force:
-        return {
-            "date": trade_date, "skipped": True,
-            "message": f"{trade_date} 持仓已生成，跳过组池（--force 可重跑）",
-            "positions_file": str(positions_path),
-        }
+    execution_date = dates[-1]
+    signal_date = dates[-2]
+    signal_panel = _panel_until(panel, -1)
+    signal_dates = dates[:-1]
+    signals_path = state / f"signals_{signal_date}.json"
+    orders_path = state / f"orders_{execution_date}.json"
 
     warnings = [warning] if warning else []
-    remine_warning = _maybe_remine(panel, symbols, dates, state, remine_days, miner_factory)
+    remine_warning = _maybe_remine(signal_panel, symbols, signal_dates, state, remine_days, miner_factory)
     if remine_warning:
         warnings.append(remine_warning)
 
-    factors = active_factors(load_library(library_path))
-    scores, factor_count = compose_alpha_scores(panel, factors)
-    if scores is None:
-        return {"date": trade_date,
-                "warning": "; ".join(warnings + ["因子库为空或全部不可计算，无法组池"])}
+    generated = False
+    if orders_path.exists() and not force:
+        order_payload = _load_json(orders_path, {})
+        picks = order_payload.get("picks") or []
+        factor_count = int(order_payload.get("factor_count") or 0)
+    else:
+        factors = paper_trading_factors(load_library(library_path))
+        scores, factor_count = compose_alpha_scores(signal_panel, factors)
+        if scores is None:
+            return {"date": execution_date, "signal_date": signal_date,
+                    "warning": "; ".join(warnings + ["因子库为空或全部不可计算，无法生成 T+1 订单"])}
 
-    top_k = max(TOP_K_MIN, int(len(symbols) * TOP_K_RATIO))
-    valid_idx = np.where(~np.isnan(scores))[0]
-    order = valid_idx[np.argsort(-scores[valid_idx])]
-    picks = [
-        {"symbol": symbols[i], "alpha_score": round(float(scores[i]), 4), "rank": rank}
-        for rank, i in enumerate(order[:top_k], start=1)
-    ]
-    payload = {"date": trade_date, "generated_at": _now_iso(), "top_k": top_k, "picks": picks}
-    _write_json(positions_path, payload)
+        top_k = max(TOP_K_MIN, int(len(symbols) * TOP_K_RATIO))
+        valid_idx = np.where(~np.isnan(scores))[0]
+        order = valid_idx[np.argsort(-scores[valid_idx])]
+        picks = [
+            {"symbol": symbols[i], "alpha_score": round(float(scores[i]), 4), "rank": rank}
+            for rank, i in enumerate(order[:top_k], start=1)
+        ]
+        signal_payload = {
+            "signal_date": signal_date,
+            "generated_at": _now_iso(),
+            "feature_window_end": signal_date,
+            "top_k": top_k,
+            "factor_count": factor_count,
+            "picks": picks,
+        }
+        order_payload = {
+            "signal_date": signal_date,
+            "execution_date": execution_date,
+            "generated_at": _now_iso(),
+            "execution_model": "next_open",
+            "factor_count": factor_count,
+            "picks": picks,
+        }
+        _write_json(signals_path, signal_payload)
+        _write_json(orders_path, order_payload)
+        generated = True
 
-    bookkeeping = _advance_portfolio(panel, dates, symbols, [p["symbol"] for p in picks], state, trade_date)
+    bookkeeping = _advance_portfolio(panel, dates, symbols, [p["symbol"] for p in picks], state, execution_date)
     return {
-        "date": trade_date, "skipped": False,
-        "positions_file": str(positions_path),
-        "top_k": top_k, "factor_count": factor_count,
+        "date": execution_date,
+        "signal_date": signal_date,
+        "execution_date": execution_date,
+        "skipped": (not generated and not bookkeeping.get("advanced")),
+        "signals_file": str(signals_path),
+        "orders_file": str(orders_path),
+        "top_k": len(picks),
+        "factor_count": factor_count,
         "bookkeeping": bookkeeping,
         "warning": "; ".join(w for w in warnings if w) or None,
     }

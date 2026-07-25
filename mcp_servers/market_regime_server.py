@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from engines.market.breadth_engine import compute_breadth
 from engines.market.crowding_engine import compute_crowding_score
+from engines.market.feature_builder import MarketFeatureBuilder
 from engines.market.range_engine import compute_range_score
 from engines.market.risk_engine import compute_drawdown_risk
 from engines.market.rotation_engine import compute_rotation_score
@@ -92,20 +93,34 @@ def get_market_regime(
     index_drawdown_20d: float | None = None,
     limit_down_count: int | None = None,
     previous_regime: str | None = None,
+    high_position_loss_ratio: float | None = None,
+    high_position_limit_down_ratio: float | None = None,
+    high_position_breakdown_ratio: float | None = None,
+    retreat_days: int | None = None,
     force_refresh: bool = False,
 ) -> dict:
     _ = force_refresh
     if snapshot is None:
-        snapshot_obj = MarketFeatureSnapshot(
-            as_of=as_of or datetime.now(timezone.utc),
-            up_count=up_count,
-            down_count=down_count,
-            index_return_5d=index_return_5d,
-            index_return_20d=index_return_20d,
-            limit_up_count=limit_up_count,
-            limit_down_count=limit_down_count,
-            index_volatility_20d=index_volatility_20d if index_volatility_20d is not None else index_volatility,
-        )
+        if any(value is not None for value in (up_count, down_count, index_return_5d, index_return_20d, limit_up_count, limit_down_count, index_volatility, index_volatility_20d, high_position_loss_ratio, high_position_limit_down_ratio, high_position_breakdown_ratio, retreat_days)):
+            snapshot_data = {
+                "as_of": as_of or datetime.now(timezone.utc),
+                "up_count": up_count,
+                "down_count": down_count,
+                "index_return_5d": index_return_5d,
+                "index_return_20d": index_return_20d,
+                "limit_up_count": limit_up_count,
+                "limit_down_count": limit_down_count,
+                "index_volatility_20d": index_volatility_20d if index_volatility_20d is not None else index_volatility,
+                "high_position_loss_ratio": high_position_loss_ratio,
+                "high_position_limit_down_ratio": high_position_limit_down_ratio,
+                "high_position_breakdown_ratio": high_position_breakdown_ratio,
+                "retreat_days": retreat_days,
+            }
+        else:
+            snapshot_data = MarketFeatureBuilder().build(as_of=as_of, force_refresh=force_refresh)
+            top_theme_strength = snapshot_data.pop("top_theme_strength", top_theme_strength)
+            index_drawdown_20d = snapshot_data.pop("index_drawdown_20d", index_drawdown_20d)
+        snapshot_obj = MarketFeatureSnapshot.model_validate(snapshot_data)
     elif isinstance(snapshot, MarketFeatureSnapshot):
         snapshot_obj = snapshot
     else:

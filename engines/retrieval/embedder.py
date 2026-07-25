@@ -57,6 +57,27 @@ class OpenAICompatibleEmbedder:
         return [float(v) for v in vector]
 
 
+class SentenceTransformersEmbedder:
+    def __init__(self, model: str | None = None, dimension: int | None = None) -> None:
+        self.model = model or os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
+        self.dimension = int(dimension or os.getenv("EMBEDDING_DIMENSION", "1024"))
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError as exc:
+            raise EmbeddingError("sentence-transformers is required for sentence_transformers embedding provider") from exc
+        self._model = SentenceTransformer(self.model)
+
+    @property
+    def metadata(self) -> EmbeddingMetadata:
+        return EmbeddingMetadata("sentence_transformers", self.model, self.dimension, True)
+
+    def embed(self, text: str) -> list[float]:
+        vector = self._model.encode([text], normalize_embeddings=True)[0].tolist()
+        if len(vector) != self.dimension:
+            raise EmbeddingError(f"embedding dimension mismatch: got {len(vector)}, expected {self.dimension}")
+        return [float(v) for v in vector]
+
+
 class LocalChineseNgramEmbedder:
     """Deterministic lexical fallback for local tests; not a semantic model."""
 
@@ -85,6 +106,8 @@ def build_embedder(provider: str | None = None) -> OpenAICompatibleEmbedder | Lo
     resolved = (provider or os.getenv("EMBEDDING_PROVIDER", "local_ngram")).strip().lower()
     if resolved in {"openai", "openai_compatible", "compatible"}:
         return OpenAICompatibleEmbedder()
+    if resolved in {"sentence_transformers", "sentence-transformers", "bge_m3"}:
+        return SentenceTransformersEmbedder()
     if resolved in {"local", "local_ngram", "dev"}:
         return LocalChineseNgramEmbedder(vector_size=int(os.getenv("EMBEDDING_DIMENSION", "384")))
     raise EmbeddingError(f"unsupported embedding provider: {resolved}")
@@ -116,6 +139,7 @@ __all__ = [
     "EmbeddingMetadata",
     "EmbeddingError",
     "OpenAICompatibleEmbedder",
+    "SentenceTransformersEmbedder",
     "LocalChineseNgramEmbedder",
     "DeterministicEmbedder",
     "build_embedder",

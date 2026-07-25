@@ -85,6 +85,11 @@ class MarketRegimeRequest(BaseModel):
     index_drawdown_20d: float | None = None
     limit_down_count: int | None = None
     previous_regime: str | None = None
+    high_position_loss_ratio: float | None = None
+    high_position_limit_down_ratio: float | None = None
+    high_position_breakdown_ratio: float | None = None
+    retreat_days: int | None = None
+    force_refresh: bool = False
 
 
 class KnowledgeDocUpdateRequest(BaseModel):

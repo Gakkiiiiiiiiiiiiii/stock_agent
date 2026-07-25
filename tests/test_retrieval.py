@@ -43,3 +43,12 @@ def test_hybrid_retriever_returns_contexts():
     assert result["contexts"][0]["rerank_score"] == 0.93
     assert result["plan"]["filters"]["related_strategy"] == ["B2"]
 
+
+def test_deployment_embedding_defaults_are_semantic():
+    import yaml
+
+    compose = yaml.safe_load(open("docker-compose.yml", encoding="utf-8"))
+    api_env = compose["services"]["api"]["environment"]
+    reranker_env = compose["services"]["reranker"]["environment"]
+    assert api_env["EMBEDDING_PROVIDER"].endswith("sentence_transformers}")
+    assert reranker_env["RERANKER_PROVIDER"].endswith("sentence_transformers}")

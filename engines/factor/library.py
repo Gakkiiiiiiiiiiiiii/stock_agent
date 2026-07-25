@@ -136,12 +136,27 @@ def research_validated_factors(library: dict, limit: int | None = None) -> list[
     return factors[:limit] if limit else factors
 
 
+def paper_trading_factors(library: dict, limit: int | None = None) -> list[dict]:
+    """Factors allowed in the forward paper portfolio."""
+    from engines.factor.lifecycle import FactorLifecycleStatus
+
+    allowed = {
+        FactorLifecycleStatus.PAPER_TRADING.value,
+        FactorLifecycleStatus.APPROVED.value,
+        FactorLifecycleStatus.ACTIVE.value,
+    }
+    factors = [f for f in library.get("factors", []) if f.get("status") in allowed]
+    factors.sort(key=lambda f: (f.get("metrics") or {}).get("fitness", float("-inf")), reverse=True)
+    return factors[:limit] if limit else factors
+
+
 __all__ = [
     "load_library",
     "save_library",
     "add_factor",
     "active_factors",
     "research_validated_factors",
+    "paper_trading_factors",
     "is_duplicate",
     "next_factor_id",
     "ACTIVE_STATUS",

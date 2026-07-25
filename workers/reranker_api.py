@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections import Counter
+import os
+from functools import lru_cache
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -30,18 +32,39 @@ def _token_score(query: str, text: str) -> float:
     return shared / max(sum(q.values()), 1)
 
 
+@lru_cache(maxsize=1)
+def _cross_encoder():
+    try:
+        from sentence_transformers import CrossEncoder
+    except ImportError as exc:
+        raise RuntimeError("sentence-transformers is required for semantic reranker") from exc
+    return CrossEncoder(os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3"))
+
+
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "mode": "fallback", "semantic": False}
+    provider = os.getenv("RERANKER_PROVIDER", "local_ngram")
+    return {
+        "status": "ok",
+        "provider": provider,
+        "model": os.getenv("RERANKER_MODEL", "local-chinese-ngram-reranker"),
+        "mode": "semantic" if provider in {"sentence_transformers", "cross_encoder"} else "fallback",
+        "semantic": provider in {"sentence_transformers", "cross_encoder"},
+    }
 
 
 @app.post("/rerank")
 def rerank(request: RerankRequest) -> dict:
     ranked = []
-    for candidate in request.candidates:
+    provider = os.getenv("RERANKER_PROVIDER", "local_ngram")
+    semantic_scores = None
+    if provider in {"sentence_transformers", "cross_encoder"}:
+        pairs = [(request.query, candidate.get("text", "")) for candidate in request.candidates]
+        semantic_scores = [float(value) for value in _cross_encoder().predict(pairs)]
+    for index, candidate in enumerate(request.candidates):
         payload = candidate.get("payload", {})
         status_bonus = 0.2 if payload.get("status") in {"approved", "validated"} else 0.0
-        semantic_score = _token_score(request.query, candidate.get("text", ""))
+        semantic_score = semantic_scores[index] if semantic_scores is not None else _token_score(request.query, candidate.get("text", ""))
         score = semantic_score + status_bonus
         ranked.append(
             {
@@ -51,8 +74,8 @@ def rerank(request: RerankRequest) -> dict:
                 "semantic_score": round(semantic_score, 4),
                 "payload": payload,
                 "text": candidate.get("text", ""),
-                "mode": "fallback",
-                "semantic": False,
+                "mode": "semantic" if semantic_scores is not None else "fallback",
+                "semantic": semantic_scores is not None,
             }
         )
     ranked.sort(key=lambda item: item["rerank_score"], reverse=True)
