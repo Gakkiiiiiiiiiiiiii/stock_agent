@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+from typing import Callable
 
 import numpy as np
 import yaml
@@ -151,7 +152,7 @@ class FactorMiner:
         top_factors = active_factors(library, limit=5)
         top_desc = (
             json.dumps([
-                {"rpn": f["rpn"], "hypothesis": f.get("hypothesis", ""), "metrics": f.get("metrics", {})}
+                {"rpn": f["rpn"], "hypothesis": f.get("hypothesis", ""), "metrics": _prompt_safe_metrics(f.get("metrics", {}))}
                 for f in top_factors
             ], ensure_ascii=False, indent=1)
             if top_factors else "（暂无）"
@@ -214,6 +215,7 @@ class FactorMiner:
         candidates_per_round: int | None = None,
         horizon: int | None = None,
         eval_window: int | None = None,
+        lease_guard: Callable[[], None] | None = None,
     ) -> dict:
         """执行挖掘，返回 {accepted, rejected, warning, stopped_early, stop_reason, evaluated} 摘要。"""
         rounds = rounds or int(os.getenv("FACTOR_MINING_ROUNDS", _DEFAULT_ROUNDS))
@@ -229,10 +231,24 @@ class FactorMiner:
         if closes is None or not symbols:
             return {"accepted": [], "rejected": [], "warning": "特征面板为空，无法挖掘",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0}
-        discovery_end = _discovery_end(closes.shape[1], horizon)
-        if discovery_end <= horizon * 2 or closes.shape[1] - discovery_end <= horizon * 2:
+        n_days = closes.shape[1]
+        discovery_end = _discovery_end(n_days, horizon)
+        final_oos_days = n_days - discovery_end
+        diagnostics = {
+            "discovery_days": discovery_end,
+            "final_oos_days": final_oos_days,
+            "oos_window_count": 0,
+            "run_valid": True,
+            "run_failure_code": None,
+        }
+        if discovery_end <= horizon * 2 or final_oos_days <= horizon * 2:
             return {"accepted": [], "rejected": [], "warning": "样本长度不足，无法拆分 discovery/final OOS",
-                    "stopped_early": False, "stop_reason": None, "evaluated": 0}
+                    "stopped_early": False, "stop_reason": None, "evaluated": 0,
+                    "diagnostics": diagnostics | {"run_valid": False, "run_failure_code": "SAMPLE_SPLIT_UNAVAILABLE"}}
+        discovery_panel = {key: value[:, :discovery_end] for key, value in panel.items()}
+        final_oos_panel = {key: value[:, discovery_end:] for key, value in panel.items()}
+        discovery_closes = closes[:, :discovery_end]
+        final_oos_closes = closes[:, discovery_end:]
 
         library = load_library(self.library_path)
         accepted: list[dict] = []
@@ -248,12 +264,12 @@ class FactorMiner:
         # 预计算库内 active 因子面板用于相关性判重
         active_panels: dict[str, np.ndarray] = {}
         for factor in active_factors(library):
-            panel_values = self.vm.execute(factor.get("rpn") or [], panel)
+            panel_values = self.vm.execute(factor.get("rpn") or [], discovery_panel)
             if panel_values is not None:
                 active_panels[factor["id"]] = panel_values
         # Alpha191 种子面板进判重池：引导 LLM 在种子思路上变异而非照抄
         for seed in _load_seed_entries():
-            panel_values = self.vm.execute(seed["rpn"], panel)
+            panel_values = self.vm.execute(seed["rpn"], discovery_panel)
             if panel_values is not None:
                 active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values
 
@@ -289,21 +305,21 @@ class FactorMiner:
                     budget_hit = True
                     break
                 evaluated += 1
-                panel_values = self.vm.execute(rpn, panel)
-                if panel_values is None:
+                discovery_values = self.vm.execute(rpn, discovery_panel)
+                if discovery_values is None:
                     last_round_results.append({"rpn": rpn, "result": "计算失败"})
                     rejected.append({"rpn": rpn, "reason": "计算失败"})
                     rejected_rpn.add(rpn_key)
                     continue
-                if is_duplicate(rpn, panel_values, library, active_panels):
+                if is_duplicate(rpn, discovery_values, library, active_panels):
                     last_round_results.append({"rpn": rpn, "result": "与库内因子重复"})
                     rejected.append({"rpn": rpn, "reason": "重复"})
                     rejected_rpn.add(rpn_key)
                     round_dup_rejected += 1
                     continue
                 metrics = fitness_mod.evaluate_factor(
-                    panel_values[:, :discovery_end],
-                    closes[:, :discovery_end],
+                    discovery_values,
+                    discovery_closes,
                     horizon=horizon,
                     eval_window=eval_window,
                 )
@@ -311,31 +327,60 @@ class FactorMiner:
                 # 收紧后的门槛只会比基础门槛更严，可直接叠加在 passed 之上
                 passed = bool(metrics.get("passed")) and metrics["rank_ic"] >= _rank_ic_threshold(evaluated)
                 if not passed:
-                    last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "discovery 未达入库门槛"})
+                    last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "discovery 未达入库门槛"})
                     rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
-                oos = evaluate_oos_splits(panel_values[:, discovery_end:], closes[:, discovery_end:], horizon=horizon)
-                if not oos.get("passed"):
-                    metrics["passed"] = False
-                    metrics["oos"] = oos
-                    last_round_results.append({"rpn": rpn, "metrics": _hide_final_oos(metrics), "result": "final OOS 未通过"})
-                    rejected.append({"rpn": rpn, "reason": "OOS未通过", "metrics": metrics})
+                final_oos_values = self.vm.execute(rpn, final_oos_panel)
+                if final_oos_values is None:
+                    last_round_results.append({"rpn": rpn, "result": "final OOS 计算失败"})
+                    rejected.append({"rpn": rpn, "reason": "OOS计算失败", "metrics": metrics})
                     rejected_rpn.add(rpn_key)
                     continue
-                metrics["oos"] = oos
+                oos = evaluate_oos_splits(final_oos_values, final_oos_closes, horizon=horizon)
+                diagnostics["oos_window_count"] = max(diagnostics["oos_window_count"], len(oos.get("windows") or []))
+                if not oos.get("windows"):
+                    diagnostics["run_valid"] = False
+                    diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
+                    rejected_metrics = dict(metrics)
+                    rejected_metrics["passed"] = False
+                    rejected_metrics["final_oos_audit"] = {
+                        "passed": False,
+                        "warning": "FINAL_OOS_WINDOW_UNAVAILABLE",
+                    }
+                    last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "final OOS 窗口不可用"})
+                    rejected.append({"rpn": rpn, "reason": "OOS窗口不可用", "metrics": rejected_metrics})
+                    rejected_rpn.add(rpn_key)
+                    continue
+                if not oos.get("passed"):
+                    rejected_metrics = dict(metrics)
+                    rejected_metrics["passed"] = False
+                    rejected_metrics["final_oos_audit"] = oos
+                    last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "final OOS 未通过"})
+                    rejected.append({"rpn": rpn, "reason": "OOS未通过", "metrics": rejected_metrics})
+                    rejected_rpn.add(rpn_key)
+                    continue
+                if lease_guard:
+                    lease_guard()
+                stored_metrics = dict(metrics)
+                stored_metrics["final_oos_audit"] = {
+                    "method": oos.get("method"),
+                    "passed": True,
+                    "window_count": len(oos.get("windows") or []),
+                    "withheld": True,
+                }
                 entry = add_factor(
                     library, rpn, expression=" ".join(rpn), hypothesis=hypothesis,
-                    metrics=metrics, universe=sorted(symbols) if len(symbols) <= 100 else [],
+                    metrics=stored_metrics, universe=sorted(symbols) if len(symbols) <= 100 else [],
                     horizon=horizon, llm_model=model_name,
                 )
                 entry["universe_size"] = len(symbols)
                 if eval_window:
                     entry["eval_window"] = eval_window
-                active_panels[entry["id"]] = panel_values
+                active_panels[entry["id"]] = discovery_values
                 accepted.append(entry)
                 round_accepted += 1
-                last_round_results.append({"rpn": rpn, "metrics": metrics, "result": "已入库"})
+                last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "已入库"})
 
             if budget_hit:
                 stopped_early = True
@@ -354,6 +399,8 @@ class FactorMiner:
                 )
                 break
 
+        if lease_guard:
+            lease_guard()
         save_library(library, self.library_path)
         return {
             "accepted": accepted,
@@ -362,6 +409,7 @@ class FactorMiner:
             "stopped_early": stopped_early,
             "stop_reason": stop_reason,
             "evaluated": evaluated,
+            "diagnostics": diagnostics,
         }
 
 
@@ -369,21 +417,28 @@ __all__ = ["FactorMiner"]
 
 
 def _with_neutralized_metrics(metrics: dict) -> dict:
-    """Report neutralized metric slots even when no exposure matrix is available yet."""
+    """Keep raw metrics explicit; neutralized metrics require real exposure data."""
     out = dict(metrics)
     out.setdefault("raw_rank_ic", out.get("rank_ic"))
-    out.setdefault("neutralized_rank_ic", out.get("rank_ic"))
-    out.setdefault("raw_topk_excess_return", out.get("topk_excess_return", out.get("topk_annual_return")))
-    out.setdefault("neutralized_topk_excess_return", out.get("topk_excess_return", out.get("topk_annual_return")))
-    if out.get("neutralized_rank_ic") is not None and abs(float(out["neutralized_rank_ic"])) < fitness_mod.RANK_IC_THRESHOLD:
-        out["passed"] = False
-        out.setdefault("failure_reasons", []).append("neutralized_rank_ic_failed")
+    out.setdefault("raw_topk_excess_annual_return", out.get("topk_excess_annual_return"))
+    out["neutralization_status"] = "NOT_AVAILABLE"
+    out["neutralized_rank_ic"] = None
+    out["neutralized_topk_excess_annual_return"] = None
+    out["neutralized_topk_excess_return"] = None
     return out
 
 
-def _hide_final_oos(metrics: dict) -> dict:
-    """Keep final OOS private from subsequent candidate-generation prompts."""
-    out = dict(metrics)
-    if "oos" in out:
-        out["oos"] = {"passed": bool((out.get("oos") or {}).get("passed")), "withheld": True}
-    return out
+def _prompt_safe_metrics(metrics: dict) -> dict:
+    """Expose discovery metrics only; final OOS audit stays out of prompts."""
+    blocked = {
+        "oos",
+        "final_oos",
+        "final_oos_audit",
+        "windows",
+        "mean_rank_ic",
+        "min_rank_ic",
+        "window_pass_ratio",
+        "positive_window_ratio",
+        "oos_excess_return",
+    }
+    return {key: value for key, value in (metrics or {}).items() if key not in blocked}

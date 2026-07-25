@@ -62,7 +62,7 @@ def _good_candidate():
 
 
 def test_miner_accepts_passing_factor(tmp_path, monkeypatch):
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     panel, symbols = _panel()
     client = FakeModelClient([_good_candidate()])
     miner = FactorMiner(model_client=client, library_path=str(tmp_path / "lib.yaml"))
@@ -89,7 +89,7 @@ def test_miner_rejects_invalid_formula(tmp_path):
 
 
 def test_miner_dedupes_against_library(tmp_path, monkeypatch):
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     panel, symbols = _panel()
     lib = str(tmp_path / "lib.yaml")
     first = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=lib)
@@ -122,7 +122,7 @@ def test_miner_returns_warning_when_model_unavailable(tmp_path):
 
 def test_oos_failure_blocks_promotion(tmp_path, monkeypatch):
     panel, symbols = _panel()
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": False, "failure_reasons": ["test_failed"]})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": False, "windows": [{"test": (0, 1)}], "failure_reasons": ["test_failed"]})
     miner = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml"))
     result = miner.mine(panel, symbols, rounds=1, candidates_per_round=1, horizon=5)
     assert result["accepted"] == []
@@ -135,29 +135,32 @@ def test_miner_default_oos_uses_purged_walkforward(tmp_path, monkeypatch):
 
     def fake_purged(*args, **kwargs):
         calls.append((args, kwargs))
-        return {"passed": True, "method": "purged_walkforward", "windows": []}
+        return {"passed": True, "method": "purged_walkforward", "windows": [{"test": (0, 1)}]}
 
     monkeypatch.setattr("engines.factor.miner.run_purged_walkforward", fake_purged)
     result = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml")).mine(
         panel, symbols, rounds=1, candidates_per_round=1, horizon=5
     )
     assert calls
-    assert result["accepted"][0]["metrics"]["oos"]["method"] == "purged_walkforward"
+    assert result["accepted"][0]["metrics"]["final_oos_audit"]["method"] == "purged_walkforward"
+    assert result["accepted"][0]["metrics"]["final_oos_audit"]["withheld"] is True
 
 
 def test_neutralized_metrics_present(tmp_path, monkeypatch):
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     panel, symbols = _panel()
     result = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml")).mine(panel, symbols, rounds=1, candidates_per_round=1, horizon=5)
     metrics = result["accepted"][0]["metrics"]
     assert "raw_rank_ic" in metrics
     assert "neutralized_rank_ic" in metrics
+    assert metrics["neutralization_status"] == "NOT_AVAILABLE"
+    assert metrics["neutralized_rank_ic"] is None
     assert result["accepted"][0]["status"] == "OOS_PASS"
 
 
 def test_miner_early_stop_on_saturation(tmp_path, monkeypatch):
     """第 1 轮入库，之后连续 2 轮 accepted=0 且判重率 1.0 → 饱和早停。"""
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     panel, symbols = _panel()
     client = FakeModelClient([_good_candidate()])  # 每轮返回相同公式
     miner = FactorMiner(model_client=client, library_path=str(tmp_path / "lib.yaml"))
@@ -204,7 +207,7 @@ def test_miner_caches_rejected_rpn(tmp_path, monkeypatch):
     result = miner.mine(panel, symbols, rounds=2, candidates_per_round=1, horizon=5)
     assert len(calls) == 1  # 第 2 轮命中缓存，未重复打分
     assert result["evaluated"] == 1
-    assert result["rejected"][0]["reason"] in {"未达门槛", "OOS未通过"}
+    assert result["rejected"][0]["reason"] in {"未达门槛", "OOS未通过", "OOS窗口不可用"}
     assert result["rejected"][1]["reason"] == "重复"
 
 
@@ -216,14 +219,14 @@ def test_rank_ic_threshold_tightening():
 def test_miner_tightens_threshold_after_many_evaluations(tmp_path, monkeypatch):
     """累计评估超过 30 个候选后，rank_ic=0.025（过基础门槛 0.02、不过收紧门槛 0.03）被拒绝。"""
     monkeypatch.setenv("FACTOR_MINING_MAX_CANDIDATES", "100")
-    panel, symbols = _panel()
+    panel, symbols = _panel(n_days=300)
     fake_metrics = {
         "rank_ic": 0.025, "ic_mean": 0.02, "icir": 0.5,
         "topk_annual_return": 0.1, "topk_max_drawdown": 0.05,
         "coverage": 1.0, "fitness": 1.0, "top_k": 5, "passed": True,
     }
     monkeypatch.setattr(fitness_mod, "evaluate_factor", lambda *a, **k: dict(fake_metrics))
-    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "splits": {}})
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
     monkeypatch.setattr("engines.factor.miner.is_duplicate", lambda *a, **k: False)
     # 32 轮、每轮一个互不相同的合法公式（特征 × 窗口组合）
     windows = [3, 5, 10, 20, 60]

@@ -1,0 +1,28 @@
+data_split:
+  discovery_ratio: 0.7
+  final_oos_withheld_from_prompt: true
+
+evaluation:
+  horizon_days: 5
+  min_coverage: 0.6
+  min_rank_ic: 0.02
+  min_icir: 0.3
+  min_topk_excess_annual_return: 0.0
+
+purged_walkforward:
+  min_window_pass_ratio: 0.6
+  min_positive_rank_ic_ratio: 0.6
+  min_oos_excess_return: 0.0
+  min_rank_ic_floor: -0.02
+
+neutralization:
+  status: NOT_AVAILABLE
+  required_exposures:
+    - industry
+    - log_market_cap
+    - beta
+    - liquidity
+
+paper_trading:
+  scoring_panel_days: 60
+  mining_panel_days: 250

@@ -35,7 +35,7 @@ def _neutralize_seed_library(monkeypatch):
     )
     monkeypatch.setattr(
         "engines.factor.miner.evaluate_oos_splits",
-        lambda *args, **kwargs: {"passed": True, "splits": {}},
+        lambda *args, **kwargs: {"passed": True, "windows": [{"test": (0, 1)}]},
     )
 
 

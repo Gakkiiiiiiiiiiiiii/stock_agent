@@ -47,13 +47,14 @@ def evaluate_factor(
     eval_window 指定时只在最近 eval_window 个交易日上评估（因子值仍用全量历史计算，
     保证时序算子有足够回看窗口）。
     """
-    n_symbols, n_days = factor_panel.shape
-    start_d = max(0, n_days - eval_window) if eval_window else 0
+    _, n_days = factor_panel.shape
+    valid_end = max(0, n_days - horizon)
+    start_d = max(0, valid_end - eval_window) if eval_window else 0
     return evaluate_factor_range(
         factor_panel,
         closes,
         eval_start=start_d,
-        eval_end=n_days,
+        eval_end=valid_end,
         horizon=horizon,
         top_k=top_k,
     )
@@ -82,6 +83,8 @@ def evaluate_factor_range(
             "rank_ic": 0.0, "ic_mean": 0.0, "icir": 0.0,
             "topk_annual_return": 0.0, "topk_max_drawdown": 0.0,
             "coverage": 0.0, "fitness": float("-inf"),
+            "evaluated_days": 0,
+            "valid_ic_days": 0,
             "passed": False,
             "warning": "eval range too short",
         }
@@ -130,6 +133,8 @@ def evaluate_factor_range(
             "rank_ic": 0.0, "ic_mean": 0.0, "icir": 0.0,
             "topk_annual_return": 0.0, "topk_max_drawdown": 0.0,
             "coverage": round(coverage, 4), "fitness": float("-inf"),
+            "evaluated_days": total_days,
+            "valid_ic_days": len(ic_list),
             "passed": False,
         }
 
@@ -185,6 +190,8 @@ def evaluate_factor_range(
         "topk_excess_annual_return": round(topk_excess_annual_return, 4),
         "topk_max_drawdown": round(max_dd, 4),
         "coverage": round(coverage, 4),
+        "evaluated_days": total_days,
+        "valid_ic_days": len(ic_list),
         "fitness": round(fitness, 4),
         "top_k": resolved_top_k,
         "passed": bool(passed),

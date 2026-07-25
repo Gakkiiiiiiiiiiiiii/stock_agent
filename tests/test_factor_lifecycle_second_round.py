@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from engines.factor.lifecycle_service import FactorLifecycleService, InvalidLifecycleTransition
+from engines.factor.fitness import evaluate_factor
 from engines.factor.purged_split import build_purged_windows
 from engines.factor.purged_walkforward import run_purged_walkforward
 
@@ -64,3 +65,16 @@ def test_purged_walkforward_random_predictor_fails_without_mock():
     factor = rng.normal(0, 1, size=(n_symbols, n_days))
     result = run_purged_walkforward(factor, closes, horizon=1)
     assert result["passed"] is False
+
+
+def test_eval_window_counts_valid_signal_days_not_future_observation_days():
+    rng = np.random.default_rng(13)
+    n_symbols, n_days = 30, 90
+    daily_returns = rng.normal(0, 0.01, size=(n_symbols, n_days))
+    signal_component = np.linspace(-0.02, 0.02, n_symbols)[:, None]
+    daily_returns[:, 1:] += signal_component
+    closes = 100 * np.cumprod(1 + daily_returns, axis=1)
+    factor = np.full_like(closes, np.nan)
+    factor[:, :-5] = daily_returns[:, 5:]
+    metrics = evaluate_factor(factor, closes, horizon=5, eval_window=60)
+    assert metrics["evaluated_days"] == 60

@@ -43,6 +43,9 @@ class MarketFeatureSnapshot(BaseModel):
     high_position_breakdown_ratio: float | None = None
     high_position_big_negative_count: int | None = None
     high_position_pool_size: int | None = None
+    high_position_valid_count: int | None = None
+    high_position_quote_coverage: float | None = None
+    high_position_quality_flags: list[str] = []
     quality_score: float = 0.0
     quality_flags: list[str] = []
     warning: str | None = None
@@ -147,6 +150,15 @@ def get_market_regime(
         quality_blockers.append("MARKET_QUOTE_COVERAGE_LOW")
     if "MARKET_QUOTE_COVERAGE_LOW" in snapshot_obj.quality_flags:
         quality_blockers.append("MARKET_QUOTE_COVERAGE_LOW")
+    if snapshot_obj.high_position_quote_coverage is not None and snapshot_obj.high_position_quote_coverage < 0.8:
+        quality_blockers.append("HIGH_POSITION_QUOTE_COVERAGE_LOW")
+    high_position_blockers = {
+        "HIGH_POSITION_POOL_TOO_SMALL",
+        "HIGH_POSITION_VALID_COUNT_LOW",
+        "HIGH_POSITION_QUOTE_COVERAGE_LOW",
+        "HIGH_POSITION_FEATURES_UNAVAILABLE",
+    }
+    quality_blockers.extend([flag for flag in snapshot_obj.high_position_quality_flags if flag in high_position_blockers])
     if missing_fields or top_theme_strength is None or index_drawdown_20d is None or retreat_missing or quality_blockers:
         extra_missing = []
         if top_theme_strength is None:

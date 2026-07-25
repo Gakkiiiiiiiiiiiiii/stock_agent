@@ -32,6 +32,7 @@ class MarketFeatureBuilder:
         estimated_breakdown_ratio = max(0.0, -(index_return_5d or 0.0))
         estimated_big_negative_count = _retreat_days(index_drawdown_20d)
         quality_flags = list(snapshot.get("quality_flags") or [])
+        quality_flags.extend(snapshot.get("high_position_quality_flags") or [])
         if estimated_high_position:
             quality_flags.append("HIGH_POSITION_FEATURES_ESTIMATED")
         if snapshot.get("warning"):
@@ -62,6 +63,9 @@ class MarketFeatureBuilder:
             "high_position_breakdown_ratio": _value_or_none(snapshot.get("high_position_breakdown_ratio")),
             "high_position_big_negative_count": snapshot.get("high_position_big_negative_count") if snapshot.get("high_position_big_negative_count") is not None else None,
             "high_position_pool_size": snapshot.get("high_position_pool_size"),
+            "high_position_valid_count": snapshot.get("high_position_valid_count"),
+            "high_position_quote_coverage": snapshot.get("high_position_quote_coverage"),
+            "high_position_quality_flags": list(snapshot.get("high_position_quality_flags") or []),
             "estimated_high_position_loss_ratio": estimated_loss_ratio,
             "estimated_high_position_limit_down_ratio": estimated_limit_down_ratio,
             "estimated_high_position_breakdown_ratio": estimated_breakdown_ratio,

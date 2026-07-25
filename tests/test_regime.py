@@ -3,6 +3,7 @@ from engines.regime.regime_preclassifier import preclassify_regime
 from engines.market.high_position_feature_builder import HighPositionFeatureBuilder
 from engines.market.feature_builder import MarketFeatureBuilder, pct_to_decimal
 from mcp_servers.market_regime_server import get_market_regime
+from datetime import date, timedelta
 
 
 def test_high_position_retreat_detector():
@@ -74,11 +75,13 @@ def test_high_position_feature_builder_outputs_formal_features():
                 base = 10 + idx
                 for day in range(70):
                     close = base + day * (0.08 if idx < 3 else 0.01)
+                    trading_day = date(2026, 3, 1) + timedelta(days=day)
                     rows.append(
                         {
                             "symbol": symbol,
-                            "trading_date": f"2026-05-{(day % 28) + 1:02d}",
+                            "trading_date": trading_day.isoformat(),
                             "open": close * 0.99,
+                            "high": close * 1.01,
                             "close": close,
                             "amount": 1_000_000 * (3 if idx < 3 and day == 69 else 1),
                         }
@@ -92,10 +95,39 @@ def test_high_position_feature_builder_outputs_formal_features():
     }
     features = HighPositionFeatureBuilder(Bridge()).build(symbols, quotes).as_dict()
     assert features["high_position_pool_size"] > 0
+    assert features["high_position_valid_count"] >= 10
+    assert features["high_position_quote_coverage"] >= 0.8
     assert features["high_position_loss_ratio"] is not None
     assert features["high_position_limit_down_ratio"] is not None
     assert features["high_position_breakdown_ratio"] is not None
     assert features["high_position_big_negative_count"] is not None
+
+
+def test_high_position_builder_blocks_small_pool_quality():
+    class Bridge:
+        def get_history(self, symbols, period, start_time, end_time, dividend_type, fill_data=True, prefer_cache_first=True):
+            rows = []
+            for idx, symbol in enumerate(symbols):
+                for day in range(35):
+                    trading_day = date(2026, 3, 1) + timedelta(days=day)
+                    close = 10 + day * 0.02 + idx * 0.01
+                    rows.append(
+                        {
+                            "symbol": symbol,
+                            "trading_date": trading_day.isoformat(),
+                            "open": close,
+                            "high": close * 1.01,
+                            "close": close,
+                            "amount": 1_000_000,
+                        }
+                    )
+            return rows
+
+    symbols = [f"60000{i}.SH" for i in range(6)]
+    quotes = {symbol: {"last_price": 10, "last_close": 10, "open": 10} for symbol in symbols}
+    features = HighPositionFeatureBuilder(Bridge()).build(symbols, quotes).as_dict()
+    assert features["high_position_loss_ratio"] is None
+    assert "HIGH_POSITION_POOL_TOO_SMALL" in features["high_position_quality_flags"]
 
 
 def test_estimated_high_position_features_do_not_drive_regime(monkeypatch):

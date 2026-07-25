@@ -174,6 +174,9 @@ class QmtMarketDataProvider(MarketDataProvider):
             "high_position_breakdown_ratio": breadth.get("high_position_breakdown_ratio"),
             "high_position_big_negative_count": breadth.get("high_position_big_negative_count"),
             "high_position_pool_size": breadth.get("high_position_pool_size"),
+            "high_position_valid_count": breadth.get("high_position_valid_count"),
+            "high_position_quote_coverage": breadth.get("high_position_quote_coverage"),
+            "high_position_quality_flags": breadth.get("high_position_quality_flags"),
             "requested_quote_count": breadth.get("requested_quote_count"),
             "received_quote_count": breadth.get("received_quote_count"),
             "quote_coverage": quote_coverage,
@@ -232,7 +235,14 @@ class QmtMarketDataProvider(MarketDataProvider):
         quality_flags = ["MARKET_QUOTE_COVERAGE_LOW"] if quote_coverage is not None and quote_coverage < 0.9 else []
         high_features: dict[str, Any] = {}
         try:
-            high_features = HighPositionFeatureBuilder(self.bridge).build(symbols, quotes, as_of=as_of).as_dict()
+            outcome_as_of = as_of or date.today()
+            high_features = HighPositionFeatureBuilder(self.bridge).build(
+                symbols,
+                quotes,
+                pool_as_of=outcome_as_of - timedelta(days=1),
+                outcome_as_of=outcome_as_of,
+            ).as_dict()
+            quality_flags.extend(high_features.get("high_position_quality_flags") or [])
             if high_features.get("high_position_pool_size", 0) <= 0:
                 quality_flags.append("HIGH_POSITION_FEATURES_UNAVAILABLE")
         except QmtBridgeError:

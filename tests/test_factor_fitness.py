@@ -54,7 +54,7 @@ def test_eval_window_restricts_evaluation_to_recent_days():
     fwd = np.full_like(closes, np.nan)
     fwd[:, :-horizon] = closes[:, horizon:] / closes[:, :-horizon] - 1.0
     factor = rng.normal(size=closes.shape)
-    factor[:, -20:] = fwd[:, -20:]  # 近期完美预测
+    factor[:, -25:-5] = fwd[:, -25:-5]  # 最近 20 个有效信号日完美预测，尾部 5 天仅用于观察 horizon
     full = evaluate_factor(factor, closes, horizon=horizon)
     windowed = evaluate_factor(factor, closes, horizon=horizon, eval_window=20)
     assert windowed["rank_ic"] > 0.9

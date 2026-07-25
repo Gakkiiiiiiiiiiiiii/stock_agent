@@ -17,6 +17,7 @@ def mine_factors(
     universe: list[str] | None = None,
     days: int | None = None,
     eval_window: int | None = None,
+    lease_guard=None,
 ) -> dict:
     """LLM 自动挖掘横截面选股因子，达标者写入因子库（样本内评估，结论待核验）。
 
@@ -31,6 +32,7 @@ def mine_factors(
     result = miner.mine(
         panel, symbols, rounds=rounds, candidates_per_round=candidates_per_round,
         eval_window=eval_window,
+        lease_guard=lease_guard,
     )
     result["data_window"] = {"start": dates[0], "end": dates[-1]} if dates else None
     result["eval_window"] = eval_window

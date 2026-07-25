@@ -11,24 +11,45 @@ from storage.bootstrap import create_all
 from storage.repositories.job_repository import JobTaskRepository
 
 
+class LeaseLostError(RuntimeError):
+    pass
+
+
 def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> bool:
     repo = JobTaskRepository()
     worker = worker_id or f"job-worker-{socket.gethostname()}"
     task = repo.claim(job_id, worker) if job_id else repo.claim_next(worker, ["factor_mine"], lease_seconds=300)
     if task is None:
         return False
+    lease_token = task.get("lease_token")
+    lease_version = task.get("lease_version")
     try:
         if task["task_type"] == "factor_mine":
             from mcp_servers.factor_mining_server import mine_factors
 
             payload = task.get("payload") or {}
-            with heartbeat_loop(repo, task["id"], worker):
-                result = mine_factors(**payload)
-            repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), error=None, worker_id=worker)
+            with heartbeat_loop(repo, task["id"], worker, lease_token=lease_token, lease_version=lease_version) as ensure_lease:
+                result = mine_factors(**payload, lease_guard=ensure_lease)
+                ensure_lease()
+            repo.mark_finished(
+                task["id"],
+                "SUCCEEDED",
+                result_ref=json.dumps(result, ensure_ascii=False),
+                error=None,
+                worker_id=worker,
+                lease_token=lease_token,
+                lease_version=lease_version,
+            )
             return True
         raise ValueError(f"unsupported task_type: {task['task_type']}")
     except Exception as exc:  # noqa: BLE001
-        repo.mark_failed(task["id"], {"code": type(exc).__name__, "message": str(exc)}, worker_id=worker)
+        repo.mark_failed(
+            task["id"],
+            {"code": type(exc).__name__, "message": str(exc)},
+            worker_id=worker,
+            lease_token=lease_token,
+            lease_version=lease_version,
+        )
         return True
 
 
@@ -40,18 +61,48 @@ def main() -> None:
 
 
 @contextmanager
-def heartbeat_loop(repo: JobTaskRepository, task_id: str, worker_id: str, interval: int = 30):
+def heartbeat_loop(
+    repo: JobTaskRepository,
+    task_id: str,
+    worker_id: str,
+    interval: int = 30,
+    lease_token: str | None = None,
+    lease_version: int | None = None,
+):
     stop = threading.Event()
+    lease_lost = threading.Event()
+
+    def send_heartbeat() -> bool:
+        try:
+            result = repo.heartbeat(task_id, worker_id, lease_token=lease_token, lease_version=lease_version)
+        except TypeError:
+            result = repo.heartbeat(task_id, worker_id)
+        return result is not False
+
+    def ensure_lease() -> None:
+        if lease_lost.is_set():
+            lease_lost.set()
+            raise LeaseLostError(f"job lease lost: task_id={task_id}")
+        if lease_token is None or lease_version is None:
+            return
+        if not repo.has_lease(task_id, worker_id, lease_token, lease_version):
+            lease_lost.set()
+            raise LeaseLostError(f"job lease lost: task_id={task_id}")
 
     def beat() -> None:
         while not stop.wait(interval):
-            repo.heartbeat(task_id, worker_id)
+            if not send_heartbeat():
+                lease_lost.set()
+                return
 
     thread = threading.Thread(target=beat, name=f"heartbeat-{task_id}", daemon=True)
-    repo.heartbeat(task_id, worker_id)
+    if not send_heartbeat():
+        lease_lost.set()
     thread.start()
     try:
-        yield
+        ensure_lease()
+        yield ensure_lease
+        ensure_lease()
     finally:
         stop.set()
         thread.join(timeout=interval)

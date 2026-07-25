@@ -1,6 +1,6 @@
 """前向模拟盘 worker 测试：幂等、落库结构、记账推进、重挖开关。"""
 import json
-from datetime import timedelta
+from datetime import date, timedelta
 
 import numpy as np
 import pytest
@@ -228,6 +228,77 @@ def test_remine_success_writes_state(env):
                   panel_loader=env["make_loader"](31), remine_days=5,
                   miner_factory=OkMiner)
     assert len(calls) == 1
+
+
+def test_remine_uses_long_mining_panel(env):
+    requested_days = []
+    mined_days = []
+
+    def loader(symbols, days):
+        requested_days.append(days)
+        panel = _panel(n_days=days)
+        end_day = date(2026, 7, 29)
+        dates = [(end_day - timedelta(days=days - index - 1)).isoformat() for index in range(days)]
+        return panel, dates, list(symbols), None
+
+    class OkMiner:
+        def __init__(self, model_client=None):
+            pass
+
+        def mine(self, panel, symbols, **kwargs):
+            mined_days.append(panel["close"].shape[1])
+            return {
+                "accepted": [{"id": "F002"}],
+                "rejected": [],
+                "warning": None,
+                "diagnostics": {"run_valid": True, "oos_window_count": 3},
+                "stopped_early": False,
+                "stop_reason": None,
+                "evaluated": 1,
+            }
+
+    result = fpw.generate_orders(
+        execution_date="2026-07-30",
+        state_dir=env["state"],
+        library_path=env["lib"],
+        panel_loader=loader,
+        remine_days=0,
+        miner_factory=OkMiner,
+    )
+    assert result["skipped"] is False
+    assert requested_days == [60, 250]
+    assert mined_days == [250]
+    assert result["remine"]["oos_window_count"] == 3
+
+
+def test_invalid_remine_does_not_advance_state(env):
+    class InvalidMiner:
+        def __init__(self, model_client=None):
+            pass
+
+        def mine(self, panel, symbols, **kwargs):
+            return {
+                "accepted": [],
+                "rejected": [],
+                "warning": None,
+                "diagnostics": {"run_valid": False, "run_failure_code": "FINAL_OOS_WINDOW_UNAVAILABLE", "oos_window_count": 0},
+                "stopped_early": False,
+                "stop_reason": None,
+                "evaluated": 1,
+            }
+
+    result = fpw.generate_orders(
+        execution_date="2026-07-30",
+        state_dir=env["state"],
+        library_path=env["lib"],
+        panel_loader=env["make_loader"](29),
+        remine_days=0,
+        miner_factory=InvalidMiner,
+    )
+    assert result["skipped"] is False
+    assert result["remine"]["run_valid"] is False
+    assert "FINAL_OOS_WINDOW_UNAVAILABLE" in result["warning"]
+    assert not (env["state"] / "remine_state.json").exists()
 
 
 def test_qmt_unavailable_graceful(env):

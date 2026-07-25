@@ -36,7 +36,9 @@ STATE_DIR = "storage/runtime/factor_paper"
 INITIAL_CASH = 1_000_000.0
 TOP_K_RATIO = 0.01   # TopK 为池子的 1%
 TOP_K_MIN = 5
-PANEL_DAYS = 60      # 合成分数所需的历史长度
+DEFAULT_SCORING_PANEL_DAYS = 60
+DEFAULT_MINING_PANEL_DAYS = 250
+PANEL_DAYS = DEFAULT_SCORING_PANEL_DAYS      # 兼容旧引用：合成分数所需的历史长度
 DEFAULT_REMINE_DAYS = 5
 _MIN_TRADE_VALUE = 1.0  # 忽略的交易金额下限（元），避免碎单
 
@@ -97,23 +99,68 @@ def _remine_due(dates: list[str], state_dir: Path, remine_days: int) -> bool:
     return len(dates) - 1 - dates.index(last) >= remine_days
 
 
-def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) -> str | None:
+def _scoring_panel_days() -> int:
+    return int(os.getenv("FACTOR_PAPER_SCORING_PANEL_DAYS", DEFAULT_SCORING_PANEL_DAYS))
+
+
+def _mining_panel_days() -> int:
+    return int(os.getenv("FACTOR_PAPER_MINING_PANEL_DAYS", DEFAULT_MINING_PANEL_DAYS))
+
+
+def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) -> dict:
     """到期则先跑 FactorMiner 再组池；LLM 不可用时返回 warning，不阻塞记账。"""
     if not _remine_due(dates, state_dir, remine_days):
-        return None
+        return {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
     miner = miner_factory(model_client=None)
     try:
         result = miner.mine(panel, symbols)
     except Exception as exc:  # noqa: BLE001
-        return f"重挖失败已跳过：{exc}"
+        return {
+            "attempted": True,
+            "run_valid": False,
+            "accepted": 0,
+            "oos_window_count": 0,
+            "warning": f"重挖失败已跳过：{exc}",
+            "failure_code": type(exc).__name__,
+        }
     if result.get("warning"):
-        return f"重挖跳过：{result['warning']}"
+        return {
+            "attempted": True,
+            "run_valid": False,
+            "accepted": 0,
+            "oos_window_count": 0,
+            "warning": f"重挖跳过：{result['warning']}",
+            "failure_code": "REMINE_WARNING",
+        }
+    diagnostics = result.get("diagnostics") or {}
+    run_valid = bool(diagnostics.get("run_valid", True))
+    accepted_count = len(result.get("accepted") or [])
+    oos_window_count = int(diagnostics.get("oos_window_count") or 0)
+    if not run_valid:
+        failure_code = diagnostics.get("run_failure_code") or "REMINE_INVALID"
+        return {
+            "attempted": True,
+            "run_valid": False,
+            "accepted": accepted_count,
+            "oos_window_count": oos_window_count,
+            "warning": f"重挖无效已跳过：{failure_code}",
+            "failure_code": failure_code,
+        }
     _write_json(state_dir / "remine_state.json", {
         "last_remine_date": dates[-1],
         "remined_at": _now_iso(),
-        "accepted": len(result.get("accepted") or []),
+        "accepted": accepted_count,
+        "oos_window_count": oos_window_count,
+        "run_valid": True,
     })
-    return None
+    return {
+        "attempted": True,
+        "run_valid": True,
+        "accepted": accepted_count,
+        "oos_window_count": oos_window_count,
+        "warning": None,
+        "failure_code": None,
+    }
 
 
 def _panel_until(panel: dict[str, np.ndarray], end_exclusive: int) -> dict[str, np.ndarray]:
@@ -146,7 +193,7 @@ def generate_orders(
     symbols = load_universe()
     if not symbols:
         return {"execution_date": execution_date, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
-    panel, dates, symbols, warning = panel_loader(symbols, PANEL_DAYS)
+    panel, dates, symbols, warning = panel_loader(symbols, _scoring_panel_days())
     if not panel:
         return {"execution_date": execution_date, "warning": warning or "行情数据不可用（QMT 桥接不可达），无法生成订单"}
     signal_date = dates[-1]
@@ -164,9 +211,22 @@ def generate_orders(
     if orders_path.exists() and allow_historical_regeneration:
         logger.warning("historical regeneration enabled for frozen order file: %s", orders_path)
     warnings = [warning] if warning else []
-    remine_warning = _maybe_remine(panel, symbols, dates, state, remine_days, miner_factory)
-    if remine_warning:
-        warnings.append(remine_warning)
+    remine_result = {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
+    if _remine_due(dates, state, remine_days):
+        mining_panel, mining_dates, mining_symbols, mining_warning = panel_loader(symbols, _mining_panel_days())
+        if not mining_panel:
+            remine_result = {
+                "attempted": True,
+                "run_valid": False,
+                "accepted": 0,
+                "oos_window_count": 0,
+                "warning": mining_warning or "重挖取数不可用，已跳过",
+                "failure_code": "REMINE_DATA_UNAVAILABLE",
+            }
+        else:
+            remine_result = _maybe_remine(mining_panel, mining_symbols, mining_dates, state, remine_days, miner_factory)
+        if remine_result.get("warning"):
+            warnings.append(remine_result["warning"])
     library = load_library(library_path)
     factors = paper_trading_factors(library)
     scores, factor_count = compose_alpha_scores(panel, factors)
@@ -209,6 +269,7 @@ def generate_orders(
         "factor_versions": factor_versions,
         "library_hash": _library_hash(library),
         "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
+        "remine": remine_result,
         "picks": picks,
     }
     signal_payload = {
@@ -231,6 +292,7 @@ def generate_orders(
         "orders_file": str(orders_path),
         "top_k": len(picks),
         "factor_count": factor_count,
+        "remine": remine_result,
         "warning": "; ".join(w for w in warnings if w) or None,
     }
 
@@ -406,7 +468,7 @@ def run_daily(
     symbols = load_universe()
     if not symbols:
         return {"date": None, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
-    panel, dates, symbols, warning = panel_loader(symbols, PANEL_DAYS)
+    panel, dates, symbols, warning = panel_loader(symbols, _scoring_panel_days())
     if not panel:
         # QMT 桥接不可用（如容器内）等场景：告警并优雅退出
         return {"date": None, "warning": warning or "行情数据不可用（QMT 桥接不可达），今日跳过"}
