@@ -167,12 +167,34 @@ def test_miner_returns_warning_when_model_unavailable(tmp_path):
     assert result["accepted"] == []
 
 
-def test_oos_failure_blocks_promotion(tmp_path, monkeypatch):
+def test_oos_failure_can_create_recent_alpha_candidate(tmp_path, monkeypatch):
     panel, symbols = _panel()
     monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": False, "windows": [{"test": (0, 1)}], "failure_reasons": ["test_failed"]})
     miner = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml"))
     result = miner.mine(panel, symbols, rounds=1, candidates_per_round=1, horizon=5)
     assert result["accepted"] == []
+    assert result["rejected"] == []
+    assert len(result["recent_candidates"]) == 1
+    assert result["recent_candidates"][0]["status"] == "RECENT_ALPHA"
+    assert result["recent_candidates"][0]["metrics"]["recent_alpha_summary"]["passed"] is True
+
+
+def test_oos_failure_rejected_when_recent_alpha_disabled(tmp_path, monkeypatch):
+    from financial_agent.research_config import get_research_config
+
+    config = get_research_config().model_copy(
+        update={
+            "require_data_version_for_oos": False,
+            "recent_alpha": get_research_config().recent_alpha.model_copy(update={"enabled": False}),
+        }
+    )
+    monkeypatch.setattr("engines.factor.miner.get_research_config", lambda: config)
+    panel, symbols = _panel()
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": False, "windows": [{"test": (0, 1)}], "failure_reasons": ["test_failed"]})
+    miner = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml"))
+    result = miner.mine(panel, symbols, rounds=1, candidates_per_round=1, horizon=5)
+    assert result["accepted"] == []
+    assert result["recent_candidates"] == []
     assert result["rejected"][0]["reason"] == "OOS未通过"
 
 
@@ -241,6 +263,15 @@ def test_miner_respects_max_candidates_budget(tmp_path, monkeypatch):
 
 def test_miner_caches_rejected_rpn(tmp_path, monkeypatch):
     """前轮评估过但被拒绝的公式，后续轮次直接判重复且不再打分。"""
+    from financial_agent.research_config import get_research_config
+
+    config = get_research_config().model_copy(
+        update={
+            "require_data_version_for_oos": False,
+            "recent_alpha": get_research_config().recent_alpha.model_copy(update={"enabled": False}),
+        }
+    )
+    monkeypatch.setattr("engines.factor.miner.get_research_config", lambda: config)
     panel, symbols = _panel()
     calls: list[int] = []
     real_evaluate = fitness_mod.evaluate_factor_range

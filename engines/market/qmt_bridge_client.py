@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 from pathlib import Path
@@ -16,6 +17,8 @@ DEFAULT_QUANT_ROOT = PROJECT_ROOT.parent / "quant"
 BRIDGE_TIMEOUT_SECONDS = 30
 HISTORY_TIMEOUT_SECONDS = 300
 INDUSTRY_MAP_TIMEOUT_SECONDS = 300
+
+logger = logging.getLogger(__name__)
 
 
 class QmtBridgeError(RuntimeError):
@@ -47,15 +50,25 @@ class QmtBridgeClient:
 
     def healthcheck(self) -> dict[str, Any]:
         if self.base_url:
-            return self._http_get("health")
+            try:
+                return self._http_get("health")
+            except QmtBridgeError as exc:
+                if not self._http_fallback_enabled():
+                    raise
+                logger.warning("QMT HTTP bridge healthcheck failed; fallback to direct bridge: %s", exc)
         return self._run("health")
 
     def get_quotes(self, symbols: list[str]) -> dict[str, Any]:
         if not symbols:
             return {}
         if self.base_url:
-            payload = self._http_post("quote", {"symbols": symbols}, timeout_seconds=BRIDGE_TIMEOUT_SECONDS)
-            return payload.get("quotes", {}) or {}
+            try:
+                payload = self._http_post("quote", {"symbols": symbols}, timeout_seconds=BRIDGE_TIMEOUT_SECONDS)
+                return payload.get("quotes", {}) or {}
+            except QmtBridgeError as exc:
+                if not self._http_fallback_enabled():
+                    raise
+                logger.warning("QMT HTTP bridge quote failed; fallback to direct bridge: %s", exc)
         payload = self._run("quote", "--symbols", ",".join(symbols))
         return payload.get("quotes", {}) or {}
 
@@ -66,12 +79,17 @@ class QmtBridgeClient:
         only_a_share: bool = True,
     ) -> list[dict[str, Any]]:
         if self.base_url:
-            payload = self._http_post(
-                "industry-map",
-                {"symbols": symbols or [], "sector_prefix": sector_prefix, "only_a_share": only_a_share},
-                timeout_seconds=INDUSTRY_MAP_TIMEOUT_SECONDS,
-            )
-            return payload.get("rows", []) or []
+            try:
+                payload = self._http_post(
+                    "industry-map",
+                    {"symbols": symbols or [], "sector_prefix": sector_prefix, "only_a_share": only_a_share},
+                    timeout_seconds=INDUSTRY_MAP_TIMEOUT_SECONDS,
+                )
+                return payload.get("rows", []) or []
+            except QmtBridgeError as exc:
+                if not self._http_fallback_enabled():
+                    raise
+                logger.warning("QMT HTTP bridge industry-map failed; fallback to direct bridge: %s", exc)
         payload = self._run(
             "industry-map",
             "--symbols",
@@ -97,20 +115,25 @@ class QmtBridgeClient:
         if not symbols:
             return []
         if self.base_url:
-            payload = self._http_post(
-                "history",
-                {
-                    "symbols": symbols,
-                    "period": period,
-                    "start_time": start_time,
-                    "end_time": end_time,
-                    "dividend_type": dividend_type,
-                    "fill_data": fill_data,
-                    "prefer_cache_first": prefer_cache_first,
-                },
-                timeout_seconds=HISTORY_TIMEOUT_SECONDS,
-            )
-            return payload.get("rows", []) or []
+            try:
+                payload = self._http_post(
+                    "history",
+                    {
+                        "symbols": symbols,
+                        "period": period,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "dividend_type": dividend_type,
+                        "fill_data": fill_data,
+                        "prefer_cache_first": prefer_cache_first,
+                    },
+                    timeout_seconds=HISTORY_TIMEOUT_SECONDS,
+                )
+                return payload.get("rows", []) or []
+            except QmtBridgeError as exc:
+                if not self._http_fallback_enabled():
+                    raise
+                logger.warning("QMT HTTP bridge history failed; fallback to direct bridge: %s", exc)
         payload = self._run(
             "history",
             "--symbols",
@@ -198,6 +221,11 @@ class QmtBridgeClient:
         if not payload.get("ok"):
             raise QmtBridgeError(payload.get("error", "QMT 桥接调用失败"))
         return payload.get("data", {}) or {}
+
+    @staticmethod
+    def _http_fallback_enabled() -> bool:
+        value = os.getenv("QMT_BRIDGE_HTTP_FALLBACK", "true").strip().lower()
+        return value not in {"0", "false", "no", "off"}
 
     def _ensure_runtime_paths(self) -> None:
         if not self.python_path.exists():

@@ -25,6 +25,7 @@ LIBRARY_PATH = "config/factor_library.yaml"
 MAX_CORRELATION = 0.9  # 与库内 active 因子面板逐日截面相关绝对值上限，超过视为重复
 ACTIVE_STATUS = FactorLifecycleStatus.ACTIVE.value
 RESEARCH_STATUS = FactorLifecycleStatus.OOS_PASS.value
+RECENT_ALPHA_STATUS = FactorLifecycleStatus.RECENT_ALPHA.value
 LEGACY_UNVERIFIED_STATUS = FactorLifecycleStatus.LEGACY_UNVERIFIED.value
 
 _STATUS_RANK = {
@@ -32,12 +33,13 @@ _STATUS_RANK = {
     FactorLifecycleStatus.COMPUTABLE.value: 1,
     FactorLifecycleStatus.LEGACY_UNVERIFIED.value: 1,
     FactorLifecycleStatus.IN_SAMPLE_PASS.value: 2,
-    FactorLifecycleStatus.OOS_PASS.value: 3,
-    FactorLifecycleStatus.PAPER_TRADING.value: 4,
-    FactorLifecycleStatus.APPROVED.value: 5,
-    FactorLifecycleStatus.ACTIVE.value: 6,
-    FactorLifecycleStatus.DEGRADED.value: 7,
-    FactorLifecycleStatus.RETIRED.value: 8,
+    FactorLifecycleStatus.RECENT_ALPHA.value: 3,
+    FactorLifecycleStatus.OOS_PASS.value: 4,
+    FactorLifecycleStatus.PAPER_TRADING.value: 5,
+    FactorLifecycleStatus.APPROVED.value: 6,
+    FactorLifecycleStatus.ACTIVE.value: 7,
+    FactorLifecycleStatus.DEGRADED.value: 8,
+    FactorLifecycleStatus.RETIRED.value: 9,
 }
 
 # 稳定身份字段：同一因子被识别后不允许被旧 Worker 的 incoming 快照覆盖，
@@ -442,6 +444,52 @@ def build_research_metrics(
     }
 
 
+def build_recent_alpha_metrics(
+    discovery: dict,
+    recent_check: dict,
+    strict_oos: dict,
+    *,
+    data_version: str | None,
+    research_run_id: str,
+    evaluated_at: str,
+    recent_audit_ref: str,
+    strict_oos_audit_ref: str | None = None,
+) -> dict:
+    """Metrics for AlphaGPT-style recent candidates.
+
+    RECENT_ALPHA is deliberately lower than OOS_PASS: it records recent efficacy
+    without diluting strict Final OOS semantics.
+    """
+    recent_fitness = recent_check.get("recent_fitness", recent_check.get("fitness"))
+    return {
+        "research": {
+            "discovery": {
+                **discovery,
+                "evaluated_at": evaluated_at,
+                "data_version": data_version,
+                "research_run_id": research_run_id,
+            },
+            "recent_alpha": {
+                **recent_check,
+                "audit_ref": recent_audit_ref,
+            },
+            "final_oos": {
+                **strict_oos,
+                "audit_ref": strict_oos_audit_ref,
+            },
+        },
+        "monitoring": {},
+        **discovery,
+        "recent_alpha_summary": recent_check,
+        "recent_alpha_audit_ref": recent_audit_ref,
+        "final_oos_summary": strict_oos,
+        "final_oos_audit_ref": strict_oos_audit_ref,
+        "recent_fitness": recent_fitness,
+        "research_data_version": data_version,
+        "research_run_id": research_run_id,
+    }
+
+
 def build_monitoring_update(
     existing_factor: dict,
     *,
@@ -592,6 +640,8 @@ def add_factor(
     research_run_id: str | None = None,
     data_version: str | None = None,
     metrics_as_of: str | None = None,
+    status: str | None = None,
+    validation_stage: str | None = None,
 ) -> dict:
     """追加入库条目并返回该条目。
 
@@ -607,8 +657,8 @@ def add_factor(
         "horizon": horizon,
         "discovered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "llm_model": llm_model,
-        "status": RESEARCH_STATUS,
-        "validation_stage": RESEARCH_STATUS,
+        "status": status or RESEARCH_STATUS,
+        "validation_stage": validation_stage or status or RESEARCH_STATUS,
     }
     if research_run_id:
         entry["research_run_id"] = research_run_id
@@ -629,6 +679,18 @@ def add_factor(
 def active_factors(library: dict, limit: int | None = None) -> list[dict]:
     factors = [f for f in library.get("factors", []) if f.get("status") == ACTIVE_STATUS]
     factors.sort(key=lambda f: (f.get("metrics") or {}).get("fitness", float("-inf")), reverse=True)
+    return factors[:limit] if limit else factors
+
+
+def recent_alpha_factors(library: dict, limit: int | None = None) -> list[dict]:
+    factors = [f for f in library.get("factors", []) if f.get("status") == RECENT_ALPHA_STATUS]
+    factors.sort(
+        key=lambda f: (
+            (f.get("metrics") or {}).get("recent_fitness") or float("-inf"),
+            (f.get("metrics") or {}).get("fitness") or float("-inf"),
+        ),
+        reverse=True,
+    )
     return factors[:limit] if limit else factors
 
 
@@ -666,15 +728,18 @@ __all__ = [
     "LibraryMergeResult",
     "add_factor",
     "build_research_metrics",
+    "build_recent_alpha_metrics",
     "build_monitoring_update",
     "update_factor_monitoring",
     "MonitoringSnapshot",
     "active_factors",
+    "recent_alpha_factors",
     "research_validated_factors",
     "paper_trading_factors",
     "is_duplicate",
     "next_factor_id",
     "ACTIVE_STATUS",
     "RESEARCH_STATUS",
+    "RECENT_ALPHA_STATUS",
     "LEGACY_UNVERIFIED_STATUS",
 ]

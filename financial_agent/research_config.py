@@ -32,6 +32,22 @@ class EvaluationConfig(BaseModel):
     min_topk_excess_annual_return: float = 0.0
 
 
+class RecentAlphaConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    enabled: bool = True
+    total_days: int = 180
+    train_days: int = 120
+    test_days: int = 40
+    buffer_days: int = 5
+    min_coverage: float = 0.6
+    min_rank_ic: float = 0.02
+    min_icir: float = 0.25
+    min_topk_excess_annual_return: float = 0.0
+    min_recent_test_rank_ic: float = 0.02
+    min_recent_test_excess_return: float = 0.0
+
+
 class PurgedWalkForwardConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -110,6 +126,7 @@ class ResearchConfig(BaseModel):
 
     data_split: DataSplitConfig = DataSplitConfig()
     evaluation: EvaluationConfig = EvaluationConfig()
+    recent_alpha: RecentAlphaConfig = RecentAlphaConfig()
     purged_walkforward: PurgedWalkForwardConfig = PurgedWalkForwardConfig()
     paper_trading: PaperTradingConfig = PaperTradingConfig()
     high_position: HighPositionConfig = HighPositionConfig()
@@ -133,6 +150,19 @@ class ResearchConfig(BaseModel):
                 "data_split.max_warmup_days + data_split.discovery_days + "
                 "data_split.final_oos_days + evaluation.horizon_days "
                 f"({self.paper_trading.mining_panel_days} < {required})"
+            )
+        recent_required = (
+            self.recent_alpha.train_days
+            + self.recent_alpha.test_days
+            + self.recent_alpha.buffer_days
+            + self.evaluation.horizon_days
+        )
+        if self.recent_alpha.enabled and self.paper_trading.mining_panel_days < recent_required:
+            raise ValueError(
+                "paper_trading.mining_panel_days must be >= "
+                "recent_alpha.train_days + recent_alpha.test_days + "
+                "recent_alpha.buffer_days + evaluation.horizon_days "
+                f"({self.paper_trading.mining_panel_days} < {recent_required})"
             )
 
 
@@ -160,6 +190,17 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "evaluation.min_rank_ic", _env_float("FACTOR_MIN_RANK_IC"))
     _set_nested(merged, "evaluation.min_icir", _env_float("FACTOR_MIN_ICIR"))
     _set_nested(merged, "evaluation.min_topk_excess_annual_return", _env_float("FACTOR_MIN_TOPK_EXCESS_ANNUAL_RETURN"))
+    _set_nested(merged, "recent_alpha.enabled", _env_bool("FACTOR_RECENT_ALPHA_ENABLED"))
+    _set_nested(merged, "recent_alpha.total_days", _env_int("FACTOR_RECENT_ALPHA_TOTAL_DAYS"))
+    _set_nested(merged, "recent_alpha.train_days", _env_int("FACTOR_RECENT_ALPHA_TRAIN_DAYS"))
+    _set_nested(merged, "recent_alpha.test_days", _env_int("FACTOR_RECENT_ALPHA_TEST_DAYS"))
+    _set_nested(merged, "recent_alpha.buffer_days", _env_int("FACTOR_RECENT_ALPHA_BUFFER_DAYS"))
+    _set_nested(merged, "recent_alpha.min_coverage", _env_float("FACTOR_RECENT_ALPHA_MIN_COVERAGE"))
+    _set_nested(merged, "recent_alpha.min_rank_ic", _env_float("FACTOR_RECENT_ALPHA_MIN_RANK_IC"))
+    _set_nested(merged, "recent_alpha.min_icir", _env_float("FACTOR_RECENT_ALPHA_MIN_ICIR"))
+    _set_nested(merged, "recent_alpha.min_topk_excess_annual_return", _env_float("FACTOR_RECENT_ALPHA_MIN_TOPK_EXCESS_ANNUAL_RETURN"))
+    _set_nested(merged, "recent_alpha.min_recent_test_rank_ic", _env_float("FACTOR_RECENT_ALPHA_MIN_TEST_RANK_IC"))
+    _set_nested(merged, "recent_alpha.min_recent_test_excess_return", _env_float("FACTOR_RECENT_ALPHA_MIN_TEST_EXCESS_RETURN"))
     _set_nested(merged, "purged_walkforward.n_windows", _env_int("FACTOR_OOS_N_WINDOWS"))
     _set_nested(merged, "purged_walkforward.embargo_days", _env_int("FACTOR_OOS_EMBARGO_DAYS"))
     _set_nested(merged, "paper_trading.scoring_panel_days", _env_int("FACTOR_PAPER_SCORING_PANEL_DAYS"))
@@ -216,6 +257,7 @@ __all__ = [
     "ResearchConfig",
     "DataSplitConfig",
     "EvaluationConfig",
+    "RecentAlphaConfig",
     "PurgedWalkForwardConfig",
     "PaperTradingConfig",
     "HighPositionConfig",

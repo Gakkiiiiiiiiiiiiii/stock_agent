@@ -4,7 +4,7 @@ import logging
 
 from engines.factor.data import load_factor_panel, load_factor_panel_bundle, load_universe
 from engines.factor.fitness import evaluate_factor as evaluate_panel
-from engines.factor.library import active_factors, load_library
+from engines.factor.library import active_factors, load_library, recent_alpha_factors
 from engines.factor.miner import FactorMiner
 from engines.factor.vm import StackVM
 from financial_agent.research_config import get_research_config
@@ -56,6 +56,16 @@ def list_factor_library(limit: int = 20) -> dict:
         "count": len(factors),
         "factors": factors,
         "disclaimer": "指标为样本内评估结果，【待核验】，不构成投资建议",
+    }
+
+
+def list_recent_alpha_candidates(limit: int = 20) -> dict:
+    """列出 RECENT_ALPHA 近期有效候选，不等同于 active 因子。"""
+    factors = recent_alpha_factors(load_library(), limit=limit)
+    return {
+        "count": len(factors),
+        "factors": factors,
+        "disclaimer": "近期有效候选仅供观察与纸面验证，未通过 ACTIVE 准入，不构成投资建议",
     }
 
 

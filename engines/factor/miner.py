@@ -21,11 +21,14 @@ import yaml
 from engines.factor import fitness as fitness_mod
 from engines.factor.lookback import max_lookback_from_rpn
 from engines.factor.oos_audit import AuditWriteResult, append_oos_audit
+from engines.factor.ops import get_op
 from engines.factor.purged_walkforward import run_purged_walkforward
 from engines.factor.research_split import FactorResearchSplit, build_research_split
 from engines.factor.library import (
+    RECENT_ALPHA_STATUS,
     active_factors,
     add_factor,
+    build_recent_alpha_metrics,
     build_research_metrics,
     is_duplicate,
     load_library,
@@ -76,6 +79,7 @@ class DiscoveryCandidate:
     round_index: int
     evaluated_index: int
     lookback: int
+    recent_check: dict | None = None
 
 
 def evaluate_oos_splits(
@@ -200,6 +204,11 @@ class FactorMiner:
 - 规则: 公式总长度 ≤ {MAX_FORMULA_TOKENS} 个 token；必须以 cs_rank/cs_zscore/cs_demean 之一收尾以保证截面可比；
   不能用数值常量，窗口已烘焙在算子名中。
   二元算子需要两个操作数：若两个操作数都源自同一特征，需把该特征名连续压栈两次（见示例 5日反转）。
+  ts_corr_N/ts_cov_N 是二元时序算子，必须写成 ["feature_a","feature_b","ts_corr_N",...]；
+  div/sub/mul/add/gt/lt/max/min 也是二元算子，必须先压入两个完整表达式；
+  where 是三元算子，必须先压入 cond、a、b 三个完整表达式。
+  请避免主要依赖 event_heat/theme_sentiment；这些特征可能稀疏或全零，只能作为辅助条件。
+  优先生成能在 5 日 horizon 下获得正 TopK 超额收益、跨窗口稳定的候选，避免照抄已有 Top5 或种子公式。
 
 ## 经典示例（Alpha191 风格种子，可在其思路上变异，但不要照抄）
 {json.dumps(seed_examples, ensure_ascii=False, indent=1)}
@@ -231,6 +240,8 @@ class FactorMiner:
             return None, hypothesis
         rpn = [str(t) for t in rpn]
         if not all(is_valid_token(t) for t in rpn):
+            return None, hypothesis
+        if not _has_valid_stack_shape(rpn):
             return None, hypothesis
         if rpn[-1] not in CS_OPS:
             return None, hypothesis
@@ -305,6 +316,7 @@ class FactorMiner:
         accepted: list[dict] = []
         rejected: list[dict] = []
         discovery_candidates: list[DiscoveryCandidate] = []
+        recent_discovery_candidates: list[DiscoveryCandidate] = []
         last_round_results: list[dict] | None = None
         model_name = getattr(self.model_client, "model", "") or ""
         evaluated = 0                       # 已跑 VM/打分的候选总数（预算与门槛收紧的计数基准）
@@ -319,11 +331,13 @@ class FactorMiner:
             panel_values = self.vm.execute(factor.get("rpn") or [], panel)
             if panel_values is not None:
                 active_panels[factor["id"]] = panel_values[:, discovery_eval_start:discovery_eval_end]
-        # Alpha191 种子面板进判重池：引导 LLM 在种子思路上变异而非照抄
-        for seed in _load_seed_entries():
-            panel_values = self.vm.execute(seed["rpn"], panel)
-            if panel_values is not None:
-                active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, discovery_eval_start:discovery_eval_end]
+        # Alpha191 种子默认仅作 few-shot 启发。扩展到 30-50 条后若全部进入
+        # 相关性判重池，会过早压缩 AlphaGPT 式的变异搜索空间。
+        if _env_flag("FACTOR_DEDUPE_AGAINST_SEEDS", default=False):
+            for seed in _load_seed_entries():
+                panel_values = self.vm.execute(seed["rpn"], panel)
+                if panel_values is not None:
+                    active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, discovery_eval_start:discovery_eval_end]
 
         for round_index in range(1, rounds + 1):
             prompt = self._build_prompt(library, candidates_per_round, horizon, round_index, last_round_results, research_config.evaluation)
@@ -402,8 +416,42 @@ class FactorMiner:
                     evaluated, research_config.evaluation.min_rank_ic
                 )
                 if not passed:
+                    recent_check = self._run_recent_alpha_check(
+                        full_values,
+                        closes,
+                        horizon=horizon,
+                        dates=dates,
+                    )
+                    if recent_check.get("passed"):
+                        candidate = DiscoveryCandidate(
+                            rpn=rpn,
+                            hypothesis=hypothesis,
+                            discovery_metrics={
+                                **recent_check.get("train_metrics", {}),
+                                "strict_discovery": metrics,
+                                "strict_discovery_passed": False,
+                                "recent_discovery_passed": True,
+                            },
+                            discovery_values=discovery_values,
+                            full_values=full_values,
+                            candidate_hash=_candidate_hash(rpn),
+                            round_index=round_index,
+                            evaluated_index=evaluated,
+                            lookback=lookback,
+                            recent_check=recent_check,
+                        )
+                        recent_discovery_candidates.append(candidate)
+                        active_panels[f"RECENT_CANDIDATE:{candidate.candidate_hash}"] = discovery_values
+                        round_accepted += 1
+                        last_round_results.append({
+                            "rpn": rpn,
+                            "metrics": _prompt_safe_metrics(metrics),
+                            "recent_alpha": _prompt_safe_recent(recent_check),
+                            "result": "recent train/test 通过，进入近期候选池",
+                        })
+                        continue
                     last_round_results.append({"rpn": rpn, "metrics": _prompt_safe_metrics(metrics), "result": "discovery 未达入库门槛"})
-                    rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics})
+                    rejected.append({"rpn": rpn, "reason": "未达门槛", "metrics": metrics, "recent_alpha": recent_check})
                     rejected_rpn.add(rpn_key)
                     continue
                 candidate = DiscoveryCandidate(
@@ -439,7 +487,7 @@ class FactorMiner:
                 )
                 break
 
-        accepted, oos_rejected, oos_diagnostics = self._run_final_oos_gate(
+        accepted, recent_candidates, oos_rejected, oos_diagnostics = self._run_final_oos_gate(
             discovery_candidates,
             library,
             panel,
@@ -448,6 +496,7 @@ class FactorMiner:
             horizon,
             symbols,
             model_name,
+            recent_discovery_candidates=recent_discovery_candidates,
             dates=dates,
             eval_window=eval_window,
             lease_guard=lease_guard,
@@ -459,6 +508,7 @@ class FactorMiner:
         diagnostics.update(oos_diagnostics)
         return {
             "accepted": accepted,
+            "recent_candidates": recent_candidates,
             "rejected": rejected,
             "warning": None,
             "stopped_early": stopped_early,
@@ -477,22 +527,27 @@ class FactorMiner:
         horizon: int,
         symbols: list[str],
         model_name: str,
+        recent_discovery_candidates: list[DiscoveryCandidate] | None = None,
         dates: list[str] | None = None,
         eval_window: int | None = None,
         lease_guard: Callable[[], None] | None = None,
         data_version: str | None = None,
         data_snapshot_id: str | None = None,
         data_context: dict | None = None,
-    ) -> tuple[list[dict], list[dict], dict]:
+    ) -> tuple[list[dict], list[dict], list[dict], dict]:
         _ = panel
         accepted: list[dict] = []
+        recent_candidates: list[dict] = []
         accepted_pending: list[dict] = []
+        recent_pending: list[dict] = []
         rejected: list[dict] = []
         diagnostics = {
             "oos_window_count": 0,
             "run_valid": True,
             "run_failure_code": None,
             "discovery_candidate_count": len(candidates),
+            "recent_discovery_candidate_count": len(recent_discovery_candidates or []),
+            "recent_candidate_count": 0,
         }
         research_run_id = f"factor-oos-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-{uuid4().hex[:8]}"
         for candidate in candidates:
@@ -546,6 +601,62 @@ class FactorMiner:
                     data_snapshot_id=data_snapshot_id,
                     data_context=data_context,
                 )
+                recent_check = self._run_recent_alpha_check(
+                    candidate.full_values,
+                    closes,
+                    horizon=horizon,
+                    dates=dates,
+                )
+                if recent_check.get("passed"):
+                    recent_audit = self._write_recent_alpha_audit(
+                        candidate=candidate,
+                        recent_check=recent_check,
+                        strict_oos=_final_oos_summary(oos, window_count),
+                        split=split,
+                        horizon=horizon,
+                        symbols=symbols,
+                        dates=dates,
+                        research_run_id=research_run_id,
+                        data_version=data_version,
+                        data_snapshot_id=data_snapshot_id,
+                        data_context=data_context,
+                        strict_oos_audit_ref=audit_result.uri,
+                    )
+                    stored_metrics = build_recent_alpha_metrics(
+                        dict(candidate.discovery_metrics),
+                        recent_check,
+                        _final_oos_summary(oos, window_count),
+                        data_version=data_version,
+                        research_run_id=research_run_id,
+                        evaluated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                        recent_audit_ref=recent_audit.uri,
+                        strict_oos_audit_ref=audit_result.uri,
+                    )
+                    entry = add_factor(
+                        library,
+                        candidate.rpn,
+                        expression=" ".join(candidate.rpn),
+                        hypothesis=candidate.hypothesis,
+                        metrics=stored_metrics,
+                        universe=sorted(symbols) if len(symbols) <= 100 else [],
+                        horizon=horizon,
+                        llm_model=model_name,
+                        research_run_id=research_run_id,
+                        data_version=data_version,
+                        metrics_as_of=dates[-1] if dates else None,
+                        status=RECENT_ALPHA_STATUS,
+                        validation_stage=RECENT_ALPHA_STATUS,
+                    )
+                    entry["universe_size"] = len(symbols)
+                    entry["candidate_hash"] = candidate.candidate_hash
+                    entry["discovery_round"] = candidate.round_index
+                    entry["evaluated_index"] = candidate.evaluated_index
+                    entry["lookback"] = candidate.lookback
+                    if eval_window:
+                        entry["eval_window"] = eval_window
+                    recent_pending.append({"entry": entry, "recent_audit": recent_audit})
+                    diagnostics["recent_candidate_count"] += 1
+                    continue
                 rejected.append({
                     "rpn": candidate.rpn,
                     "reason": "OOS未通过",
@@ -572,15 +683,8 @@ class FactorMiner:
                 data_context=data_context,
             )
             final_oos_summary = {
-                "method": oos.get("method"),
+                **_final_oos_summary(oos, window_count),
                 "passed": True,
-                "window_count": window_count,
-                "mean_rank_ic": oos.get("mean_rank_ic"),
-                "min_rank_ic": oos.get("min_rank_ic"),
-                "window_pass_ratio": oos.get("window_pass_ratio"),
-                "positive_window_ratio": oos.get("positive_window_ratio"),
-                "oos_excess_return": oos.get("oos_excess_return"),
-                "withheld": True,
             }
             stored_metrics = build_research_metrics(
                 dict(candidate.discovery_metrics),
@@ -611,7 +715,79 @@ class FactorMiner:
             if eval_window:
                 entry["eval_window"] = eval_window
             accepted_pending.append({"entry": entry, "oos_audit": audit_result})
-        if accepted_pending:
+        for candidate in recent_discovery_candidates or []:
+            if lease_guard:
+                lease_guard()
+            recent_check = candidate.recent_check or self._run_recent_alpha_check(
+                candidate.full_values,
+                closes,
+                horizon=horizon,
+                dates=dates,
+            )
+            if not recent_check.get("passed"):
+                rejected.append({
+                    "rpn": candidate.rpn,
+                    "reason": "RECENT未通过",
+                    "candidate_hash": candidate.candidate_hash,
+                    "metrics": candidate.discovery_metrics,
+                    "recent_alpha": recent_check,
+                })
+                continue
+            strict_oos_summary = {
+                "method": "purged_walkforward",
+                "passed": False,
+                "window_count": 0,
+                "withheld": True,
+                "warning": "STRICT_DISCOVERY_NOT_PASSED",
+            }
+            recent_audit = self._write_recent_alpha_audit(
+                candidate=candidate,
+                recent_check=recent_check,
+                strict_oos=strict_oos_summary,
+                split=split,
+                horizon=horizon,
+                symbols=symbols,
+                dates=dates,
+                research_run_id=research_run_id,
+                data_version=data_version,
+                data_snapshot_id=data_snapshot_id,
+                data_context=data_context,
+            )
+            stored_metrics = build_recent_alpha_metrics(
+                dict(candidate.discovery_metrics),
+                recent_check,
+                strict_oos_summary,
+                data_version=data_version,
+                research_run_id=research_run_id,
+                evaluated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                recent_audit_ref=recent_audit.uri,
+                strict_oos_audit_ref=None,
+            )
+            entry = add_factor(
+                library,
+                candidate.rpn,
+                expression=" ".join(candidate.rpn),
+                hypothesis=candidate.hypothesis,
+                metrics=stored_metrics,
+                universe=sorted(symbols) if len(symbols) <= 100 else [],
+                horizon=horizon,
+                llm_model=model_name,
+                research_run_id=research_run_id,
+                data_version=data_version,
+                metrics_as_of=dates[-1] if dates else None,
+                status=RECENT_ALPHA_STATUS,
+                validation_stage=RECENT_ALPHA_STATUS,
+            )
+            entry["universe_size"] = len(symbols)
+            entry["candidate_hash"] = candidate.candidate_hash
+            entry["discovery_round"] = candidate.round_index
+            entry["evaluated_index"] = candidate.evaluated_index
+            entry["lookback"] = candidate.lookback
+            if eval_window:
+                entry["eval_window"] = eval_window
+            recent_pending.append({"entry": entry, "recent_audit": recent_audit})
+            diagnostics["recent_candidate_count"] += 1
+        if accepted_pending or recent_pending:
             if lease_guard:
                 lease_guard()
             merge_result = save_library(library, self.library_path, lease_guard=lease_guard)
@@ -635,7 +811,24 @@ class FactorMiner:
                         "data_snapshot_id": data_snapshot_id,
                     }
                 )
-        return accepted, rejected, diagnostics
+            for pending in recent_pending:
+                entry = pending["entry"]
+                persisted = by_hash.get(str(entry.get("candidate_hash"))) or entry
+                recent_candidates.append(persisted)
+                recent_audit = pending["recent_audit"]
+                append_oos_audit(
+                    {
+                        "event": "FACTOR_ID_ASSIGNED",
+                        "research_run_id": research_run_id,
+                        "candidate_hash": persisted.get("candidate_hash"),
+                        "factor_id": persisted.get("id"),
+                        "parent_audit_record_id": recent_audit.record_id,
+                        "parent_audit_uri": recent_audit.uri,
+                        "data_version": data_version,
+                        "data_snapshot_id": data_snapshot_id,
+                    }
+                )
+        return accepted, recent_candidates, rejected, diagnostics
 
     def _write_oos_audit(
         self,
@@ -661,6 +854,121 @@ class FactorMiner:
                 "hypothesis": candidate.hypothesis,
                 "discovery_metrics": candidate.discovery_metrics,
                 "final_oos": oos,
+                "split": split.diagnostics(horizon, candidate.full_values.shape[1]),
+                "date_ranges": _date_ranges(split, horizon, dates),
+                "universe_size": len(symbols),
+                "universe_hash": _universe_hash(symbols),
+                "data_version": data_version,
+                "data_snapshot_id": data_snapshot_id,
+                "data_context": data_context or {},
+                "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
+            }
+        )
+
+    def _run_recent_alpha_check(
+        self,
+        factor_panel: np.ndarray,
+        closes: np.ndarray,
+        *,
+        horizon: int,
+        dates: list[str] | None,
+    ) -> dict:
+        config = get_research_config().recent_alpha
+        if not config.enabled:
+            return {"method": "recent_holdout", "passed": False, "warning": "RECENT_ALPHA_DISABLED"}
+        n_days = factor_panel.shape[1]
+        latest_evaluable = max(0, n_days - horizon)
+        test_end = max(0, latest_evaluable - max(int(config.buffer_days), 0))
+        test_start = max(0, test_end - int(config.test_days))
+        buffer_start = max(0, test_start - max(int(config.buffer_days), 0))
+        train_end = buffer_start
+        train_start = max(0, train_end - int(config.train_days))
+        total_start = max(0, test_end - int(config.total_days))
+        if (
+            train_end <= train_start
+            or test_end <= test_start
+            or test_end - test_start < int(config.test_days)
+        ):
+            return {
+                "method": "recent_holdout",
+                "passed": False,
+                "warning": "RECENT_ALPHA_TEST_WINDOW_UNAVAILABLE",
+                "ranges": _recent_ranges(train_start, train_end, buffer_start, test_start, test_end, total_start, dates),
+            }
+        thresholds = EvaluationConfig(
+            horizon_days=horizon,
+            min_coverage=config.min_coverage,
+            min_rank_ic=config.min_rank_ic,
+            min_icir=config.min_icir,
+            min_topk_excess_annual_return=config.min_topk_excess_annual_return,
+        )
+        train_metrics = fitness_mod.evaluate_factor_range(
+            factor_panel,
+            closes,
+            eval_start=train_start,
+            eval_end=train_end,
+            horizon=horizon,
+            thresholds=thresholds,
+        )
+        test_metrics = fitness_mod.evaluate_factor_range(
+            factor_panel,
+            closes,
+            eval_start=test_start,
+            eval_end=test_end,
+            horizon=horizon,
+            thresholds=thresholds,
+        )
+        rank_ic = float(test_metrics.get("rank_ic") or 0.0)
+        excess = float(test_metrics.get("topk_excess_annual_return") or 0.0)
+        passed = (
+            bool(train_metrics.get("passed"))
+            and bool(test_metrics.get("passed"))
+            and rank_ic >= config.min_recent_test_rank_ic
+            and excess > config.min_recent_test_excess_return
+        )
+        recent_fitness = 5.0 * rank_ic + 0.5 * float(test_metrics.get("icir") or 0.0) + excess
+        return {
+            **test_metrics,
+            "method": "recent_holdout",
+            "passed": passed,
+            "train_days": int(config.train_days),
+            "test_days": test_end - test_start,
+            "buffer_days": int(config.buffer_days),
+            "total_days": int(config.total_days),
+            "ranges": _recent_ranges(train_start, train_end, buffer_start, test_start, test_end, total_start, dates),
+            "train_metrics": train_metrics,
+            "test_metrics": test_metrics,
+            "recent_fitness": round(recent_fitness, 4),
+        }
+
+    def _write_recent_alpha_audit(
+        self,
+        *,
+        candidate: DiscoveryCandidate,
+        recent_check: dict,
+        strict_oos: dict,
+        split: FactorResearchSplit,
+        horizon: int,
+        symbols: list[str],
+        dates: list[str] | None,
+        research_run_id: str,
+        data_version: str | None = None,
+        data_snapshot_id: str | None = None,
+        data_context: dict | None = None,
+        strict_oos_audit_ref: str | None = None,
+    ) -> AuditWriteResult:
+        return append_oos_audit(
+            {
+                "event": "RECENT_ALPHA_EVALUATED",
+                "factor_id": None,
+                "research_run_id": research_run_id,
+                "candidate_hash": candidate.candidate_hash,
+                "rpn": candidate.rpn,
+                "hypothesis": candidate.hypothesis,
+                "discovery_metrics": candidate.discovery_metrics,
+                "recent_alpha": recent_check,
+                "strict_final_oos": strict_oos,
+                "strict_final_oos_audit_ref": strict_oos_audit_ref,
                 "split": split.diagnostics(horizon, candidate.full_values.shape[1]),
                 "date_ranges": _date_ranges(split, horizon, dates),
                 "universe_size": len(symbols),
@@ -707,8 +1015,57 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
     return {key: value for key, value in (metrics or {}).items() if key not in blocked}
 
 
+def _prompt_safe_recent(recent: dict) -> dict:
+    return {
+        "passed": recent.get("passed"),
+        "rank_ic": recent.get("rank_ic"),
+        "icir": recent.get("icir"),
+        "topk_excess_annual_return": recent.get("topk_excess_annual_return"),
+        "recent_fitness": recent.get("recent_fitness"),
+        "test_range": (recent.get("ranges") or {}).get("test"),
+    }
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _candidate_hash(rpn: list[str]) -> str:
     return sha256(json.dumps(list(rpn), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _final_oos_summary(oos: dict, window_count: int) -> dict:
+    return {
+        "method": oos.get("method"),
+        "passed": bool(oos.get("passed")),
+        "window_count": window_count,
+        "mean_rank_ic": oos.get("mean_rank_ic"),
+        "min_rank_ic": oos.get("min_rank_ic"),
+        "window_pass_ratio": oos.get("window_pass_ratio"),
+        "positive_window_ratio": oos.get("positive_window_ratio"),
+        "oos_excess_return": oos.get("oos_excess_return"),
+        "withheld": True,
+    }
+
+
+def _has_valid_stack_shape(rpn: list[str]) -> bool:
+    """Fast arity check before expensive VM/evaluation work."""
+    stack_depth = 0
+    for token in rpn:
+        if token in FEATURES:
+            stack_depth += 1
+            continue
+        op = get_op(token)
+        if op is None:
+            return False
+        _, arity = op
+        if stack_depth < arity:
+            return False
+        stack_depth = stack_depth - arity + 1
+    return stack_depth == 1
 
 
 def _universe_hash(symbols: list[str]) -> str:
@@ -731,4 +1088,34 @@ def _date_ranges(split: FactorResearchSplit, horizon: int, dates: list[str] | No
         "discovery": rng(split.discovery_start, split.discovery_end),
         "final_oos": rng(split.final_oos_start, split.final_oos_end),
         "future_return_observation": rng(split.final_oos_end, min(len(dates), split.final_oos_end + horizon)),
+    }
+
+
+def _recent_ranges(
+    train_start: int,
+    train_end: int,
+    buffer_start: int,
+    test_start: int,
+    test_end: int,
+    total_start: int,
+    dates: list[str] | None,
+) -> dict:
+    if not dates:
+        return {
+            "recent_total": (total_start, test_end),
+            "train": (train_start, train_end),
+            "buffer": (buffer_start, test_start),
+            "test": (test_start, test_end),
+        }
+
+    def rng(start: int, end: int) -> tuple[str | None, str | None]:
+        if end <= start or start >= len(dates):
+            return (None, None)
+        return (str(dates[start]), str(dates[min(end - 1, len(dates) - 1)]))
+
+    return {
+        "recent_total": rng(total_start, test_end),
+        "train": rng(train_start, train_end),
+        "buffer": rng(buffer_start, test_start),
+        "test": rng(test_start, test_end),
     }

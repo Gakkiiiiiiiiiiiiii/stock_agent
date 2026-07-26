@@ -245,7 +245,7 @@ def test_vm_max_tokens_16():
 def test_seed_alpha191_executable():
     data = yaml.safe_load(SEED_PATH.read_text(encoding="utf-8"))
     seeds = data["seeds"]
-    assert 8 <= len(seeds) <= 12
+    assert 30 <= len(seeds) <= 50
     vm = StackVM()
     features = _vm_features()
     for seed in seeds:

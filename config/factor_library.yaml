@@ -65,6 +65,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F002
   rpn:
   - turnover
@@ -128,6 +129,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F003
   rpn:
   - ret
@@ -155,6 +157,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F004
   rpn:
   - close
@@ -186,6 +189,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F005
   rpn:
   - close
@@ -217,6 +221,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F006
   rpn:
   - amount
@@ -247,6 +252,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F007
   rpn:
   - amount
@@ -281,6 +287,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F008
   rpn:
   - high
@@ -311,6 +318,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F009
   rpn:
   - amount
@@ -341,6 +349,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F010
   rpn:
   - open
@@ -373,6 +382,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F011
   rpn:
   - ret
@@ -402,6 +412,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F012
   rpn:
   - open
@@ -434,6 +445,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F013
   rpn:
   - ret
@@ -463,6 +475,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F014
   rpn:
   - ret
@@ -493,6 +506,7 @@ factors:
   data_window:
     start: '2025-07-08'
     end: '2026-07-17'
+  validation_stage: OOS_PASS
 - id: F015
   rpn:
   - high
@@ -520,6 +534,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 250
+  validation_stage: OOS_PASS
 - id: F016
   rpn:
   - high
@@ -549,6 +564,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 250
+  validation_stage: OOS_PASS
 - id: F017
   rpn:
   - amount
@@ -577,6 +593,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 60
+  validation_stage: OOS_PASS
 - id: F018
   rpn:
   - volume
@@ -603,6 +620,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 60
+  validation_stage: OOS_PASS
 - id: F019
   rpn:
   - high
@@ -629,6 +647,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F020
   rpn:
   - ret
@@ -655,6 +674,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F021
   rpn:
   - ret
@@ -682,6 +702,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F022
   rpn:
   - vwap
@@ -705,6 +726,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F023
   rpn:
   - volume
@@ -731,6 +753,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F024
   rpn:
   - volume
@@ -757,6 +780,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F025
   rpn:
   - close
@@ -785,6 +809,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F026
   rpn:
   - close
@@ -812,6 +837,7 @@ factors:
   status: LEGACY_UNVERIFIED
   universe_size: 1000
   eval_window: 20
+  validation_stage: OOS_PASS
 - id: F027
   rpn:
   - close
@@ -838,6 +864,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F028
   rpn:
   - close
@@ -868,6 +895,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F029
   rpn:
   - close
@@ -898,6 +926,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F030
   rpn:
   - close
@@ -923,6 +952,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F031
   rpn:
   - high
@@ -951,6 +981,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F032
   rpn:
   - high
@@ -977,6 +1008,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F033
   rpn:
   - ret
@@ -1003,6 +1035,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F034
   rpn:
   - high
@@ -1034,6 +1067,7 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
+  validation_stage: OOS_PASS
 - id: F035
   rpn:
   - ret
@@ -1063,4 +1097,896 @@ factors:
   llm_model: ''
   status: LEGACY_UNVERIFIED
   universe_size: 4208
-
+  validation_stage: OOS_PASS
+- id: F036
+  rpn:
+  - high
+  - low
+  - div
+  - ts_std_5
+  - neg
+  - cs_rank
+  expression: high low div ts_std_5 neg cs_rank
+  hypothesis: 近5日日内振幅波动率越低的股票，风险释放越充分或关注度低，未来短期收益越好（低振幅波动溢价）
+  metrics:
+    rank_ic: 0.0746
+    ic_mean: 0.0132
+    icir: 0.6427
+    topk_annual_return: 0.4911
+    benchmark_annual_return: 0.3991
+    topk_excess_annual_return: 0.0921
+    topk_max_drawdown: 0.0947
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 0.7864
+    top_k: 10
+    passed: true
+    raw_rank_ic: 0.0746
+    raw_topk_excess_annual_return: 0.0921
+    neutralization_status: NOT_AVAILABLE
+    neutralized_rank_ic: null
+    neutralized_topk_excess_annual_return: null
+    neutralized_topk_excess_return: null
+    final_oos_summary:
+      method: purged_walkforward
+      passed: true
+      window_count: 3
+      mean_rank_ic: 0.078733
+      min_rank_ic: 0.0077
+      window_pass_ratio: 0.666667
+      positive_window_ratio: 1.0
+      oos_excess_return: 0.307633
+      withheld: true
+    final_oos_audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T143152Z-519380e7:b214a956000ad0957a58a95cf3f30a7c54b918ca28b1bb7ef9a68abf8c243749:FINAL_OOS_EVALUATED:5025949785a442ae9fa4ea32b6e38528
+    research_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research_run_id: factor-oos-20260726T143152Z-519380e7
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T14:31:53+00:00'
+    metrics_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research:
+      discovery:
+        rank_ic: 0.0746
+        ic_mean: 0.0132
+        icir: 0.6427
+        topk_annual_return: 0.4911
+        benchmark_annual_return: 0.3991
+        topk_excess_annual_return: 0.0921
+        topk_max_drawdown: 0.0947
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 0.7864
+        top_k: 10
+        passed: true
+        raw_rank_ic: 0.0746
+        raw_topk_excess_annual_return: 0.0921
+        neutralization_status: NOT_AVAILABLE
+        neutralized_rank_ic: null
+        neutralized_topk_excess_annual_return: null
+        neutralized_topk_excess_return: null
+        evaluated_at: '2026-07-26T14:31:53+00:00'
+        data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+        research_run_id: factor-oos-20260726T143152Z-519380e7
+      final_oos:
+        method: purged_walkforward
+        passed: true
+        window_count: 3
+        mean_rank_ic: 0.078733
+        min_rank_ic: 0.0077
+        window_pass_ratio: 0.666667
+        positive_window_ratio: 1.0
+        oos_excess_return: 0.307633
+        withheld: true
+        audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T143152Z-519380e7:b214a956000ad0957a58a95cf3f30a7c54b918ca28b1bb7ef9a68abf8c243749:FINAL_OOS_EVALUATED:5025949785a442ae9fa4ea32b6e38528
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-26T14:31:53+00:00'
+  llm_model: ''
+  status: OOS_PASS
+  validation_stage: OOS_PASS
+  research_run_id: factor-oos-20260726T143152Z-519380e7
+  first_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+  universe_size: 1000
+  candidate_hash: b214a956000ad0957a58a95cf3f30a7c54b918ca28b1bb7ef9a68abf8c243749
+  discovery_round: 5
+  evaluated_index: 32
+  lookback: 5
+- id: F037
+  rpn:
+  - close
+  - volume
+  - ts_cov_5
+  - close
+  - volume
+  - ts_cov_20
+  - div
+  - neg
+  - cs_rank
+  expression: close volume ts_cov_5 close volume ts_cov_20 div neg cs_rank
+  hypothesis: 量价协方差短长比反转：短期量价同步性相对长期明显放大时，拥挤交易倾向反转
+  metrics:
+    rank_ic: 0.0402
+    ic_mean: 0.0147
+    icir: 0.6434
+    topk_annual_return: 0.4927
+    benchmark_annual_return: 0.3996
+    topk_excess_annual_return: 0.0931
+    topk_max_drawdown: 0.1032
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 0.6156
+    top_k: 10
+    passed: true
+    raw_rank_ic: 0.0402
+    raw_topk_excess_annual_return: 0.0931
+    neutralization_status: NOT_AVAILABLE
+    neutralized_rank_ic: null
+    neutralized_topk_excess_annual_return: null
+    neutralized_topk_excess_return: null
+    recent_alpha_summary:
+      rank_ic: 0.0213
+      ic_mean: 0.0087
+      icir: 0.4071
+      topk_annual_return: -0.8029
+      benchmark_annual_return: -1.0158
+      topk_excess_annual_return: 0.213
+      topk_max_drawdown: 0.1292
+      coverage: 1.0
+      evaluated_days: 40
+      valid_ic_days: 40
+      fitness: 0.5229
+      top_k: 10
+      passed: true
+      method: recent_holdout
+      train_days: 120
+      test_days: 40
+      buffer_days: 5
+      total_days: 180
+      ranges:
+        recent_total:
+        - '2025-10-15'
+        - '2026-07-10'
+        train:
+        - '2025-11-05'
+        - '2026-05-07'
+        buffer:
+        - '2026-05-08'
+        - '2026-05-14'
+        test:
+        - '2026-05-15'
+        - '2026-07-10'
+      train_metrics:
+        rank_ic: 0.0272
+        ic_mean: 0.0114
+        icir: 0.4575
+        topk_annual_return: 0.4801
+        benchmark_annual_return: 0.3243
+        topk_excess_annual_return: 0.1558
+        topk_max_drawdown: 0.1067
+        coverage: 1.0
+        evaluated_days: 120
+        valid_ic_days: 120
+        fitness: 0.5205
+        top_k: 10
+        passed: true
+      test_metrics:
+        rank_ic: 0.0213
+        ic_mean: 0.0087
+        icir: 0.4071
+        topk_annual_return: -0.8029
+        benchmark_annual_return: -1.0158
+        topk_excess_annual_return: 0.213
+        topk_max_drawdown: 0.1292
+        coverage: 1.0
+        evaluated_days: 40
+        valid_ic_days: 40
+        fitness: 0.5229
+        top_k: 10
+        passed: true
+      recent_fitness: 0.5231
+    recent_alpha_audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:d82ad31812385108cbd448191da3d86ff6750503201afd04cf7bbc05d25c66eb:RECENT_ALPHA_EVALUATED:a0dfdca304f042e3878f54e96304acf9
+    final_oos_summary:
+      method: purged_walkforward
+      passed: false
+      window_count: 3
+      mean_rank_ic: 0.0141
+      min_rank_ic: 0.0111
+      window_pass_ratio: 0.0
+      positive_window_ratio: 1.0
+      oos_excess_return: 0.1
+      withheld: true
+    final_oos_audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:d82ad31812385108cbd448191da3d86ff6750503201afd04cf7bbc05d25c66eb:FINAL_OOS_EVALUATED:e96f7529082b4df79890c6066507e6e9
+    recent_fitness: 0.5231
+    research_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research_run_id: factor-oos-20260726T160927Z-d82f1275
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:09:27+00:00'
+    metrics_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research:
+      discovery:
+        rank_ic: 0.0402
+        ic_mean: 0.0147
+        icir: 0.6434
+        topk_annual_return: 0.4927
+        benchmark_annual_return: 0.3996
+        topk_excess_annual_return: 0.0931
+        topk_max_drawdown: 0.1032
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 0.6156
+        top_k: 10
+        passed: true
+        raw_rank_ic: 0.0402
+        raw_topk_excess_annual_return: 0.0931
+        neutralization_status: NOT_AVAILABLE
+        neutralized_rank_ic: null
+        neutralized_topk_excess_annual_return: null
+        neutralized_topk_excess_return: null
+        evaluated_at: '2026-07-26T16:09:27+00:00'
+        data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+        research_run_id: factor-oos-20260726T160927Z-d82f1275
+      recent_alpha:
+        rank_ic: 0.0213
+        ic_mean: 0.0087
+        icir: 0.4071
+        topk_annual_return: -0.8029
+        benchmark_annual_return: -1.0158
+        topk_excess_annual_return: 0.213
+        topk_max_drawdown: 0.1292
+        coverage: 1.0
+        evaluated_days: 40
+        valid_ic_days: 40
+        fitness: 0.5229
+        top_k: 10
+        passed: true
+        method: recent_holdout
+        train_days: 120
+        test_days: 40
+        buffer_days: 5
+        total_days: 180
+        ranges:
+          recent_total:
+          - '2025-10-15'
+          - '2026-07-10'
+          train:
+          - '2025-11-05'
+          - '2026-05-07'
+          buffer:
+          - '2026-05-08'
+          - '2026-05-14'
+          test:
+          - '2026-05-15'
+          - '2026-07-10'
+        train_metrics:
+          rank_ic: 0.0272
+          ic_mean: 0.0114
+          icir: 0.4575
+          topk_annual_return: 0.4801
+          benchmark_annual_return: 0.3243
+          topk_excess_annual_return: 0.1558
+          topk_max_drawdown: 0.1067
+          coverage: 1.0
+          evaluated_days: 120
+          valid_ic_days: 120
+          fitness: 0.5205
+          top_k: 10
+          passed: true
+        test_metrics:
+          rank_ic: 0.0213
+          ic_mean: 0.0087
+          icir: 0.4071
+          topk_annual_return: -0.8029
+          benchmark_annual_return: -1.0158
+          topk_excess_annual_return: 0.213
+          topk_max_drawdown: 0.1292
+          coverage: 1.0
+          evaluated_days: 40
+          valid_ic_days: 40
+          fitness: 0.5229
+          top_k: 10
+          passed: true
+        recent_fitness: 0.5231
+        audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:d82ad31812385108cbd448191da3d86ff6750503201afd04cf7bbc05d25c66eb:RECENT_ALPHA_EVALUATED:a0dfdca304f042e3878f54e96304acf9
+      final_oos:
+        method: purged_walkforward
+        passed: false
+        window_count: 3
+        mean_rank_ic: 0.0141
+        min_rank_ic: 0.0111
+        window_pass_ratio: 0.0
+        positive_window_ratio: 1.0
+        oos_excess_return: 0.1
+        withheld: true
+        audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:d82ad31812385108cbd448191da3d86ff6750503201afd04cf7bbc05d25c66eb:FINAL_OOS_EVALUATED:e96f7529082b4df79890c6066507e6e9
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-26T16:09:27+00:00'
+  llm_model: ''
+  status: RECENT_ALPHA
+  validation_stage: RECENT_ALPHA
+  research_run_id: factor-oos-20260726T160927Z-d82f1275
+  first_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+  universe_size: 1000
+  candidate_hash: d82ad31812385108cbd448191da3d86ff6750503201afd04cf7bbc05d25c66eb
+  discovery_round: 1
+  evaluated_index: 2
+  lookback: 20
+- id: F038
+  rpn:
+  - close
+  - high
+  - ts_max_10
+  - sub
+  - amount
+  - ts_mean_5
+  - mul
+  - cs_rank
+  expression: close high ts_max_10 sub amount ts_mean_5 mul cs_rank
+  hypothesis: 突破量能动量：收盘价突破10日最高价，且近期成交额较高，放量突破预示短期强势延续
+  metrics:
+    rank_ic: 0.0738
+    ic_mean: 0.0439
+    icir: 0.4385
+    topk_annual_return: 1.0394
+    benchmark_annual_return: 0.3991
+    topk_excess_annual_return: 0.6403
+    topk_max_drawdown: 0.2657
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 1.2285
+    top_k: 10
+    passed: true
+    raw_rank_ic: 0.0738
+    raw_topk_excess_annual_return: 0.6403
+    neutralization_status: NOT_AVAILABLE
+    neutralized_rank_ic: null
+    neutralized_topk_excess_annual_return: null
+    neutralized_topk_excess_return: null
+    final_oos_summary:
+      method: purged_walkforward
+      passed: true
+      window_count: 3
+      mean_rank_ic: 0.079633
+      min_rank_ic: 0.0237
+      window_pass_ratio: 0.666667
+      positive_window_ratio: 1.0
+      oos_excess_return: 0.9784
+      withheld: true
+    final_oos_audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:10453a0b443e1bd0f4c04fbf5de60755b53298c8f67ce34ec8d3327b1ae5e624:FINAL_OOS_EVALUATED:8bd1fa8872894bd28a19a40f7d60355d
+    research_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research_run_id: factor-oos-20260726T160927Z-d82f1275
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:09:27+00:00'
+    metrics_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research:
+      discovery:
+        rank_ic: 0.0738
+        ic_mean: 0.0439
+        icir: 0.4385
+        topk_annual_return: 1.0394
+        benchmark_annual_return: 0.3991
+        topk_excess_annual_return: 0.6403
+        topk_max_drawdown: 0.2657
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 1.2285
+        top_k: 10
+        passed: true
+        raw_rank_ic: 0.0738
+        raw_topk_excess_annual_return: 0.6403
+        neutralization_status: NOT_AVAILABLE
+        neutralized_rank_ic: null
+        neutralized_topk_excess_annual_return: null
+        neutralized_topk_excess_return: null
+        evaluated_at: '2026-07-26T16:09:27+00:00'
+        data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+        research_run_id: factor-oos-20260726T160927Z-d82f1275
+      final_oos:
+        method: purged_walkforward
+        passed: true
+        window_count: 3
+        mean_rank_ic: 0.079633
+        min_rank_ic: 0.0237
+        window_pass_ratio: 0.666667
+        positive_window_ratio: 1.0
+        oos_excess_return: 0.9784
+        withheld: true
+        audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:10453a0b443e1bd0f4c04fbf5de60755b53298c8f67ce34ec8d3327b1ae5e624:FINAL_OOS_EVALUATED:8bd1fa8872894bd28a19a40f7d60355d
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-26T16:09:27+00:00'
+  llm_model: ''
+  status: OOS_PASS
+  validation_stage: OOS_PASS
+  research_run_id: factor-oos-20260726T160927Z-d82f1275
+  first_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+  universe_size: 1000
+  candidate_hash: 10453a0b443e1bd0f4c04fbf5de60755b53298c8f67ce34ec8d3327b1ae5e624
+  discovery_round: 1
+  evaluated_index: 8
+  lookback: 10
+- id: F039
+  rpn:
+  - close
+  - volume
+  - ts_corr_10
+  - neg
+  - ret
+  - ts_std_20
+  - mul
+  - cs_rank
+  expression: close volume ts_corr_10 neg ret ts_std_20 mul cs_rank
+  hypothesis: 高波量价背离：高波动环境下量价负相关程度越高，未来短期超额收益越显著
+  metrics:
+    rank_ic: 0.0678
+    ic_mean: 0.0245
+    icir: 0.6109
+    topk_annual_return: 0.4297
+    benchmark_annual_return: 0.3227
+    topk_excess_annual_return: 0.107
+    topk_max_drawdown: 0.1143
+    coverage: 1.0
+    evaluated_days: 120
+    valid_ic_days: 120
+    fitness: 0.7515
+    top_k: 10
+    passed: true
+    strict_discovery:
+      rank_ic: 0.0985
+      ic_mean: 0.0392
+      icir: 0.8038
+      topk_annual_return: 0.3917
+      benchmark_annual_return: 0.3983
+      topk_excess_annual_return: -0.0066
+      topk_max_drawdown: 0.1691
+      coverage: 1.0
+      evaluated_days: 250
+      valid_ic_days: 250
+      fitness: 0.888
+      top_k: 10
+      passed: false
+      raw_rank_ic: 0.0985
+      raw_topk_excess_annual_return: -0.0066
+      neutralization_status: NOT_AVAILABLE
+      neutralized_rank_ic: null
+      neutralized_topk_excess_annual_return: null
+      neutralized_topk_excess_return: null
+    strict_discovery_passed: false
+    recent_discovery_passed: true
+    recent_alpha_summary:
+      rank_ic: 0.1057
+      ic_mean: 0.0537
+      icir: 0.841
+      topk_annual_return: -0.194
+      benchmark_annual_return: -1.0168
+      topk_excess_annual_return: 0.8228
+      topk_max_drawdown: 0.0929
+      coverage: 1.0
+      evaluated_days: 40
+      valid_ic_days: 40
+      fitness: 1.7716
+      top_k: 10
+      passed: true
+      method: recent_holdout
+      train_days: 120
+      test_days: 40
+      buffer_days: 5
+      total_days: 180
+      ranges:
+        recent_total:
+        - '2025-10-15'
+        - '2026-07-10'
+        train:
+        - '2025-11-05'
+        - '2026-05-07'
+        buffer:
+        - '2026-05-08'
+        - '2026-05-14'
+        test:
+        - '2026-05-15'
+        - '2026-07-10'
+      train_metrics:
+        rank_ic: 0.0678
+        ic_mean: 0.0245
+        icir: 0.6109
+        topk_annual_return: 0.4297
+        benchmark_annual_return: 0.3227
+        topk_excess_annual_return: 0.107
+        topk_max_drawdown: 0.1143
+        coverage: 1.0
+        evaluated_days: 120
+        valid_ic_days: 120
+        fitness: 0.7515
+        top_k: 10
+        passed: true
+      test_metrics:
+        rank_ic: 0.1057
+        ic_mean: 0.0537
+        icir: 0.841
+        topk_annual_return: -0.194
+        benchmark_annual_return: -1.0168
+        topk_excess_annual_return: 0.8228
+        topk_max_drawdown: 0.0929
+        coverage: 1.0
+        evaluated_days: 40
+        valid_ic_days: 40
+        fitness: 1.7716
+        top_k: 10
+        passed: true
+      recent_fitness: 1.7718
+    recent_alpha_audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:18c0874b73c4fa85dbbdc5536eea7d05ac314a46a93e95f95aa8d7f2f93f1112:RECENT_ALPHA_EVALUATED:538364806eac4840bdd5dda67a6637e8
+    final_oos_summary:
+      method: purged_walkforward
+      passed: false
+      window_count: 0
+      withheld: true
+      warning: STRICT_DISCOVERY_NOT_PASSED
+    final_oos_audit_ref: null
+    recent_fitness: 1.7718
+    research_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research_run_id: factor-oos-20260726T160927Z-d82f1275
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:09:27+00:00'
+    metrics_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+    research:
+      discovery:
+        rank_ic: 0.0678
+        ic_mean: 0.0245
+        icir: 0.6109
+        topk_annual_return: 0.4297
+        benchmark_annual_return: 0.3227
+        topk_excess_annual_return: 0.107
+        topk_max_drawdown: 0.1143
+        coverage: 1.0
+        evaluated_days: 120
+        valid_ic_days: 120
+        fitness: 0.7515
+        top_k: 10
+        passed: true
+        strict_discovery:
+          rank_ic: 0.0985
+          ic_mean: 0.0392
+          icir: 0.8038
+          topk_annual_return: 0.3917
+          benchmark_annual_return: 0.3983
+          topk_excess_annual_return: -0.0066
+          topk_max_drawdown: 0.1691
+          coverage: 1.0
+          evaluated_days: 250
+          valid_ic_days: 250
+          fitness: 0.888
+          top_k: 10
+          passed: false
+          raw_rank_ic: 0.0985
+          raw_topk_excess_annual_return: -0.0066
+          neutralization_status: NOT_AVAILABLE
+          neutralized_rank_ic: null
+          neutralized_topk_excess_annual_return: null
+          neutralized_topk_excess_return: null
+        strict_discovery_passed: false
+        recent_discovery_passed: true
+        evaluated_at: '2026-07-26T16:09:27+00:00'
+        data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+        research_run_id: factor-oos-20260726T160927Z-d82f1275
+      recent_alpha:
+        rank_ic: 0.1057
+        ic_mean: 0.0537
+        icir: 0.841
+        topk_annual_return: -0.194
+        benchmark_annual_return: -1.0168
+        topk_excess_annual_return: 0.8228
+        topk_max_drawdown: 0.0929
+        coverage: 1.0
+        evaluated_days: 40
+        valid_ic_days: 40
+        fitness: 1.7716
+        top_k: 10
+        passed: true
+        method: recent_holdout
+        train_days: 120
+        test_days: 40
+        buffer_days: 5
+        total_days: 180
+        ranges:
+          recent_total:
+          - '2025-10-15'
+          - '2026-07-10'
+          train:
+          - '2025-11-05'
+          - '2026-05-07'
+          buffer:
+          - '2026-05-08'
+          - '2026-05-14'
+          test:
+          - '2026-05-15'
+          - '2026-07-10'
+        train_metrics:
+          rank_ic: 0.0678
+          ic_mean: 0.0245
+          icir: 0.6109
+          topk_annual_return: 0.4297
+          benchmark_annual_return: 0.3227
+          topk_excess_annual_return: 0.107
+          topk_max_drawdown: 0.1143
+          coverage: 1.0
+          evaluated_days: 120
+          valid_ic_days: 120
+          fitness: 0.7515
+          top_k: 10
+          passed: true
+        test_metrics:
+          rank_ic: 0.1057
+          ic_mean: 0.0537
+          icir: 0.841
+          topk_annual_return: -0.194
+          benchmark_annual_return: -1.0168
+          topk_excess_annual_return: 0.8228
+          topk_max_drawdown: 0.0929
+          coverage: 1.0
+          evaluated_days: 40
+          valid_ic_days: 40
+          fitness: 1.7716
+          top_k: 10
+          passed: true
+        recent_fitness: 1.7718
+        audit_ref: factor-oos://202607/factor_oos_20260726.jsonl#factor-oos-20260726T160927Z-d82f1275:18c0874b73c4fa85dbbdc5536eea7d05ac314a46a93e95f95aa8d7f2f93f1112:RECENT_ALPHA_EVALUATED:538364806eac4840bdd5dda67a6637e8
+      final_oos:
+        method: purged_walkforward
+        passed: false
+        window_count: 0
+        withheld: true
+        warning: STRICT_DISCOVERY_NOT_PASSED
+        audit_ref: null
+  universe: []
+  horizon: 5
+  discovered_at: '2026-07-26T16:09:27+00:00'
+  llm_model: ''
+  status: RECENT_ALPHA
+  validation_stage: RECENT_ALPHA
+  research_run_id: factor-oos-20260726T160927Z-d82f1275
+  first_data_version: d92ff3b42b54332f45cafdf2cee9cf3a6ed1ca2ac5ce2207947bd44a58bb7b4e
+  universe_size: 1000
+  candidate_hash: 18c0874b73c4fa85dbbdc5536eea7d05ac314a46a93e95f95aa8d7f2f93f1112
+  discovery_round: 5
+  evaluated_index: 35
+  lookback: 20
+- id: F040
+  rpn:
+  - close
+  - vwap
+  - div
+  - neg
+  - cs_rank
+  expression: close vwap div neg cs_rank
+  hypothesis: 20日持有期均价偏离反转：收盘价相对当日VWAP正偏离越小，尾盘不过热，未来20日收益更稳
+  metrics:
+    research:
+      discovery:
+        rank_ic: 0.0331
+        ic_mean: 0.0153
+        icir: 0.37
+        topk_annual_return: 1.0611
+        benchmark_annual_return: 0.5192
+        topk_excess_annual_return: 0.5419
+        topk_max_drawdown: 0.1082
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 0.8922
+        top_k: 42
+        passed: true
+        evaluated_at: '2026-07-26T16:56:35+00:00'
+        data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+        research_run_id: seed-20d-20260726T165635Z
+      final_oos:
+        method: purged_walkforward
+        passed: true
+        window_count: 3
+        mean_rank_ic: 0.0546
+        min_rank_ic: 0.0123
+        window_pass_ratio: 0.666667
+        positive_window_ratio: 1.0
+        oos_excess_return: 0.850267
+        withheld: true
+        audit_ref: null
+    monitoring: {}
+    rank_ic: 0.0331
+    ic_mean: 0.0153
+    icir: 0.37
+    topk_annual_return: 1.0611
+    benchmark_annual_return: 0.5192
+    topk_excess_annual_return: 0.5419
+    topk_max_drawdown: 0.1082
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 0.8922
+    top_k: 42
+    passed: true
+    final_oos_summary:
+      method: purged_walkforward
+      passed: true
+      window_count: 3
+      mean_rank_ic: 0.0546
+      min_rank_ic: 0.0123
+      window_pass_ratio: 0.666667
+      positive_window_ratio: 1.0
+      oos_excess_return: 0.850267
+      withheld: true
+    final_oos_audit_ref: null
+    research_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+    research_run_id: seed-20d-20260726T165635Z
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:56:35+00:00'
+    metrics_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe: []
+  horizon: 20
+  discovered_at: '2026-07-26T16:56:35+00:00'
+  llm_model: deterministic_seed_screen
+  status: OOS_PASS
+  validation_stage: OOS_PASS
+  research_run_id: seed-20d-20260726T165635Z
+  first_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe_size: 4208
+  seed_name: vwap_deviation_20d_oos
+- id: F041
+  rpn:
+  - turnover
+  - ts_mean_20
+  - neg
+  - cs_rank
+  expression: turnover ts_mean_20 neg cs_rank
+  hypothesis: 20日持有期低换手溢价：20日均换手率越低，关注度低且筹码稳定，未来20日收益更好
+  metrics:
+    research:
+      discovery:
+        rank_ic: 0.0202
+        ic_mean: 0.0189
+        icir: 0.3077
+        topk_annual_return: 0.5395
+        benchmark_annual_return: 0.5213
+        topk_excess_annual_return: 0.0182
+        topk_max_drawdown: 0.1369
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 0.2733
+        top_k: 42
+        passed: true
+        evaluated_at: '2026-07-26T16:56:35+00:00'
+        data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+        research_run_id: seed-20d-20260726T165635Z
+      final_oos:
+        method: purged_walkforward
+        passed: true
+        window_count: 3
+        mean_rank_ic: 0.056167
+        min_rank_ic: -0.0092
+        window_pass_ratio: 0.666667
+        positive_window_ratio: 0.666667
+        oos_excess_return: 0.3896
+        withheld: true
+        audit_ref: null
+    monitoring: {}
+    rank_ic: 0.0202
+    ic_mean: 0.0189
+    icir: 0.3077
+    topk_annual_return: 0.5395
+    benchmark_annual_return: 0.5213
+    topk_excess_annual_return: 0.0182
+    topk_max_drawdown: 0.1369
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 0.2733
+    top_k: 42
+    passed: true
+    final_oos_summary:
+      method: purged_walkforward
+      passed: true
+      window_count: 3
+      mean_rank_ic: 0.056167
+      min_rank_ic: -0.0092
+      window_pass_ratio: 0.666667
+      positive_window_ratio: 0.666667
+      oos_excess_return: 0.3896
+      withheld: true
+    final_oos_audit_ref: null
+    research_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+    research_run_id: seed-20d-20260726T165635Z
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:56:35+00:00'
+    metrics_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe: []
+  horizon: 20
+  discovered_at: '2026-07-26T16:56:35+00:00'
+  llm_model: deterministic_seed_screen
+  status: OOS_PASS
+  validation_stage: OOS_PASS
+  research_run_id: seed-20d-20260726T165635Z
+  first_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe_size: 4208
+  seed_name: turnover_mean_20d_oos
+- id: F042
+  rpn:
+  - turnover
+  - ts_std_20
+  - neg
+  - cs_rank
+  expression: turnover ts_std_20 neg cs_rank
+  hypothesis: 20日持有期换手稳定：20日换手率波动越低，交易结构越稳定，未来20日收益更好
+  metrics:
+    research:
+      discovery:
+        rank_ic: 0.0202
+        ic_mean: 0.0189
+        icir: 0.3077
+        topk_annual_return: 0.5395
+        benchmark_annual_return: 0.5213
+        topk_excess_annual_return: 0.0182
+        topk_max_drawdown: 0.1369
+        coverage: 1.0
+        evaluated_days: 250
+        valid_ic_days: 250
+        fitness: 0.2733
+        top_k: 42
+        passed: true
+        evaluated_at: '2026-07-26T16:56:36+00:00'
+        data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+        research_run_id: seed-20d-20260726T165636Z
+      final_oos:
+        method: purged_walkforward
+        passed: true
+        window_count: 3
+        mean_rank_ic: 0.056167
+        min_rank_ic: -0.0092
+        window_pass_ratio: 0.666667
+        positive_window_ratio: 0.666667
+        oos_excess_return: 0.3896
+        withheld: true
+        audit_ref: null
+    monitoring: {}
+    rank_ic: 0.0202
+    ic_mean: 0.0189
+    icir: 0.3077
+    topk_annual_return: 0.5395
+    benchmark_annual_return: 0.5213
+    topk_excess_annual_return: 0.0182
+    topk_max_drawdown: 0.1369
+    coverage: 1.0
+    evaluated_days: 250
+    valid_ic_days: 250
+    fitness: 0.2733
+    top_k: 42
+    passed: true
+    final_oos_summary:
+      method: purged_walkforward
+      passed: true
+      window_count: 3
+      mean_rank_ic: 0.056167
+      min_rank_ic: -0.0092
+      window_pass_ratio: 0.666667
+      positive_window_ratio: 0.666667
+      oos_excess_return: 0.3896
+      withheld: true
+    final_oos_audit_ref: null
+    research_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+    research_run_id: seed-20d-20260726T165636Z
+    metrics_as_of: '2026-07-24'
+    metrics_updated_at: '2026-07-26T16:56:36+00:00'
+    metrics_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe: []
+  horizon: 20
+  discovered_at: '2026-07-26T16:56:36+00:00'
+  llm_model: deterministic_seed_screen
+  status: OOS_PASS
+  validation_stage: OOS_PASS
+  research_run_id: seed-20d-20260726T165636Z
+  first_data_version: e4f50c9e136235cae8574c2b216662a4ed115a2cd7dc901eceb42b28f7fc95bf
+  universe_size: 4208
+  seed_name: turnover_volatility_20d_oos

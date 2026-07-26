@@ -6,11 +6,24 @@ data_split:
   final_oos_withheld_from_prompt: true
 
 evaluation:
-  horizon_days: 5
+  horizon_days: 20
   min_coverage: 0.6
   min_rank_ic: 0.02
   min_icir: 0.3
   min_topk_excess_annual_return: 0.0
+
+recent_alpha:
+  enabled: true
+  total_days: 180
+  train_days: 120
+  test_days: 40
+  buffer_days: 5
+  min_coverage: 0.6
+  min_rank_ic: 0.02
+  min_icir: 0.25
+  min_topk_excess_annual_return: 0.0
+  min_recent_test_rank_ic: 0.02
+  min_recent_test_excess_return: 0.0
 
 purged_walkforward:
   n_windows: 3

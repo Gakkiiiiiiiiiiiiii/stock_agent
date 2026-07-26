@@ -46,6 +46,22 @@ def test_scan_alpha_factors_empty_library(monkeypatch):
     assert result["warning"]
 
 
+def test_list_recent_alpha_candidates(monkeypatch):
+    monkeypatch.setattr(
+        factor_mining_server,
+        "load_library",
+        lambda path=None: {
+            "factors": [
+                {"id": "F001", "status": "ACTIVE", "metrics": {"fitness": 1.0}},
+                {"id": "F002", "status": "RECENT_ALPHA", "metrics": {"recent_fitness": 2.0}},
+            ]
+        },
+    )
+    result = factor_mining_server.list_recent_alpha_candidates()
+    assert result["count"] == 1
+    assert result["factors"][0]["id"] == "F002"
+
+
 def test_scan_alpha_factors_skips_nan_symbols(monkeypatch):
     symbols = ["600000.SH", "600001.SH", "600002.SH"]
     panel, dates, syms, warn = _panel(symbols)

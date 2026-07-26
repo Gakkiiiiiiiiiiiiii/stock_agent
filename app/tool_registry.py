@@ -460,6 +460,17 @@ class ClaudeToolRegistry:
                 },
                 lambda payload: factor_mining_server.list_factor_library(**payload),
             ),
+            "list_recent_alpha_candidates": (
+                {
+                    "name": "list_recent_alpha_candidates",
+                    "description": "List RECENT_ALPHA candidates that passed recent holdout but are not active factors.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"limit": {"type": "integer"}},
+                    },
+                },
+                lambda payload: factor_mining_server.list_recent_alpha_candidates(**payload),
+            ),
             "evaluate_factor": (
                 {
                     "name": "evaluate_factor",
@@ -587,7 +598,7 @@ class ClaudeToolRegistry:
             "detect_pattern_signal", "scan_stock_signals", "search_theme_logic", "retrieve_relevant_context",
             "get_theme_related_stocks", "evaluate_theme_trigger", "rank_themes_by_score", "get_market_regime",
             "route_strategy", "adjust_signal", "evaluate_portfolio_risk", "ask_research_model",
-            "get_video_summary", "search_video_insights", "list_factor_library",
+            "get_video_summary", "search_video_insights", "list_factor_library", "list_recent_alpha_candidates",
         )}
         policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
         policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})
