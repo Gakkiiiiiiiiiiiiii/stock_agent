@@ -399,3 +399,11 @@ def test_three_state_risk_warning_not_forced_false():
     day = date(2026, 7, 3)
     quote = {"name": "ST测试"}
     assert limit_up_price(10.0, "600000.SH", is_st=None, trade_date=day, quote=quote) == pytest.approx(10.5)
+
+
+@pytest.mark.parametrize("value", [-1, -5, -10, -0.1])
+def test_negative_quote_limit_rate_is_rejected(value):
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": value}
+    with pytest.raises(ValueError, match="non_positive"):
+        limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote)

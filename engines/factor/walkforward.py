@@ -14,12 +14,14 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 
 from engines.backtest.metrics import calc_portfolio_metrics
 from engines.backtest.portfolio_backtest import run_topk_backtest
 from engines.factor.alpha import compose_alpha_scores
+from engines.factor.data import build_panel_data_version
 from engines.factor.library import load_library, research_validated_factors
 from engines.factor.miner import FactorMiner
 
@@ -62,11 +64,17 @@ def run_walkforward(
     top_k: int | None = None,
     library_path: str | None = None,
     model_client=None,
+    data_version: str | None = None,
+    data_snapshot_id: str | None = None,
 ) -> dict:
     """执行 walk-forward 滚动重挖预检，返回净值/指标/分窗口明细。"""
     closes = panel.get("close")
     if closes is None or closes.size == 0 or not symbols:
         return _empty_result("特征面板为空，无法执行 walk-forward 预检")
+    if data_version is None:
+        data_version = build_panel_data_version(symbols, dates, panel, "walkforward", "none")
+    if data_snapshot_id is None:
+        data_snapshot_id = f"walkforward-{uuid4().hex[:12]}"
     n_days = closes.shape[1]
     points = rebalance_points if rebalance_points is not None else default_rebalance_points(n_days)
     points = [t for t in points if 0 <= t < n_days - 1]
@@ -101,6 +109,9 @@ def run_walkforward(
             mining = miner.mine(
                 sub_panel, symbols,
                 rounds=rounds, candidates_per_round=candidates_per_round, horizon=horizon,
+                dates=list(dates[: t + 1]),
+                data_version=data_version,
+                data_snapshot_id=data_snapshot_id,
             )
             if mining.get("warning"):
                 warnings.append(f"{dates[t]}: {mining['warning']}")

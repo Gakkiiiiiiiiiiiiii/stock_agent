@@ -26,6 +26,7 @@ from engines.factor.research_split import FactorResearchSplit, build_research_sp
 from engines.factor.library import (
     active_factors,
     add_factor,
+    build_research_metrics,
     is_duplicate,
     load_library,
     research_validated_factors,
@@ -44,6 +45,7 @@ from engines.factor.vocab import (
     is_valid_token,
 )
 from engines.factor.vm import StackVM
+from engines.factor.versioning import is_known_version
 from financial_agent.research_config import EvaluationConfig, get_research_config
 from financial_agent.utils import project_root
 
@@ -254,10 +256,14 @@ class FactorMiner:
         research_config = get_research_config()
         horizon = horizon or research_config.evaluation.horizon_days
         max_candidates = int(os.getenv("FACTOR_MINING_MAX_CANDIDATES", _DEFAULT_MAX_CANDIDATES))
-        if research_config.require_data_version_for_oos and not data_version:
+        if research_config.require_data_version_for_oos and not is_known_version(data_version):
             return {"accepted": [], "rejected": [], "warning": "DATA_VERSION_REQUIRED",
                     "stopped_early": False, "stop_reason": None, "evaluated": 0,
                     "diagnostics": {"run_valid": False, "run_failure_code": "DATA_VERSION_REQUIRED"}}
+        if research_config.require_data_version_for_oos and not is_known_version(data_snapshot_id):
+            return {"accepted": [], "rejected": [], "warning": "DATA_SNAPSHOT_ID_REQUIRED",
+                    "stopped_early": False, "stop_reason": None, "evaluated": 0,
+                    "diagnostics": {"run_valid": False, "run_failure_code": "DATA_SNAPSHOT_ID_REQUIRED"}}
 
         if not self.model_client or not self.model_client.available():
             return {"accepted": [], "rejected": [], "warning": "挖掘模型不可用，请配置 ANALYSIS_MODEL_*",
@@ -559,8 +565,7 @@ class FactorMiner:
                 data_version=data_version,
                 data_snapshot_id=data_snapshot_id,
             )
-            stored_metrics = dict(candidate.discovery_metrics)
-            stored_metrics["final_oos_summary"] = {
+            final_oos_summary = {
                 "method": oos.get("method"),
                 "passed": True,
                 "window_count": window_count,
@@ -571,7 +576,14 @@ class FactorMiner:
                 "oos_excess_return": oos.get("oos_excess_return"),
                 "withheld": True,
             }
-            stored_metrics["final_oos_audit_ref"] = audit_result.uri
+            stored_metrics = build_research_metrics(
+                dict(candidate.discovery_metrics),
+                final_oos_summary,
+                data_version=data_version,
+                research_run_id=research_run_id,
+                evaluated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                audit_ref=audit_result.uri,
+            )
             entry = add_factor(
                 library,
                 candidate.rpn,
@@ -581,6 +593,9 @@ class FactorMiner:
                 universe=sorted(symbols) if len(symbols) <= 100 else [],
                 horizon=horizon,
                 llm_model=model_name,
+                research_run_id=research_run_id,
+                data_version=data_version,
+                metrics_as_of=dates[-1] if dates else None,
             )
             entry["universe_size"] = len(symbols)
             entry["candidate_hash"] = candidate.candidate_hash
@@ -673,6 +688,7 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
         "final_oos_audit",
         "final_oos_summary",
         "final_oos_audit_ref",
+        "research",
         "windows",
         "mean_rank_ic",
         "min_rank_ic",

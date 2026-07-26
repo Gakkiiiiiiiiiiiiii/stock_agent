@@ -34,6 +34,8 @@ def env(tmp_path, monkeypatch):
     """隔离状态目录 + 假行情 + 单因子库。"""
     monkeypatch.setenv("FACTOR_PAPER_SCORING_PANEL_DAYS", "20")
     monkeypatch.setenv("FACTOR_PAPER_MINING_PANEL_DAYS", "500")
+    # 测试使用 legacy 四元组 Loader（版本为 UNKNOWN），显式关闭生产版本门禁
+    monkeypatch.setenv("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS", "false")
     fpw.get_research_config.cache_clear()
     monkeypatch.setattr(fpw, "load_universe", lambda: list(SYMBOLS))
     monkeypatch.setattr(fpw, "next_trading_day", lambda day: day + timedelta(days=1))
@@ -387,7 +389,106 @@ def test_order_generation_inside_freeze_window_passes(env):
 
 def test_cli_exit_code_zero(env, monkeypatch, capsys):
     monkeypatch.setattr(fpw, "load_universe", lambda: list(SYMBOLS))
-    monkeypatch.setattr(fpw, "load_factor_panel",
-                        lambda symbols, days: ({}, [], [], "QMT 不可达"))
+    monkeypatch.setattr(fpw, "_default_panel_loader",
+                        lambda: (lambda symbols, days: ({}, [], [], "QMT 不可达")))
     code = fpw.main(["--state-dir", str(env["state"])])
     assert code == 0
+
+
+# ---------- Quote 缩小范围与分批（v2.2.4 第九轮） ----------
+
+
+def test_quote_loader_only_requests_picks_and_positions(env):
+    captured: list = []
+
+    def loader(symbols):
+        captured.append(sorted(symbols))
+        return {}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    # 预置一个持仓（不在 picks 中也必须被请求）
+    fpw._write_json(env["state"] / "portfolio_state.json", {
+        "cash": 500000.0,
+        "positions": {"600007.SH": [{"shares": 100, "buy_date": "2026-07-28"}]},
+        "equity": 1000000.0, "benchmark": 1000000.0, "last_prices": {}, "last_date": "2026-07-29",
+    })
+    fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                  panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert captured
+    requested = captured[0]
+    assert "600007.SH" in requested  # 持仓标的
+    picks = fpw._load_json(env["state"] / "orders_2026-07-30.json", {})["picks"]
+    assert set(p["symbol"] for p in picks) <= set(requested)  # picks 全部在内
+    assert len(requested) == len(set(p["symbol"] for p in picks) | {"600007.SH"})  # 不多请求
+
+
+def test_quote_loader_batches_large_symbol_list(monkeypatch):
+    calls: list[int] = []
+
+    class Bridge:
+        def get_quotes(self, symbols):
+            calls.append(len(symbols))
+            return {s: {"last_price": 10.0} for s in symbols}
+
+    class Provider:
+        bridge = Bridge()
+
+    monkeypatch.setattr("engines.market.data_provider.get_market_data_provider", lambda: Provider())
+    symbols = [f"6000{i:02d}.SH" for i in range(450)]
+    quotes, failed = fpw._default_quote_loader(symbols, batch_size=200)
+    assert calls == [200, 200, 50]  # 每批不超过 200
+    assert failed == 0
+    assert len(quotes) == 450
+
+
+def test_partial_quote_batch_failure_preserves_successful_quotes(monkeypatch):
+    class Bridge:
+        def __init__(self):
+            self.calls = 0
+
+        def get_quotes(self, symbols):
+            self.calls += 1
+            if self.calls == 2:
+                raise RuntimeError("batch timeout")
+            return {s: {"last_price": 10.0} for s in symbols}
+
+    class Provider:
+        bridge = Bridge()
+
+    monkeypatch.setattr("engines.market.data_provider.get_market_data_provider", lambda: Provider())
+    symbols = [f"6000{i:02d}.SH" for i in range(12)]
+    quotes, failed = fpw._default_quote_loader(symbols, batch_size=5)
+    assert failed == 1  # 第二批失败
+    assert len(quotes) == 7  # 第一、三批保留（5 + 2）
+
+
+def test_run_daily_returns_quote_summary(env):
+    def loader(symbols):
+        # 只返回一半标的的 Quote → coverage 0.5 < 0.9，触发质量标记
+        return {s: {"last_price": 10.0} for s in symbols[: len(symbols) // 2]}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["quote_requested_count"] > 0
+    assert result["quote_received_count"] < result["quote_requested_count"]
+    assert 0 < result["quote_coverage"] < 1
+    assert result["quote_failed_chunk_count"] == 0
+    assert result["price_limit_rule_fallback_count"] == (
+        result["quote_requested_count"] - result["quote_received_count"]
+    )
+    assert "PAPER_QUOTE_COVERAGE_LOW" in result["quote_quality_flags"]
+
+
+def test_run_daily_full_quote_coverage_has_no_quality_flag(env):
+    def loader(symbols):
+        return {s: {"last_price": 10.0} for s in symbols}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["quote_coverage"] == 1.0
+    assert result["quote_quality_flags"] == []

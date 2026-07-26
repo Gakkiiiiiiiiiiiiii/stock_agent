@@ -5,6 +5,7 @@ import logging
 import os
 import tempfile
 from contextlib import contextmanager
+from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -63,6 +64,8 @@ _PROTECTED_METRIC_KEYS = {
 }
 
 # 研究类指标：对某一因子身份不可变，普通监控更新不得覆盖。
+# Discovery 原始指标（rank_ic/icir/fitness/coverage/topk_excess_annual_return）
+# 与研究审计字段同属 research 语义，一旦写入即不可变。
 _IMMUTABLE_RESEARCH_METRIC_KEYS = {
     "final_oos_summary",
     "final_oos_audit_ref",
@@ -71,6 +74,11 @@ _IMMUTABLE_RESEARCH_METRIC_KEYS = {
     "discovery_icir",
     "research_data_version",
     "research_run_id",
+    "rank_ic",
+    "icir",
+    "fitness",
+    "coverage",
+    "topk_excess_annual_return",
 }
 
 # 终态：退役因子不允许被自动流程重新激活。
@@ -270,24 +278,60 @@ def _merge_factor(existing: dict, incoming: dict) -> None:
     existing["validation_stage"] = _merge_status(old_stage, incoming.get("validation_stage"))
 
 
-def _metrics_freshness(metrics: dict) -> tuple[str, str, str]:
-    """指标新鲜度：metrics_as_of > metrics_updated_at > metrics_data_version。"""
-    return (
-        str(metrics.get("metrics_as_of") or ""),
-        str(metrics.get("metrics_updated_at") or ""),
-        str(metrics.get("metrics_data_version") or ""),
+@dataclass(frozen=True)
+class MetricsFreshness:
+    """指标新鲜度：as_of → updated_at → revision；data_version 只做一致性检查，不参与排序。"""
+
+    as_of: str
+    updated_at: str
+    revision: int
+    data_version: str
+
+    def has_version(self) -> bool:
+        return bool(self.as_of or self.updated_at or self.revision > 0)
+
+
+def _metrics_freshness(metrics: dict) -> MetricsFreshness:
+    try:
+        revision = int(metrics.get("metrics_revision") or 0)
+    except (TypeError, ValueError):
+        revision = 0
+    return MetricsFreshness(
+        as_of=str(metrics.get("metrics_as_of") or ""),
+        updated_at=str(metrics.get("metrics_updated_at") or ""),
+        revision=revision,
+        data_version=str(metrics.get("metrics_data_version") or ""),
     )
+
+
+def _compare_freshness(existing: MetricsFreshness, incoming: MetricsFreshness) -> int:
+    """incoming 更新返回 1，更旧返回 -1，同一时间返回 0（版本冲突抛错）。"""
+    left = (existing.as_of, existing.updated_at, existing.revision)
+    right = (incoming.as_of, incoming.updated_at, incoming.revision)
+    if right > left:
+        return 1
+    if right < left:
+        return -1
+    if (
+        existing.data_version
+        and incoming.data_version
+        and existing.data_version != incoming.data_version
+    ):
+        raise ValueError("METRICS_VERSION_CONFLICT")
+    return 0
 
 
 def _merge_metrics(existing: dict, incoming: dict) -> dict:
     existing_freshness = _metrics_freshness(existing)
     incoming_freshness = _metrics_freshness(incoming)
-    # 旧快照不得覆盖较新指标；两边都无版本信息时保持原合并行为（兼容模式）。
-    if any(incoming_freshness) and incoming_freshness < existing_freshness:
-        return dict(existing)
-    # 严格模式：existing 有版本而 incoming 无版本时禁止覆盖。
-    if any(existing_freshness) and not any(incoming_freshness):
-        return dict(existing)
+    if incoming_freshness.has_version() or existing_freshness.has_version():
+        comparison = _compare_freshness(existing_freshness, incoming_freshness)
+        # 旧快照不得覆盖较新指标；两边都无版本信息时保持原合并行为（兼容模式）。
+        if incoming_freshness.has_version() and comparison < 0:
+            return dict(existing)
+        # 严格模式：existing 有版本而 incoming 无版本时禁止覆盖。
+        if existing_freshness.has_version() and not incoming_freshness.has_version():
+            return dict(existing)
     merged = {**existing, **incoming}
     for key in _PROTECTED_METRIC_KEYS:
         if key in existing and key not in incoming:
@@ -296,7 +340,74 @@ def _merge_metrics(existing: dict, incoming: dict) -> dict:
     for key in _IMMUTABLE_RESEARCH_METRIC_KEYS:
         if key in existing:
             merged[key] = existing[key]
+    # research 块整体不可变：禁止覆盖既有研究记录
+    if "research" in existing:
+        merged["research"] = deepcopy(existing["research"])
+    elif "research" in incoming:
+        merged["research"] = deepcopy(incoming["research"])
+    # monitoring 块按自身新鲜度合并
+    merged["monitoring"] = _merge_monitoring_metrics(
+        existing.get("monitoring") or {},
+        incoming.get("monitoring") or {},
+    )
     return merged
+
+
+def _merge_monitoring_metrics(existing: dict, incoming: dict) -> dict:
+    if not existing:
+        return dict(incoming)
+    if not incoming:
+        return dict(existing)
+    existing_freshness = _metrics_freshness({
+        "metrics_as_of": existing.get("as_of"),
+        "metrics_updated_at": existing.get("updated_at"),
+        "metrics_revision": existing.get("revision"),
+        "metrics_data_version": existing.get("data_version"),
+    })
+    incoming_freshness = _metrics_freshness({
+        "metrics_as_of": incoming.get("as_of"),
+        "metrics_updated_at": incoming.get("updated_at"),
+        "metrics_revision": incoming.get("revision"),
+        "metrics_data_version": incoming.get("data_version"),
+    })
+    if incoming_freshness.has_version() or existing_freshness.has_version():
+        comparison = _compare_freshness(existing_freshness, incoming_freshness)
+        if comparison < 0:
+            return dict(existing)
+    return {**existing, **incoming}
+
+
+def build_research_metrics(
+    discovery: dict,
+    final_oos: dict,
+    *,
+    data_version: str | None,
+    research_run_id: str,
+    evaluated_at: str,
+    audit_ref: str,
+) -> dict:
+    """研究指标结构：research 不可变 + monitoring 占位 + 平铺兼容字段。"""
+    return {
+        "research": {
+            "discovery": {
+                **discovery,
+                "evaluated_at": evaluated_at,
+                "data_version": data_version,
+                "research_run_id": research_run_id,
+            },
+            "final_oos": {
+                **final_oos,
+                "audit_ref": audit_ref,
+            },
+        },
+        "monitoring": {},
+        # 平铺兼容字段（与 research.discovery 同源，合并时同样不可变）
+        **discovery,
+        "final_oos_summary": final_oos,
+        "final_oos_audit_ref": audit_ref,
+        "research_data_version": data_version,
+        "research_run_id": research_run_id,
+    }
 
 
 def _merge_status(old_status, incoming_status) -> str:
@@ -374,6 +485,9 @@ def add_factor(
     universe: list[str],
     horizon: int,
     llm_model: str = "",
+    research_run_id: str | None = None,
+    data_version: str | None = None,
+    metrics_as_of: str | None = None,
 ) -> dict:
     """追加入库条目并返回该条目。
 
@@ -392,6 +506,18 @@ def add_factor(
         "status": RESEARCH_STATUS,
         "validation_stage": RESEARCH_STATUS,
     }
+    if research_run_id:
+        entry["research_run_id"] = research_run_id
+    if data_version:
+        entry["first_data_version"] = data_version
+    if metrics_as_of:
+        metrics.setdefault("metrics_as_of", metrics_as_of)
+        metrics.setdefault(
+            "metrics_updated_at",
+            datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        )
+        if data_version:
+            metrics.setdefault("metrics_data_version", data_version)
     library.setdefault("factors", []).append(entry)
     return entry
 
@@ -435,6 +561,7 @@ __all__ = [
     "merge_library",
     "LibraryMergeResult",
     "add_factor",
+    "build_research_metrics",
     "active_factors",
     "research_validated_factors",
     "paper_trading_factors",

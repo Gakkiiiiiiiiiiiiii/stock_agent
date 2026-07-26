@@ -26,7 +26,7 @@ def test_regime_preclassifier_downtrend():
 
 
 def test_market_regime_missing_features_returns_unknown():
-    result = get_market_regime()
+    result = get_market_regime(snapshot={"as_of": "2026-07-25T00:00:00+00:00"})
     assert result["regime"]["primary_regime"] == "UNKNOWN"
     assert "MARKET_FEATURES_INCOMPLETE" in result["quality_flags"]
     assert "up_count" in result["missing_fields"]

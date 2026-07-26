@@ -54,6 +54,21 @@ class FactorPanelBundle:
     metadata: FactorPanelMetadata
 
 
+def _update_array_digest(digest, values) -> None:
+    """Canonical Hash：保留 NaN / ±Infinity 掩码，缺失值不与真实 0 混淆。"""
+    array = np.asarray(values, dtype=np.float64)
+    digest.update(repr(array.shape).encode("utf-8"))
+    digest.update(str(array.dtype).encode("utf-8"))
+    nan_mask = np.isnan(array)
+    posinf_mask = np.isposinf(array)
+    neginf_mask = np.isneginf(array)
+    digest.update(nan_mask.astype(np.uint8).tobytes())
+    digest.update(posinf_mask.astype(np.uint8).tobytes())
+    digest.update(neginf_mask.astype(np.uint8).tobytes())
+    canonical = np.where(nan_mask | posinf_mask | neginf_mask, 0.0, array)
+    digest.update(canonical.tobytes())
+
+
 def build_panel_data_version(
     symbols: list[str],
     dates: list[str],
@@ -69,13 +84,7 @@ def build_panel_data_version(
     digest.update(json.dumps(dates, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
     for key in sorted(panel):
         digest.update(key.encode("utf-8"))
-        values = np.asarray(panel[key])
-        digest.update(repr(values.shape).encode("utf-8"))
-        digest.update(
-            np.nan_to_num(values, nan=0.0, posinf=1e308, neginf=-1e308)
-            .astype(np.float64, copy=False)
-            .tobytes()
-        )
+        _update_array_digest(digest, panel[key])
     return digest.hexdigest()
 
 

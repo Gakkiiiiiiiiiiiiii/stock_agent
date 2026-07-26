@@ -50,6 +50,8 @@ class PaperTradingConfig(BaseModel):
     mining_panel_days: int = 500
     remine_days: int = 5
     scoring_buffer_days: int = 10
+    min_quote_coverage: float = 0.9
+    fail_on_low_quote_coverage: bool = False
 
 
 class HighPositionConfig(BaseModel):
@@ -150,6 +152,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "paper_trading.remine_days", _env_int("FACTOR_PAPER_REMINE_DAYS"))
     _set_nested(merged, "paper_trading.scoring_buffer_days", _env_int("FACTOR_PAPER_SCORING_BUFFER_DAYS"))
     _set_nested(merged, "factor_library.lock_timeout_seconds", _env_int("FACTOR_LIBRARY_LOCK_TIMEOUT_SECONDS"))
+    if _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS") is not None:
+        merged["require_data_version_for_oos"] = _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS")
     return merged
 
 
@@ -175,6 +179,13 @@ def _env_float(name: str) -> float | None:
     if value is None or value == "":
         return None
     return float(value)
+
+
+def _env_bool(name: str) -> bool | None:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return None
+    return value.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 __all__ = [

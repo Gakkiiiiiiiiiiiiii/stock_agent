@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import asdict, is_dataclass
 from datetime import datetime
 
 import numpy as np
@@ -151,7 +152,14 @@ def run_topk_backtest(
     top_k = max(1, min(top_k, n_symbols))
     rebalance_interval = max(1, int(rebalance_interval))
     fail_on_ambiguous = get_research_config().backtest.fail_on_ambiguous_price_limit
-    pl_stats = {"cells": 0, "covered": 0, "fallback": 0, "ambiguous": 0}
+    pl_stats = {
+        "unique_cells": 0,
+        "meta_covered_cells": 0,
+        "fallback_cells": 0,
+        "buy_ambiguous_cells": 0,
+        "sell_ambiguous_cells": 0,
+        "conflicts": set(),
+    }
 
     state = _PortfolioState(initial_cash)
     last_close = np.full(n_symbols, np.nan)  # 各标的最近有效收盘价（停牌股估值用）
@@ -211,8 +219,9 @@ def run_topk_backtest(
         })
 
     quality_flags: list[str] = []
-    if pl_stats["ambiguous"]:
+    if pl_stats["buy_ambiguous_cells"] or pl_stats["sell_ambiguous_cells"]:
         quality_flags.append("BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE")
+    quality_flags.extend(sorted(pl_stats["conflicts"]))
     return {
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
@@ -221,9 +230,12 @@ def run_topk_backtest(
         "holdings_log": holdings_log,
         "dates": list(dates),
         "price_limit_meta_coverage": (
-            round(pl_stats["covered"] / pl_stats["cells"], 6) if pl_stats["cells"] else None
+            round(pl_stats["meta_covered_cells"] / pl_stats["unique_cells"], 6)
+            if pl_stats["unique_cells"] else None
         ),
-        "price_limit_fallback_count": pl_stats["fallback"],
+        "price_limit_fallback_count": pl_stats["fallback_cells"],
+        "price_limit_buy_ambiguous_count": pl_stats["buy_ambiguous_cells"],
+        "price_limit_sell_ambiguous_count": pl_stats["sell_ambiguous_cells"],
         "price_limit_quality_flags": quality_flags,
     }
 
@@ -234,6 +246,19 @@ def _validate_optional_panel_shape(value, expected_shape: tuple, field_name: str
     array = np.asarray(value, dtype=object)
     if array.shape != expected_shape:
         raise ValueError(f"{field_name} shape mismatch: {array.shape} != {expected_shape}")
+
+
+def _meta_to_dict(value) -> dict:
+    """security_meta cell 归一化：支持 dict / dataclass / pydantic 模型。"""
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return dict(value)
+    if is_dataclass(value):
+        return asdict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump(exclude_none=True)
+    raise TypeError(f"SECURITY_META_CELL_INVALID:{type(value).__name__}")
 
 
 def _optional_price(value) -> float | None:
@@ -357,33 +382,48 @@ def _rebalance_day(
     prev_closes = closes[:, t - 1] if t > 0 else None
     trade_date = _parse_date(dates[t])
 
+    context_cache: dict[int, TradeRuleContext] = {}
+    cell_ambiguity: dict[int, dict[str, bool]] = {}
+
     def _rule_context(idx: int) -> TradeRuleContext:
-        meta: dict = {}
-        if meta_cells is not None:
-            meta = dict(meta_cells[idx, t] or {})
-        upper = _optional_price(upper_cells[idx, t]) if upper_cells is not None else None
-        lower = _optional_price(lower_cells[idx, t]) if lower_cells is not None else None
+        # 同一调仓日同一标的只构建一次：Coverage 按唯一 Symbol-Date Cell 统计
+        if idx in context_cache:
+            return context_cache[idx]
+        meta = _meta_to_dict(meta_cells[idx, t]) if meta_cells is not None else {}
+        panel_upper = _optional_price(upper_cells[idx, t]) if upper_cells is not None else None
+        panel_lower = _optional_price(lower_cells[idx, t]) if lower_cells is not None else None
+        meta_upper = _optional_price(meta.get("upper_limit_price"))
+        meta_lower = _optional_price(meta.get("lower_limit_price"))
+        # 执行优先级：独立 Limit Price 面板 > Meta 中的 Limit Price > Limit Rate > 状态/阶段 > 本地规则
+        upper = panel_upper if panel_upper is not None else meta_upper
+        lower = panel_lower if panel_lower is not None else meta_lower
         if pl_stats is not None:
-            pl_stats["cells"] += 1
+            pl_stats["unique_cells"] += 1
             if meta or upper is not None or lower is not None:
-                pl_stats["covered"] += 1
+                pl_stats["meta_covered_cells"] += 1
             else:
-                pl_stats["fallback"] += 1
-            if (
+                pl_stats["fallback_cells"] += 1
+            if panel_upper is not None and meta_upper is not None and abs(panel_upper - meta_upper) > 1e-9:
+                pl_stats["conflicts"].add("UPPER_LIMIT_PRICE_CONFLICT")
+            if panel_lower is not None and meta_lower is not None and abs(panel_lower - meta_lower) > 1e-9:
+                pl_stats["conflicts"].add("LOWER_LIMIT_PRICE_CONFLICT")
+            # 旧制度主板风险状态缺失时，买入/卖出规则的模糊性分开判断：
+            # 有实际跌停价（或跌停率）时卖出规则精确，不因涨停信息缺失被阻断
+            base_ambiguous = (
                 trade_date is not None
                 and trade_date < MAIN_BOARD_ST_10_EFFECTIVE_DATE
                 and board_of(symbols[idx]) == "主板"
                 and meta.get("is_risk_warning") is None
-                and meta.get("limit_up_rate") is None
-                and upper is None
-            ):
-                pl_stats["ambiguous"] += 1
-                if fail_on_ambiguous:
-                    raise ValueError(
-                        "BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE:"
-                        f"{symbols[idx]}@{trade_date}"
-                    )
-        return TradeRuleContext(
+                and not meta.get("listing_stage")
+            )
+            buy_ambiguous = base_ambiguous and upper is None and meta.get("limit_up_rate") is None
+            sell_ambiguous = base_ambiguous and lower is None and meta.get("limit_down_rate") is None
+            if buy_ambiguous:
+                pl_stats["buy_ambiguous_cells"] += 1
+            if sell_ambiguous:
+                pl_stats["sell_ambiguous_cells"] += 1
+            cell_ambiguity[idx] = {"buy": buy_ambiguous, "sell": sell_ambiguous}
+        context = TradeRuleContext(
             symbol=symbols[idx],
             trade_date=trade_date,
             prev_close=prev_closes[idx],
@@ -392,17 +432,25 @@ def _rebalance_day(
             upper_limit_price=upper,
             lower_limit_price=lower,
         )
+        context_cache[idx] = context
+        return context
 
     def sell_allowed(idx: int) -> bool:
         # 首日无前收价，不做涨跌停约束
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_sell_with_context(_rule_context(idx))
+        context = _rule_context(idx)
+        if fail_on_ambiguous and cell_ambiguity.get(idx, {}).get("sell"):
+            raise ValueError(f"BACKTEST_SELL_RULE_AMBIGUOUS:{symbols[idx]}@{trade_date}")
+        return can_sell_with_context(context)
 
     def buy_allowed(idx: int) -> bool:
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_buy_with_context(_rule_context(idx))
+        context = _rule_context(idx)
+        if fail_on_ambiguous and cell_ambiguity.get(idx, {}).get("buy"):
+            raise ValueError(f"BACKTEST_BUY_RULE_AMBIGUOUS:{symbols[idx]}@{trade_date}")
+        return can_buy_with_context(context)
 
     # 未持有且开盘涨停买不进的股票不占目标名额，名额顺延给下一只
     if any(not buy_allowed(i) and state.shares_of(i) <= 1e-9 for i in ranked):

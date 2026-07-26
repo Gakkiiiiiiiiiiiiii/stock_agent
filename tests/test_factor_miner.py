@@ -43,6 +43,11 @@ class SequenceFakeModelClient:
 @pytest.fixture(autouse=True)
 def _audit_tmp(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTOR_OOS_AUDIT_ROOT", str(tmp_path / "audit"))
+    # 生产配置默认开启 Data Version 门禁；本测试文件聚焦挖掘逻辑，显式关闭
+    from financial_agent.research_config import get_research_config
+
+    config = get_research_config().model_copy(update={"require_data_version_for_oos": False})
+    monkeypatch.setattr("engines.factor.miner.get_research_config", lambda: config)
 
 
 def _panel(n_symbols: int = 20, n_days: int = 500, seed: int = 3):

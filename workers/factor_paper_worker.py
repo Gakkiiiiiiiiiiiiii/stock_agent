@@ -31,11 +31,17 @@ from engines.backtest.execution import (
     is_suspended,
 )
 from engines.factor.alpha import compose_alpha_scores
-from engines.factor.data import load_factor_panel, load_universe
+from engines.factor.data import (
+    FactorPanelBundle,
+    FactorPanelMetadata,
+    load_factor_panel_bundle,
+    load_universe,
+)
 from engines.factor.library import load_library, paper_trading_factors
 from engines.factor.lookback import max_lookback_from_rpn
 from engines.factor.miner import FactorMiner
 from engines.market.trading_calendar import next_trading_day
+from engines.factor.versioning import is_known_version
 from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
@@ -131,10 +137,21 @@ def _required_scoring_days(library: dict) -> int:
     return max(config.scoring_panel_days, max_lookback + config.scoring_buffer_days)
 
 
+def _default_panel_loader():
+    """生产默认 Loader：返回 FactorPanelBundle（携带真实 Data Version / Snapshot ID）。"""
+    return load_factor_panel_bundle
+
+
+def _is_production_panel_metadata(metadata: FactorPanelMetadata) -> bool:
+    return (
+        metadata.source != "legacy"
+        and is_known_version(metadata.data_version)
+        and is_known_version(metadata.data_snapshot_id)
+    )
+
+
 def _unpack_panel(result):
     """兼容 FactorPanelBundle 与旧四元组，返回 (panel, dates, symbols, warning, metadata)。"""
-    from engines.factor.data import FactorPanelBundle, FactorPanelMetadata
-
     if isinstance(result, FactorPanelBundle):
         return result.panel, result.dates, result.symbols, result.warning, result.metadata
     panel, dates, symbols, warning = result
@@ -157,6 +174,14 @@ def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory,
     """到期则先跑 FactorMiner 再组池；LLM 不可用时返回 warning，不阻塞记账。"""
     if not _remine_due(dates, state_dir, remine_days):
         return {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
+    # 严格模式：版本/Snapshot 为 UNKNOWN 等占位值时不得进入 Final OOS
+    if get_research_config().require_data_version_for_oos:
+        if not is_known_version(data_version):
+            return {"attempted": True, "run_valid": False, "accepted": 0, "oos_window_count": 0,
+                    "warning": "重挖跳过：DATA_VERSION_REQUIRED", "failure_code": "DATA_VERSION_REQUIRED"}
+        if not is_known_version(data_snapshot_id):
+            return {"attempted": True, "run_valid": False, "accepted": 0, "oos_window_count": 0,
+                    "warning": "重挖跳过：DATA_SNAPSHOT_ID_REQUIRED", "failure_code": "DATA_SNAPSHOT_ID_REQUIRED"}
     miner = miner_factory(model_client=None)
     try:
         result = miner.mine(
@@ -238,7 +263,7 @@ def generate_orders(
     state = _state_dir(state_dir)
     state.mkdir(parents=True, exist_ok=True)
     remine_days = remine_days if remine_days is not None else _remine_days_default()
-    panel_loader = panel_loader or load_factor_panel
+    panel_loader = panel_loader or _default_panel_loader()
     miner_factory = miner_factory or FactorMiner
     symbols = load_universe()
     if not symbols:
@@ -390,19 +415,34 @@ def _sell(positions: dict, symbol: str, shares: float, trade_date: str) -> float
     return taken
 
 
-def _default_quote_loader(symbols: list[str]) -> dict:
-    """T 日执行时从行情桥接拉取实时 Quote；不可用返回空 dict（回退到规则比例）。"""
+def _fetch_quotes_batched(symbols: list[str], batch_size: int = 200) -> tuple[dict, int]:
+    """分批拉取 Quote，返回 (quotes, failed_chunk_count)；单批失败保留其他成功批次。"""
+    if not symbols:
+        return {}, 0
     try:
-        from engines.market.data_provider import get_market_data_provider, to_qmt_symbol
+        from engines.market.data_provider import batched, get_market_data_provider, to_qmt_symbol
 
         provider = get_market_data_provider()
         bridge = getattr(provider, "bridge", None)
         if bridge is None:
-            return {}
-        return bridge.get_quotes([to_qmt_symbol(s) for s in symbols]) or {}
+            return {}, 0
+        quotes: dict = {}
+        failed_chunks = 0
+        for chunk in batched([to_qmt_symbol(s) for s in symbols], batch_size):
+            try:
+                quotes.update(bridge.get_quotes(list(chunk)) or {})
+            except Exception as exc:  # noqa: BLE001
+                failed_chunks += 1
+                logger.warning("Quote batch failed: size=%s error=%s", len(chunk), exc)
+        return quotes, failed_chunks
     except Exception as exc:  # noqa: BLE001
         logger.warning("T 日 Quote 获取失败，按规则比例回退执行: %s", exc)
-        return {}
+        return {}, 0
+
+
+def _default_quote_loader(symbols: list[str], batch_size: int = 200) -> tuple[dict, int]:
+    """T 日执行时从行情桥接拉取实时 Quote；不可用返回空 dict（回退到规则比例）。"""
+    return _fetch_quotes_batched(symbols, batch_size)
 
 
 def _quote_for_symbol(quotes: dict, symbol: str) -> dict:
@@ -586,7 +626,7 @@ def run_daily(
     state = _state_dir(state_dir)
     state.mkdir(parents=True, exist_ok=True)
     remine_days = remine_days if remine_days is not None else _remine_days_default()
-    panel_loader = panel_loader or load_factor_panel
+    panel_loader = panel_loader or _default_panel_loader()
     miner_factory = miner_factory or FactorMiner
     quote_loader = quote_loader or _default_quote_loader
 
@@ -638,13 +678,39 @@ def run_daily(
     picks = order_payload.get("picks") or []
     factor_count = int(order_payload.get("factor_count") or 0)
 
+    pick_symbols = [p["symbol"] for p in picks]
+    portfolio_state = _load_json(state / "portfolio_state.json", {}) or {}
+    # 只请求当前 Picks + 当前持仓，避免大股票池整体超时
+    required_symbols = sorted(set(pick_symbols) | set((portfolio_state.get("positions") or {}).keys()))
     try:
-        quotes = quote_loader(symbols) or {}
+        quote_result = quote_loader(required_symbols)
     except Exception as exc:  # noqa: BLE001
         logger.warning("T 日 Quote 获取失败，按规则比例回退执行: %s", exc)
-        quotes = {}
+        quote_result = {}
+    if isinstance(quote_result, tuple):
+        quotes, quote_failed_chunks = quote_result
+    else:
+        quotes, quote_failed_chunks = quote_result or {}, 0
+    quote_received = sum(1 for s in required_symbols if _quote_for_symbol(quotes, s))
+    quote_coverage = quote_received / len(required_symbols) if required_symbols else None
+    paper_config = get_research_config().paper_trading
+    quote_quality_flags: list[str] = []
+    if quote_coverage is not None and quote_coverage < paper_config.min_quote_coverage:
+        quote_quality_flags.append("PAPER_QUOTE_COVERAGE_LOW")
+        if paper_config.fail_on_low_quote_coverage:
+            return {
+                "date": execution_date,
+                "execution_date": execution_date,
+                "skipped": True,
+                "warning": f"PAPER_QUOTE_COVERAGE_LOW:{quote_coverage:.4f}",
+                "quote_requested_count": len(required_symbols),
+                "quote_received_count": quote_received,
+                "quote_coverage": quote_coverage,
+                "quote_failed_chunk_count": quote_failed_chunks,
+                "quote_quality_flags": quote_quality_flags,
+            }
     bookkeeping = _advance_portfolio(
-        panel, dates, symbols, [p["symbol"] for p in picks], state, execution_date, quotes=quotes
+        panel, dates, symbols, pick_symbols, state, execution_date, quotes=quotes
     )
     generated_next = None
     if generate_next_orders and next_execution_date:
@@ -668,6 +734,12 @@ def run_daily(
         "factor_count": factor_count,
         "bookkeeping": bookkeeping,
         "generated_next_orders": generated_next,
+        "quote_requested_count": len(required_symbols),
+        "quote_received_count": quote_received,
+        "quote_coverage": quote_coverage,
+        "quote_failed_chunk_count": quote_failed_chunks,
+        "price_limit_rule_fallback_count": len(required_symbols) - quote_received,
+        "quote_quality_flags": quote_quality_flags,
         "warning": warning,
     }
 

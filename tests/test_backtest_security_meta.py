@@ -160,7 +160,7 @@ def test_backtest_fail_on_ambiguous_price_limit_strict_mode(monkeypatch):
     )
     symbols, dates, opens, highs, lows, closes, volume = _panels(start="2026-06-29")
     scores = np.full((4, 11), 1.0)
-    with pytest.raises(ValueError, match="BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE"):
+    with pytest.raises(ValueError, match="BACKTEST_BUY_RULE_AMBIGUOUS"):
         run_topk_backtest(
             scores, opens, highs, lows, closes, volume, symbols, dates,
             rebalance_interval=5, top_k=2, initial_cash=100_000.0,
@@ -206,3 +206,141 @@ def test_paper_worker_passes_quote_meta_to_can_buy_sell(tmp_path):
     assert result["advanced"] is True
     state2 = fpw._load_json(state_dir2 / "portfolio_state.json", {})
     assert "600000.SH" not in state2["positions"]  # 实际涨停价 10.3：开盘 10.4 买不进
+
+
+# ---------- Security Meta 实际限价与统计口径（v2.2.4 第九轮） ----------
+
+
+def test_security_meta_upper_limit_price_is_used():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    scores[1, 5:] = 90.0
+    opens[0, 5] = 10.4
+    meta = _meta_grid(4, 11, {(0, 5): {"upper_limit_price": 10.3, "lower_limit_price": 9.7}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] not in result["holdings_log"][5]
+
+
+def test_security_meta_lower_limit_price_is_used():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    scores[0, :] = 100.0
+    scores[1, :] = 90.0
+    scores[0, 5:] = 1.0
+    scores[1, 5:] = 1.0
+    scores[2, 5:] = 100.0
+    scores[3, 5:] = 90.0
+    opens[0, 5] = 9.4
+    meta = _meta_grid(4, 11, {(0, 5): {"lower_limit_price": 9.5}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] in result["holdings_log"][5]
+
+
+def test_explicit_limit_panel_overrides_meta_limit_price():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    scores[1, 5:] = 90.0
+    opens[0, 5] = 10.4
+    meta = _meta_grid(4, 11, {(0, 5): {"upper_limit_price": 10.3}})
+    upper = np.full((4, 11), np.nan)
+    upper[0, 5] = 11.5  # 独立面板优先于 Meta（10.3）：10.4 < 11.5 可买
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True,
+        security_meta=meta, upper_limit_prices=upper,
+    )
+    assert symbols[0] in result["holdings_log"][5]
+    assert "UPPER_LIMIT_PRICE_CONFLICT" in result["price_limit_quality_flags"]
+
+
+def test_daily_security_meta_dataclass_is_supported():
+    from engines.backtest.execution import DailySecurityMeta
+
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    scores[1, 5:] = 90.0
+    opens[0, 5] = 10.4
+    meta = _meta_grid(4, 11, {(0, 5): DailySecurityMeta(upper_limit_price=10.3, source="qmt")})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] not in result["holdings_log"][5]
+
+
+def test_price_limit_coverage_counts_unique_cells():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    scores[0, :] = 100.0
+    scores[1, :] = 90.0
+    scores[0, 5:] = 1.0
+    scores[1, 5:] = 1.0
+    scores[2, 5:] = 100.0
+    scores[3, 5:] = 90.0
+    # 同一标的同一调仓日会触发多次 buy/sell 检查，但 Coverage 只按唯一 Cell 统计一次
+    meta = _meta_grid(4, 11, {(0, 5): {"limit_up_rate": 15, "limit_down_rate": 12}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    # 实际评估的唯一 Cell 为 6（t=5 全部 4 只 + t=10 调仓涉及 2 只），其中 1 个有 meta；
+    # 若按调用次数统计，分母会显著大于 6
+    assert result["price_limit_fallback_count"] == 5
+    assert result["price_limit_meta_coverage"] == pytest.approx(1 / 6, abs=1e-5)
+
+
+def test_lower_limit_price_makes_sell_rule_precise(monkeypatch):
+    from financial_agent.research_config import BacktestConfig, ResearchConfig
+
+    monkeypatch.setattr(
+        "engines.backtest.portfolio_backtest.get_research_config",
+        lambda: ResearchConfig(backtest=BacktestConfig(fail_on_ambiguous_price_limit=True)),
+    )
+    symbols, dates, opens, highs, lows, closes, volume = _panels(start="2026-06-29")
+    scores = np.full((4, 11), 1.0)
+    scores[0, :5] = 100.0
+    scores[1, :5] = 90.0
+    scores[:, 5:] = np.nan  # t=5 全部调出：只触发卖出路径
+    # 旧制度主板风险状态缺失，但有实际跌停价：卖出规则精确，不被阻断
+    meta = _meta_grid(4, 11, {(i, 5): {"lower_limit_price": 9.0} for i in range(4)})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] not in result["holdings_log"][5]  # 成功卖出
+    assert result["price_limit_sell_ambiguous_count"] == 0
+
+
+def test_upper_limit_missing_does_not_block_precise_sell(monkeypatch):
+    from financial_agent.research_config import BacktestConfig, ResearchConfig
+
+    monkeypatch.setattr(
+        "engines.backtest.portfolio_backtest.get_research_config",
+        lambda: ResearchConfig(backtest=BacktestConfig(fail_on_ambiguous_price_limit=True)),
+    )
+    symbols, dates, opens, highs, lows, closes, volume = _panels(start="2026-06-29")
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    # 旧制度主板、状态缺失、无涨停信息：买入规则模糊 → 严格模式阻断
+    meta = _meta_grid(4, 11, {(0, 5): {"lower_limit_price": 9.0}})
+    with pytest.raises(ValueError, match="BACKTEST_BUY_RULE_AMBIGUOUS"):
+        run_topk_backtest(
+            scores, opens, highs, lows, closes, volume, symbols, dates,
+            rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+            allow_unsafe_without_metadata=True, security_meta=meta,
+        )

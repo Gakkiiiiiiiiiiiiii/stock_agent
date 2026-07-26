@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from engines.factor.data import load_factor_panel, load_universe
+from engines.factor.data import load_factor_panel, load_factor_panel_bundle, load_universe
 from engines.factor.fitness import evaluate_factor as evaluate_panel
 from engines.factor.library import active_factors, load_library
 from engines.factor.miner import FactorMiner
@@ -27,7 +27,8 @@ def mine_factors(
     """
     symbols = universe or load_universe()
     config = get_research_config()
-    panel, dates, symbols, warning = load_factor_panel(symbols, days=days or config.data_split.total_days)
+    bundle = load_factor_panel_bundle(symbols, days=days or config.data_split.total_days)
+    panel, dates, symbols, warning = bundle.panel, bundle.dates, bundle.symbols, bundle.warning
     if not panel:
         return {"accepted": [], "rejected": [], "warning": warning or "行情数据不可用，无法挖掘因子"}
     miner = FactorMiner()
@@ -35,6 +36,9 @@ def mine_factors(
         panel, symbols, rounds=rounds, candidates_per_round=candidates_per_round,
         eval_window=eval_window,
         lease_guard=lease_guard,
+        dates=dates,
+        data_version=bundle.metadata.data_version,
+        data_snapshot_id=bundle.metadata.data_snapshot_id,
     )
     result["data_window"] = {"start": dates[0], "end": dates[-1]} if dates else None
     result["eval_window"] = eval_window

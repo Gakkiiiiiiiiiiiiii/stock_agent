@@ -109,13 +109,14 @@ def _quote_limit_rule(board: str, payload: dict[str, Any]) -> PriceLimitRule | N
 
 
 def _normalize_rate(value: float) -> float:
-    normalized = abs(float(value))
+    # 不用 abs()：负数属于脏数据，必须显式报错而不是静默修正
+    normalized = float(value)
     if not math.isfinite(normalized):
         raise ValueError("PRICE_LIMIT_RULE_INVALID:non_finite")
-    if normalized > 1:
-        normalized /= 100.0
     if normalized <= 0:
         raise ValueError("PRICE_LIMIT_RULE_INVALID:non_positive")
+    if normalized > 1:
+        normalized /= 100.0
     if normalized > 1:
         raise ValueError("PRICE_LIMIT_RULE_INVALID:greater_than_100_percent")
     return normalized

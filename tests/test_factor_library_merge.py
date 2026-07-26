@@ -82,7 +82,7 @@ def test_same_identity_preserves_immutable_fields():
                 **_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
                 "discovered_at": "2025-01-01T00:00:00+00:00",
                 "research_run_id": "run-stale",
-                "metrics": {"fitness": 0.5},
+                "metrics": {"fitness": 0.5, "rank_ic_20d": 0.01},
             }
         ]
     }
@@ -91,7 +91,10 @@ def test_same_identity_preserves_immutable_fields():
     assert persisted["id"] == "F001"
     assert persisted["discovered_at"] == "2026-01-01T00:00:00+00:00"
     assert persisted["research_run_id"] == "run-original"
-    assert persisted["metrics"]["fitness"] == 0.5  # 普通指标可被更新
+    # Discovery 原始指标属于 research 语义，不可被覆盖
+    assert persisted["metrics"]["fitness"] == 2.0
+    # 监控类指标可被更新
+    assert persisted["metrics"]["rank_ic_20d"] == 0.01
     # incoming 缺失的 OOS 审计引用不得被擦除
     assert persisted["metrics"]["final_oos_audit_ref"] == "factor-oos://202601/a.jsonl#h1"
 
@@ -201,35 +204,35 @@ def test_stale_metrics_cannot_overwrite_newer_metrics():
     latest = {
         "factors": [
             {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
-             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-26"}}
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-26"}}
         ]
     }
     incoming = {
         "factors": [
             {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
-             "metrics": {"fitness": 0.5, "metrics_as_of": "2026-07-01"}}
+             "metrics": {"rank_ic_20d": 0.01, "metrics_as_of": "2026-07-01"}}
         ]
     }
     result = merge_library(latest, incoming)
-    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 2.0
+    assert result.persisted_by_hash["h1"]["metrics"]["rank_ic_20d"] == 0.05
 
 
 def test_newer_monitoring_metrics_can_update_existing():
     latest = {
         "factors": [
             {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
-             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-01"}}
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-01"}}
         ]
     }
     incoming = {
         "factors": [
             {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
-             "metrics": {"fitness": 0.5, "metrics_as_of": "2026-07-26", "metrics_run_id": "run-new"}}
+             "metrics": {"rank_ic_20d": 0.01, "metrics_as_of": "2026-07-26", "metrics_run_id": "run-new"}}
         ]
     }
     result = merge_library(latest, incoming)
     metrics = result.persisted_by_hash["h1"]["metrics"]
-    assert metrics["fitness"] == 0.5
+    assert metrics["rank_ic_20d"] == 0.01
     assert metrics["metrics_as_of"] == "2026-07-26"
     assert metrics["metrics_run_id"] == "run-new"
 
@@ -238,24 +241,24 @@ def test_incoming_without_version_cannot_overwrite_versioned_metrics():
     latest = {
         "factors": [
             {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
-             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-26"}}
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-26"}}
         ]
     }
     incoming = {
         "factors": [
             {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
-             "metrics": {"fitness": 0.5}}
+             "metrics": {"rank_ic_20d": 0.01}}
         ]
     }
     result = merge_library(latest, incoming)
-    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 2.0
+    assert result.persisted_by_hash["h1"]["metrics"]["rank_ic_20d"] == 0.05
 
 
 def test_both_unversioned_metrics_keep_legacy_merge_behavior():
-    latest = {"factors": [{**_factor("F001", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 2.0}}]}
-    incoming = {"factors": [{**_factor("F009", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 0.5}}]}
+    latest = {"factors": [{**_factor("F001", ["ret", "cs_rank"], "h1"), "metrics": {"rank_ic_20d": 0.05}}]}
+    incoming = {"factors": [{**_factor("F009", ["ret", "cs_rank"], "h1"), "metrics": {"rank_ic_20d": 0.01}}]}
     result = merge_library(latest, incoming)
-    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 0.5
+    assert result.persisted_by_hash["h1"]["metrics"]["rank_ic_20d"] == 0.01
 
 
 def test_final_oos_metrics_are_immutable():
@@ -277,7 +280,7 @@ def test_final_oos_metrics_are_immutable():
                  "final_oos_summary": {"passed": False},
                  "final_oos_audit_ref": "factor-oos://202601/factor_oos_20260101.jsonl#rid-0",
                  "discovery_rank_ic": 0.01,
-                 "fitness": 0.5,
+                 "rank_ic_20d": 0.02,
                  "metrics_as_of": "2026-07-26",
              }}
         ]
@@ -289,4 +292,149 @@ def test_final_oos_metrics_are_immutable():
     assert metrics["final_oos_audit_ref"].endswith("#rid-1")
     assert metrics["discovery_rank_ic"] == 0.04
     # 普通监控指标允许被更新
-    assert metrics["fitness"] == 0.5
+    assert metrics["rank_ic_20d"] == 0.02
+
+
+# ---------- Research/Monitoring 拆分与 Freshness 修正（v2.2.4 第九轮） ----------
+
+
+def test_research_metrics_are_nested_and_immutable():
+    research = {
+        "discovery": {"rank_ic": 0.04, "fitness": 1.0, "research_run_id": "run-1"},
+        "final_oos": {"passed": True, "audit_ref": "factor-oos://202607/a.jsonl#rid"},
+    }
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
+             "metrics": {"research": research, "monitoring": {}, "metrics_as_of": "2026-07-01"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
+             "metrics": {
+                 "research": {"discovery": {"rank_ic": 0.001}, "final_oos": {"passed": False}},
+                 "metrics_as_of": "2026-07-26",
+             }}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["research"]["discovery"]["rank_ic"] == 0.04
+    assert metrics["research"]["final_oos"]["passed"] is True
+
+
+def test_monitoring_metrics_can_update():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1"),
+             "metrics": {
+                 "research": {"discovery": {"rank_ic": 0.04}},
+                 "monitoring": {"as_of": "2026-07-01", "rank_ic_20d": 0.03},
+             }}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1"),
+             "metrics": {"monitoring": {"as_of": "2026-07-26", "rank_ic_20d": 0.01, "revision": 1}}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["monitoring"]["rank_ic_20d"] == 0.01
+    assert metrics["monitoring"]["as_of"] == "2026-07-26"
+    assert metrics["research"]["discovery"]["rank_ic"] == 0.04
+
+
+def test_stale_monitoring_metrics_cannot_overwrite():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1"),
+             "metrics": {"monitoring": {"as_of": "2026-07-26", "rank_ic_20d": 0.03}}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1"),
+             "metrics": {"monitoring": {"as_of": "2026-07-01", "rank_ic_20d": 0.01}}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    assert result.persisted_by_hash["h1"]["metrics"]["monitoring"]["rank_ic_20d"] == 0.03
+
+
+def test_original_discovery_rank_ic_cannot_be_overwritten():
+    latest = {"factors": [{**_factor("F001", ["ret", "cs_rank"], "h1"), "metrics": {"rank_ic": 0.04, "icir": 0.6}}]}
+    incoming = {"factors": [{**_factor("F009", ["ret", "cs_rank"], "h1"), "metrics": {"rank_ic": 0.001, "icir": 0.1}}]}
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["rank_ic"] == 0.04
+    assert metrics["icir"] == 0.6
+
+
+def test_original_discovery_fitness_cannot_be_overwritten():
+    latest = {"factors": [{**_factor("F001", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 2.0, "coverage": 0.9}}]}
+    incoming = {"factors": [{**_factor("F009", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 0.5, "coverage": 0.3}}]}
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["fitness"] == 2.0
+    assert metrics["coverage"] == 0.9
+
+
+def test_data_version_hash_does_not_define_freshness():
+    # Hash 字典序不得被当作时间顺序：incoming 的 hash 更大但更旧，仍不得覆盖
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-26", "metrics_data_version": "aaaa"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.01, "metrics_as_of": "2026-07-01", "metrics_data_version": "zzzz"}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    assert result.persisted_by_hash["h1"]["metrics"]["rank_ic_20d"] == 0.05
+
+
+def test_same_timestamp_different_data_version_conflicts():
+    import pytest
+
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-26", "metrics_data_version": "aaaa"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.01, "metrics_as_of": "2026-07-26", "metrics_data_version": "bbbb"}}
+        ]
+    }
+    with pytest.raises(ValueError, match="METRICS_VERSION_CONFLICT"):
+        merge_library(latest, incoming)
+
+
+def test_higher_revision_wins():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.05, "metrics_as_of": "2026-07-26", "metrics_revision": 1,
+                         "metrics_data_version": "aaaa"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1"),
+             "metrics": {"rank_ic_20d": 0.01, "metrics_as_of": "2026-07-26", "metrics_revision": 2,
+                         "metrics_data_version": "bbbb"}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["rank_ic_20d"] == 0.01
+    assert metrics["metrics_revision"] == 2
