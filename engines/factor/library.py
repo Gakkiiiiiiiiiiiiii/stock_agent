@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -36,6 +37,35 @@ _STATUS_RANK = {
     FactorLifecycleStatus.ACTIVE.value: 6,
     FactorLifecycleStatus.DEGRADED.value: 7,
     FactorLifecycleStatus.RETIRED.value: 8,
+}
+
+# 稳定身份字段：同一因子被识别后不允许被旧 Worker 的 incoming 快照覆盖，
+# 否则磁盘中的规范 ID 可能被改写并与库内其他条目撞号。
+_IMMUTABLE_IDENTITY_FIELDS = {
+    "id",
+    "candidate_hash",
+    "rpn",
+    "normalized_rpn",
+    "discovered_at",
+}
+
+# 来源字段：首次创建后不允许被旧 Worker 覆盖。
+_PROTECTED_PROVENANCE_FIELDS = {
+    "research_run_id",
+    "first_code_commit",
+    "first_data_version",
+}
+
+# OOS 审计类指标：incoming 缺失时保留 existing，不得被擦除。
+_PROTECTED_METRIC_KEYS = {
+    "final_oos_summary",
+    "final_oos_audit_ref",
+    "final_oos_audit",
+}
+
+# 终态：退役因子不允许被自动流程重新激活。
+_TERMINAL_STATUSES = {
+    FactorLifecycleStatus.RETIRED.value,
 }
 
 
@@ -87,6 +117,7 @@ def save_library(data: dict, path: str | Path | None = None, lease_guard: Callab
         latest = _read_library_file(cfg_path)
         latest.setdefault("factors", [])
         result = merge_library(latest, data)
+        _validate_library_uniqueness(result.library)
         if lease_guard:
             lease_guard()
         payload = yaml.safe_dump(result.library, allow_unicode=True, sort_keys=False)
@@ -119,28 +150,49 @@ def merge_library(latest: dict, incoming: dict) -> LibraryMergeResult:
     merged_factors = [dict(item) for item in (latest or {}).get("factors") or []]
     merged["factors"] = merged_factors
     result = LibraryMergeResult(library=merged)
-    by_identity = {_factor_identity(item): item for item in merged_factors}
+    # 三个索引：candidate_hash > normalized_rpn/rpn > id。
+    # 旧因子可能缺 Hash，仅靠单身份键会漏匹配，导致同一因子被重复插入。
+    by_hash: dict[str, dict] = {}
+    by_rpn: dict[str, dict] = {}
+    by_id: dict[str, dict] = {}
+    for item in merged_factors:
+        _index_factor(item, by_hash, by_rpn, by_id)
     used_ids = {str(item.get("id")) for item in merged_factors if item.get("id")}
 
     for raw in (incoming or {}).get("factors") or []:
         factor = dict(raw)
-        identity = _factor_identity(factor)
         candidate_hash = str(factor.get("candidate_hash") or "")
-        existing = by_identity.get(identity)
+        rpn_key = _rpn_key(factor)
+        factor_id = str(factor.get("id") or "")
+
+        existing = None
+        if candidate_hash:
+            existing = by_hash.get(candidate_hash)
+        if existing is None and rpn_key:
+            existing = by_rpn.get(rpn_key)
+        # id 兜底只在 incoming 既无 Hash 也无 RPN 时启用：
+        # Hash/RPN 不同但 id 相同属于新因子撞号，应重新编号而不是误合并。
+        if existing is None and not candidate_hash and not rpn_key and factor_id:
+            existing = by_id.get(factor_id)
+
         if existing is not None:
             _merge_factor(existing, factor)
+            # RPN 命中缺 Hash 的旧因子时补写 Hash；已有 Hash 不得修改。
+            if not existing.get("candidate_hash") and candidate_hash:
+                existing["candidate_hash"] = candidate_hash
+                by_hash[candidate_hash] = existing
             result.persisted_entries.append(existing)
             if candidate_hash:
                 result.updated_candidate_hashes.add(candidate_hash)
             continue
 
-        old_id = str(factor.get("id") or "")
+        old_id = factor_id
         if not old_id or old_id in used_ids:
             factor["id"] = next_factor_id(merged)
             if old_id:
                 result.reassigned_ids[old_id] = str(factor["id"])
         merged_factors.append(factor)
-        by_identity[identity] = factor
+        _index_factor(factor, by_hash, by_rpn, by_id)
         used_ids.add(str(factor.get("id")))
         result.persisted_entries.append(factor)
         if candidate_hash:
@@ -148,29 +200,93 @@ def merge_library(latest: dict, incoming: dict) -> LibraryMergeResult:
     return result
 
 
-def _factor_identity(factor: dict) -> str:
-    if factor.get("candidate_hash"):
-        return f"hash:{factor['candidate_hash']}"
+def _rpn_key(factor: dict) -> str:
     rpn = factor.get("normalized_rpn") or factor.get("rpn") or []
-    if rpn:
-        return f"rpn:{json_key(rpn)}"
-    return f"id:{factor.get('id')}"
+    return json_key(rpn) if rpn else ""
+
+
+def _index_factor(item: dict, by_hash: dict, by_rpn: dict, by_id: dict) -> None:
+    candidate_hash = str(item.get("candidate_hash") or "")
+    if candidate_hash:
+        by_hash.setdefault(candidate_hash, item)
+    rpn_key = _rpn_key(item)
+    if rpn_key:
+        by_rpn.setdefault(rpn_key, item)
+    factor_id = str(item.get("id") or "")
+    if factor_id:
+        by_id.setdefault(factor_id, item)
+
+
+def _validate_library_uniqueness(library: dict) -> None:
+    """写盘前的全局唯一性终检：id / candidate_hash / rpn 任一重复即拒绝保存。"""
+    ids: set[str] = set()
+    hashes: set[str] = set()
+    rpns: set[str] = set()
+    for factor in library.get("factors") or []:
+        factor_id = str(factor.get("id") or "")
+        candidate_hash = str(factor.get("candidate_hash") or "")
+        rpn_key = json_key(factor.get("normalized_rpn") or factor.get("rpn") or [])
+        if factor_id:
+            if factor_id in ids:
+                raise ValueError(f"DUPLICATE_FACTOR_ID:{factor_id}")
+            ids.add(factor_id)
+        if candidate_hash:
+            if candidate_hash in hashes:
+                raise ValueError(f"DUPLICATE_CANDIDATE_HASH:{candidate_hash}")
+            hashes.add(candidate_hash)
+        if rpn_key != "[]":
+            if rpn_key in rpns:
+                raise ValueError(f"DUPLICATE_FACTOR_RPN:{rpn_key}")
+            rpns.add(rpn_key)
 
 
 def _merge_factor(existing: dict, incoming: dict) -> None:
     old_status = existing.get("status")
     old_stage = existing.get("validation_stage")
-    existing_metrics = dict(existing.get("metrics") or {})
-    incoming_metrics = dict(incoming.get("metrics") or {})
-    protected_metric_keys = {"final_oos_summary", "final_oos_audit_ref", "final_oos_audit"}
-    merged_metrics = {**existing_metrics, **incoming_metrics}
-    for key in protected_metric_keys:
-        if key in existing_metrics and key not in incoming_metrics:
-            merged_metrics[key] = existing_metrics[key]
-    existing.update({key: value for key, value in incoming.items() if key != "metrics"})
+    merged_metrics = _merge_metrics(
+        dict(existing.get("metrics") or {}),
+        dict(incoming.get("metrics") or {}),
+    )
+    for key, value in incoming.items():
+        if key == "metrics":
+            continue
+        if key in _IMMUTABLE_IDENTITY_FIELDS:
+            continue
+        if key in _PROTECTED_PROVENANCE_FIELDS and existing.get(key) is not None:
+            continue
+        existing[key] = value
     existing["metrics"] = merged_metrics
-    existing["status"] = _max_status(old_status, incoming.get("status"))
-    existing["validation_stage"] = _max_status(old_stage, incoming.get("validation_stage"))
+    existing["status"] = _merge_status(old_status, incoming.get("status"))
+    existing["validation_stage"] = _merge_status(old_stage, incoming.get("validation_stage"))
+
+
+def _merge_metrics(existing: dict, incoming: dict) -> dict:
+    merged = {**existing, **incoming}
+    for key in _PROTECTED_METRIC_KEYS:
+        if key in existing and key not in incoming:
+            merged[key] = existing[key]
+    # Incoming 的 OOS 审计早于 existing 时，不得覆盖最新审计引用。
+    # 审计日期从 URI 文件名（factor_oos_YYYYMMDD.jsonl）解析。
+    existing_ref = existing.get("final_oos_audit_ref")
+    incoming_ref = incoming.get("final_oos_audit_ref")
+    if existing_ref and incoming_ref:
+        existing_day = _audit_ref_date(str(existing_ref))
+        incoming_day = _audit_ref_date(str(incoming_ref))
+        if existing_day and incoming_day and incoming_day < existing_day:
+            merged["final_oos_audit_ref"] = existing_ref
+    return merged
+
+
+def _audit_ref_date(ref: str) -> str:
+    match = re.search(r"factor_oos_(\d{8})", ref)
+    return match.group(1) if match else ""
+
+
+def _merge_status(old_status, incoming_status) -> str:
+    old = str(old_status or RESEARCH_STATUS)
+    if old in _TERMINAL_STATUSES:
+        return old
+    return _max_status(old, incoming_status)
 
 
 def _max_status(left, right) -> str:

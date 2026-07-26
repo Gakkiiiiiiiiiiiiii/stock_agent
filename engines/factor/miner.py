@@ -44,7 +44,7 @@ from engines.factor.vocab import (
     is_valid_token,
 )
 from engines.factor.vm import StackVM
-from financial_agent.research_config import get_research_config
+from financial_agent.research_config import EvaluationConfig, get_research_config
 from financial_agent.utils import project_root
 
 logger = logging.getLogger(__name__)
@@ -166,6 +166,7 @@ class FactorMiner:
         horizon: int,
         round_index: int,
         last_round_results: list[dict] | None,
+        evaluation: EvaluationConfig,
     ) -> str:
         ts_tokens = [f"{op}_{w}" for op in TS_OPS for w in TS_WINDOWS]
         ts_binary_tokens = [f"{op}_{w}" for op in TS_BINARY_OPS for w in TS_WINDOWS]
@@ -202,8 +203,13 @@ class FactorMiner:
 {json.dumps(seed_examples, ensure_ascii=False, indent=1)}
 
 ## 评估口径（样本内，预测未来 {horizon} 日收益）
-入库门槛: rank_ic >= {fitness_mod.RANK_IC_THRESHOLD} 且 icir >= {fitness_mod.ICIR_THRESHOLD}。
-综合 fitness = 5*rank_ic + 0.5*icir + topk_annual_return。
+入库门槛:
+- coverage >= {evaluation.min_coverage}
+- rank_ic >= {evaluation.min_rank_ic}
+- icir >= {evaluation.min_icir}
+- topk_excess_annual_return > {evaluation.min_topk_excess_annual_return}
+综合 fitness = 5*rank_ic + 0.5*icir + topk_excess_annual_return
+（topk_excess_annual_return 为 TopK 组合相对等权基准的超额年化收益）。
 
 ## 因子库当前 Top5（避免重复，可在其思路上变异）
 {top_desc}
@@ -238,6 +244,8 @@ class FactorMiner:
         eval_window: int | None = None,
         dates: list[str] | None = None,
         lease_guard: Callable[[], None] | None = None,
+        data_version: str | None = None,
+        data_snapshot_id: str | None = None,
     ) -> dict:
         """执行挖掘，返回 {accepted, rejected, warning, stopped_early, stop_reason, evaluated} 摘要。"""
         rounds = rounds or int(os.getenv("FACTOR_MINING_ROUNDS", _DEFAULT_ROUNDS))
@@ -307,7 +315,7 @@ class FactorMiner:
                 active_panels[f"SEED:{seed['name'] or seed['hypothesis'][:12]}"] = panel_values[:, discovery_eval_start:discovery_eval_end]
 
         for round_index in range(1, rounds + 1):
-            prompt = self._build_prompt(library, candidates_per_round, horizon, round_index, last_round_results)
+            prompt = self._build_prompt(library, candidates_per_round, horizon, round_index, last_round_results, research_config.evaluation)
             try:
                 response = self.model_client.complete(prompt, temperature=0.8)
                 content = (response or {}).get("content", "")
@@ -432,6 +440,8 @@ class FactorMiner:
             dates=dates,
             eval_window=eval_window,
             lease_guard=lease_guard,
+            data_version=data_version,
+            data_snapshot_id=data_snapshot_id,
         )
         rejected.extend(oos_rejected)
         diagnostics.update(oos_diagnostics)
@@ -458,6 +468,8 @@ class FactorMiner:
         dates: list[str] | None = None,
         eval_window: int | None = None,
         lease_guard: Callable[[], None] | None = None,
+        data_version: str | None = None,
+        data_snapshot_id: str | None = None,
     ) -> tuple[list[dict], list[dict], dict]:
         _ = panel
         accepted: list[dict] = []
@@ -490,6 +502,8 @@ class FactorMiner:
                     symbols=symbols,
                     dates=dates,
                     research_run_id=research_run_id,
+                    data_version=data_version,
+                    data_snapshot_id=data_snapshot_id,
                 )
                 diagnostics["run_valid"] = False
                 diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
@@ -513,6 +527,8 @@ class FactorMiner:
                     symbols=symbols,
                     dates=dates,
                     research_run_id=research_run_id,
+                    data_version=data_version,
+                    data_snapshot_id=data_snapshot_id,
                 )
                 rejected.append({
                     "rpn": candidate.rpn,
@@ -535,6 +551,8 @@ class FactorMiner:
                 symbols=symbols,
                 dates=dates,
                 research_run_id=research_run_id,
+                data_version=data_version,
+                data_snapshot_id=data_snapshot_id,
             )
             stored_metrics = dict(candidate.discovery_metrics)
             stored_metrics["final_oos_summary"] = {
@@ -573,6 +591,18 @@ class FactorMiner:
             merge_result = save_library(library, self.library_path, lease_guard=lease_guard)
             by_hash = merge_result.persisted_by_hash
             accepted = [by_hash.get(str(item.get("candidate_hash"))) or item for item in accepted]
+            # 最终 Library ID 在保存时才确定：追加 ID 分配事件而不是回写原审计行。
+            for item in accepted:
+                append_oos_audit(
+                    {
+                        "event": "FACTOR_ID_ASSIGNED",
+                        "research_run_id": research_run_id,
+                        "candidate_hash": item.get("candidate_hash"),
+                        "factor_id": item.get("id"),
+                        "data_version": data_version,
+                        "data_snapshot_id": data_snapshot_id,
+                    }
+                )
         return accepted, rejected, diagnostics
 
     def _write_oos_audit(
@@ -585,9 +615,13 @@ class FactorMiner:
         symbols: list[str],
         dates: list[str] | None,
         research_run_id: str,
+        data_version: str | None = None,
+        data_snapshot_id: str | None = None,
     ) -> str:
-        return append_oos_audit(
+        result = append_oos_audit(
             {
+                "event": "FINAL_OOS_EVALUATED",
+                "factor_id": None,
                 "research_run_id": research_run_id,
                 "candidate_hash": candidate.candidate_hash,
                 "rpn": candidate.rpn,
@@ -597,9 +631,13 @@ class FactorMiner:
                 "split": split.diagnostics(horizon, candidate.full_values.shape[1]),
                 "date_ranges": _date_ranges(split, horizon, dates),
                 "universe_size": len(symbols),
+                "universe_hash": _universe_hash(symbols),
+                "data_version": data_version,
+                "data_snapshot_id": data_snapshot_id,
                 "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
             }
         )
+        return result.uri
 
 
 __all__ = ["FactorMiner"]
@@ -637,6 +675,12 @@ def _prompt_safe_metrics(metrics: dict) -> dict:
 
 def _candidate_hash(rpn: list[str]) -> str:
     return sha256(json.dumps(list(rpn), ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _universe_hash(symbols: list[str]) -> str:
+    return sha256(
+        json.dumps(sorted(symbols), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _date_ranges(split: FactorResearchSplit, horizon: int, dates: list[str] | None) -> dict:

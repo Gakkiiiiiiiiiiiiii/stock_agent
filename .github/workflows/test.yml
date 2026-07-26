@@ -17,14 +17,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]"
+      - name: Collect
+        run: |
+          pytest --collect-only -q \
+            -m "not integration and not media and not qmt and not slow"
       - name: Test
         run: |
           pytest -q \
-            tests/test_factor_fitness.py \
-            tests/test_factor_walkforward.py \
-            tests/test_factor_miner.py \
-            tests/test_factor_paper_worker.py \
-            tests/test_job_system.py \
-            tests/test_regime.py \
-            tests/test_api.py \
-            tests/test_factor_lookback.py
+            -m "not integration and not media and not qmt and not slow" \
+            --cov=engines.factor \
+            --cov=engines.market \
+            --cov=engines.backtest \
+            --cov-report=term-missing \
+            --cov-fail-under=70

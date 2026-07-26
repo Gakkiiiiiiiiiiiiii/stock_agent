@@ -255,3 +255,85 @@ def test_render_portfolio_report_markdown():
     assert "# 组合回测报告" in report
     assert "超额年化收益" in report
     assert "| 2024-01 |" in report
+
+
+# ---------- 涨跌停上下限分离与无涨跌幅阶段（v2.2.2 第七轮） ----------
+
+
+def test_asymmetric_quote_limit_rates_are_respected():
+    from engines.backtest.execution import price_limit_down_pct, price_limit_up_pct
+
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12}
+    day = date(2026, 7, 26)
+    assert price_limit_up_pct("600000.SH", trade_date=day, quote=quote) == pytest.approx(0.15)
+    assert price_limit_down_pct("600000.SH", trade_date=day, quote=quote) == pytest.approx(0.12)
+
+
+def test_asymmetric_limit_prices():
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12}
+    day = date(2026, 7, 26)
+    assert limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote) == pytest.approx(11.50)
+    # 跌停必须使用 12% 而不是涨停的 15%（错误实现会得到 8.50）
+    assert limit_down_price(10.0, "600000.SH", trade_date=day, quote=quote) == pytest.approx(8.80)
+
+
+def test_can_sell_uses_down_limit_not_up_limit():
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12}
+    day = date(2026, 7, 26)
+    # 跌停价 8.80：开盘价等于跌停价不可卖，高于跌停价可卖
+    assert can_sell(8.80, 10.0, "600000.SH", trade_date=day, quote=quote) is False
+    assert can_sell(8.81, 10.0, "600000.SH", trade_date=day, quote=quote) is True
+
+
+def test_no_limit_stage_returns_unbounded_prices():
+    day = date(2026, 7, 26)
+    quote = {"listing_stage": "IPO_FIRST_DAY"}
+    assert limit_up_price(10, "600000.SH", trade_date=day, quote=quote) == float("inf")
+    assert limit_down_price(10, "600000.SH", trade_date=day, quote=quote) == float("-inf")
+
+
+def test_no_limit_stage_can_buy_and_sell():
+    day = date(2026, 7, 26)
+    quote = {"listing_stage": "IPO_FIRST_DAY"}
+    assert can_buy(100.0, 10.0, "600000.SH", trade_date=day, quote=quote) is True
+    assert can_sell(0.01, 10.0, "600000.SH", trade_date=day, quote=quote) is True
+
+
+def test_no_limit_stage_does_not_call_round_to_tick(monkeypatch):
+    day = date(2026, 7, 26)
+    quote = {"listing_stage": "IPO_FIRST_DAY"}
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("round_to_tick must not be called for no-limit stage")
+
+    monkeypatch.setattr("engines.backtest.execution.round_to_tick", forbidden)
+    assert limit_up_price(10, "600000.SH", trade_date=day, quote=quote) == float("inf")
+    assert limit_down_price(10, "600000.SH", trade_date=day, quote=quote) == float("-inf")
+
+
+def test_quote_tick_size_overrides_default():
+    day = date(2026, 7, 26)
+    # 10.03 × 1.15 = 11.5345：tick=0.05 → 11.55；默认 0.01 → 11.53
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12, "tick_size": 0.05}
+    assert limit_up_price(10.03, "600000.SH", trade_date=day, quote=quote) == pytest.approx(11.55)
+    quote_default = {"limit_up_rate": 15, "limit_down_rate": 12}
+    assert limit_up_price(10.03, "600000.SH", trade_date=day, quote=quote_default) == pytest.approx(11.53)
+
+
+def test_price_limit_pct_deprecated_returns_up_limit():
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": 15, "limit_down_rate": 12}
+    with pytest.warns(DeprecationWarning):
+        value = price_limit_pct("600000.SH", trade_date=day, quote=quote)
+    assert value == pytest.approx(0.15)
+
+
+def test_validate_price_limit_rule():
+    from engines.market.price_limit_rules import PriceLimitRule, validate_price_limit_rule
+
+    validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=None, limit_down_pct=None, has_price_limit=False))
+    validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=0.1, limit_down_pct=0.1))
+    with pytest.raises(ValueError, match="INCOMPLETE"):
+        validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=None, limit_down_pct=0.1))
+    with pytest.raises(ValueError, match="INVALID"):
+        validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=0.0, limit_down_pct=0.1))

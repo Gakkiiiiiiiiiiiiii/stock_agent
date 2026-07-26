@@ -215,6 +215,7 @@ class QmtMarketDataProvider(MarketDataProvider):
                 continue
         up_count = down_count = limit_up_count = limit_down_count = 0
         amounts: list[float] = []
+        end_day = latest_available_trading_day(as_of or date.today())
         for symbol, payload in quotes.items():
             last_price = safe_float(payload.get("last_price") or payload.get("price"))
             last_close = safe_float(payload.get("last_close") or payload.get("pre_close"))
@@ -234,7 +235,7 @@ class QmtMarketDataProvider(MarketDataProvider):
                 quote=payload,
                 is_risk_warning=is_st_quote(payload),
             )
-            if not rule.has_price_limit:
+            if not rule.has_price_limit or rule.limit_up_pct is None or rule.limit_down_pct is None:
                 continue
             if pct >= rule.limit_up_pct - 0.002:
                 limit_up_count += 1

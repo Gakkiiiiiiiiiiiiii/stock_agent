@@ -6,8 +6,21 @@ from typing import Any
 
 import numpy as np
 
-from engines.market.price_limit_rules import resolve_price_limit_rule
+from engines.market.price_limit_rules import (
+    MAIN_BOARD_ST_10_EFFECTIVE_DATE,
+    board_of,
+    resolve_price_limit_rule,
+)
 from financial_agent.research_config import get_research_config
+
+
+@dataclass(frozen=True)
+class RecentLimitResult:
+    """近期涨停识别结果：hit 为结论，reliable 表示证据完整性，quality_flags 记录降级原因。"""
+
+    hit: bool
+    reliable: bool
+    quality_flags: list[str]
 
 
 @dataclass(frozen=True)
@@ -73,6 +86,7 @@ class HighPositionFeatureBuilder:
             )
         grouped = _group_rows(rows)
         stats = []
+        global_flags: list[str] = []
         for symbol in symbols:
             records = grouped.get(symbol) or []
             pool_records, outcome_record = _split_pool_and_outcome(records, pool_as_of, outcome_as_of)
@@ -88,7 +102,8 @@ class HighPositionFeatureBuilder:
             high60 = float(np.max(highs[-60:])) if len(highs) >= 60 else float(np.max(closes))
             config = get_research_config().high_position
             near_high = closes[-1] >= high60 * config.near_high_ratio if high60 > 0 else False
-            recent_limit = _recent_limit_up(symbol, pool_records[-10:])
+            recent_limit_result = _recent_limit_up(symbol, pool_records[-10:])
+            global_flags.extend(recent_limit_result.quality_flags)
             amount_mean = float(np.nanmean(amounts[-20:])) if len(amounts) >= 20 else 0.0
             amount_ratio = float(amounts[-1] / amount_mean) if amount_mean > 0 else 0.0
             stats.append(
@@ -97,7 +112,7 @@ class HighPositionFeatureBuilder:
                     "ret20": ret20,
                     "ret60": ret60,
                     "near_high": near_high,
-                    "recent_limit": recent_limit,
+                    "recent_limit": recent_limit_result.hit,
                     "amount_ratio": amount_ratio,
                     "prev_close": float(closes[-1]),
                     "ma20": float(np.nanmean(closes[-20:])),
@@ -119,7 +134,7 @@ class HighPositionFeatureBuilder:
             if is_high_position and (is_crowded or item["recent_limit"] or return_leader):
                 pool.append(item)
 
-        flags: list[str] = []
+        flags: list[str] = list(global_flags)
         if len(pool) < config.min_pool_size:
             flags.append("HIGH_POSITION_POOL_TOO_SMALL")
         if not pool:
@@ -149,7 +164,7 @@ class HighPositionFeatureBuilder:
                 quote=quote,
                 is_risk_warning=_is_st_quote(quote),
             )
-            if rule.has_price_limit and pct <= -rule.limit_down_pct + 0.002:
+            if rule.has_price_limit and rule.limit_down_pct is not None and pct <= -rule.limit_down_pct + 0.002:
                 limit_down += 1
             if last_price < item["ma20"]:
                 breakdown += 1
@@ -170,6 +185,11 @@ class HighPositionFeatureBuilder:
             or valid < config.min_valid_count
             or (coverage is not None and coverage < config.min_quote_coverage)
             or (mismatch_ratio is not None and mismatch_ratio > config.max_mismatch_ratio)
+            # 配置要求时，旧制度 ST 状态缺失直接阻断正式指标，不允许伪装为精确结果
+            or (
+                config.block_on_historical_risk_status_missing
+                and "HISTORICAL_RISK_WARNING_STATUS_UNAVAILABLE" in flags
+            )
         ):
             return HighPositionFeatures(
                 None, None, None, None, len(pool), valid, _round_or_none(coverage),
@@ -228,6 +248,32 @@ def _group_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
                 "high": _float(row.get("high")),
                 "close": _float(row.get("close")),
                 "amount": _float(row.get("amount")),
+                # 保留名称与风险警示状态：2026-07-06 前主板 ST 适用 5%，
+                # 缺失状态必须显式标记，不能静默按 10% 处理。
+                "name": (
+                    row.get("name")
+                    or row.get("stock_name")
+                    or row.get("instrument_name")
+                ),
+                "is_risk_warning": _optional_bool(
+                    row.get("is_risk_warning")
+                    if row.get("is_risk_warning") is not None
+                    else row.get("risk_warning")
+                    if row.get("risk_warning") is not None
+                    else row.get("is_st")
+                ),
+                "limit_up_rate": _optional_float(
+                    row.get("limit_up_rate")
+                    if row.get("limit_up_rate") is not None
+                    else row.get("LimitUpRate")
+                ),
+                "limit_down_rate": _optional_float(
+                    row.get("limit_down_rate")
+                    if row.get("limit_down_rate") is not None
+                    else row.get("LimitDownRate")
+                ),
+                "upper_limit_price": _optional_float(row.get("upper_limit_price")),
+                "lower_limit_price": _optional_float(row.get("lower_limit_price")),
             }
         )
     for values in grouped.values():
@@ -235,17 +281,37 @@ def _group_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     return grouped
 
 
-def _recent_limit_up(symbol: str, records: list[dict[str, Any]]) -> bool:
+def _recent_limit_up(symbol: str, records: list[dict[str, Any]]) -> RecentLimitResult:
+    flags: list[str] = []
     for prev, cur in zip(records, records[1:], strict=False):
         prev_close = _float(prev.get("close"))
         cur_close = _float(cur.get("close"))
         cur_date = cur.get("date")
         if cur_date is None:
             continue
-        rule = resolve_price_limit_rule(symbol, trade_date=cur_date, security_meta=cur)
-        if prev_close > 0 and rule.has_price_limit and cur_close / prev_close - 1 >= rule.limit_up_pct - 0.002:
-            return True
-    return False
+        risk_warning = cur.get("is_risk_warning")
+        explicit_rate = cur.get("limit_up_rate") is not None
+        if (
+            board_of(symbol) == "主板"
+            and cur_date < MAIN_BOARD_ST_10_EFFECTIVE_DATE
+            and risk_warning is None
+            and not explicit_rate
+        ):
+            flags.append("HISTORICAL_RISK_WARNING_STATUS_UNAVAILABLE")
+        rule = resolve_price_limit_rule(
+            symbol,
+            trade_date=cur_date,
+            security_meta=cur,
+            is_risk_warning=risk_warning,
+        )
+        if (
+            prev_close > 0
+            and rule.has_price_limit
+            and rule.limit_up_pct is not None
+            and cur_close / prev_close - 1 >= rule.limit_up_pct - 0.002
+        ):
+            return RecentLimitResult(hit=True, reliable=not flags, quality_flags=sorted(set(flags)))
+    return RecentLimitResult(hit=False, reliable=not flags, quality_flags=sorted(set(flags)))
 
 
 def _quantile(values: list[float], q: float) -> float:
@@ -271,6 +337,29 @@ def _float(value) -> float:
     return float(str(value).replace(",", ""))
 
 
+def _optional_float(value) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(str(value).replace(",", "").replace("%", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _optional_bool(value) -> bool | None:
+    """三态风险状态：True 明确风险警示，False 明确非风险警示，None 数据源未提供。"""
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
 def _round_or_none(value: float | None) -> float | None:
     return None if value is None else round(float(value), 6)
 
@@ -284,4 +373,4 @@ def _batched(items: list[str], size: int) -> list[list[str]]:
     return [items[index : index + size] for index in range(0, len(items), size)]
 
 
-__all__ = ["HighPositionFeatureBuilder", "HighPositionFeatures"]
+__all__ = ["HighPositionFeatureBuilder", "HighPositionFeatures", "RecentLimitResult"]

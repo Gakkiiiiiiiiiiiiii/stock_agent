@@ -43,6 +43,6 @@ jobs:
       - name: Install integration dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test,ml]"
+          pip install -e ".[test]"
       - name: Run integration tests
         run: pytest -q tests -m integration

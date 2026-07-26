@@ -11,11 +11,25 @@ MAIN_BOARD_ST_10_EFFECTIVE_DATE = date(2026, 7, 6)
 @dataclass(frozen=True)
 class PriceLimitRule:
     board: str
-    limit_up_pct: float
-    limit_down_pct: float
+    limit_up_pct: float | None
+    limit_down_pct: float | None
     has_price_limit: bool = True
     source: str = "rule"
     version: str = ""
+
+
+def validate_price_limit_rule(rule: PriceLimitRule) -> None:
+    """有涨跌幅限制时上下限比例必须齐全且为正。"""
+    if not rule.has_price_limit:
+        return
+    if rule.limit_up_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_up_pct")
+    if rule.limit_down_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_down_pct")
+    if rule.limit_up_pct <= 0:
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:limit_up_pct")
+    if rule.limit_down_pct <= 0:
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:limit_down_pct")
 
 
 def code_of(symbol: str) -> str:
@@ -55,7 +69,7 @@ def resolve_price_limit_rule(
     board = board_of(symbol)
     stage = str(listing_stage or payload.get("listing_stage") or payload.get("trade_status") or "").upper()
     if stage in {"IPO_FIRST_DAY", "RELISTING_FIRST_DAY", "NO_LIMIT", "NONE_LIMIT"}:
-        return PriceLimitRule(board=board, limit_up_pct=float("inf"), limit_down_pct=float("inf"), has_price_limit=False, source="listing_stage", version=stage)
+        return PriceLimitRule(board=board, limit_up_pct=None, limit_down_pct=None, has_price_limit=False, source="listing_stage", version=stage)
 
     quote_rule = _quote_limit_rule(board, payload)
     if quote_rule is not None:
@@ -124,4 +138,5 @@ __all__ = [
     "code_of",
     "resolve_price_limit_rule",
     "round_to_tick",
+    "validate_price_limit_rule",
 ]

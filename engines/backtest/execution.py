@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 from dataclasses import dataclass, field
 
 from engines.market.price_limit_rules import board_of, resolve_price_limit_rule, round_to_tick
@@ -15,23 +16,74 @@ COMMISSION_MIN = 5.0  # 佣金最低5元
 STAMP_TAX_RATE = 0.0005  # 印花税0.05%（仅卖出收取）
 SLIPPAGE_RATE = 0.001  # 滑点，双边各千一
 
+DEFAULT_TICK_SIZE = 0.01  # 默认最小价格变动单位（元）
 
-def price_limit_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
-    """按交易日解析涨跌幅限制比例。历史回放必须显式传入 trade_date。"""
+
+def _resolve_tick_size(quote: dict | None, default: float = DEFAULT_TICK_SIZE) -> float:
+    """行情元数据可覆盖默认 tick；缺失或非法时回退 0.01 元。"""
+    payload = quote or {}
+    for key in ("tick_size", "price_tick", "min_price_change"):
+        value = payload.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            tick = float(value)
+        except (TypeError, ValueError):
+            continue
+        if tick > 0:
+            return tick
+    return default
+
+
+def price_limit_up_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """涨停比例。历史回放必须显式传入 trade_date。无涨跌幅阶段返回 +inf。"""
     rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
+    if not rule.has_price_limit:
+        return float("inf")
+    if rule.limit_up_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_up_pct")
     return rule.limit_up_pct
 
 
+def price_limit_down_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """跌停比例。历史回放必须显式传入 trade_date。无涨跌幅阶段返回 +inf。"""
+    rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
+    if not rule.has_price_limit:
+        return float("inf")
+    if rule.limit_down_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_down_pct")
+    return rule.limit_down_pct
+
+
+def price_limit_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+    """Deprecated: 仅返回涨停比例，请改用 price_limit_up_pct()/price_limit_down_pct()。"""
+    warnings.warn(
+        "price_limit_pct() returns the upper limit only; use "
+        "price_limit_up_pct() or price_limit_down_pct()",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return price_limit_up_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
+
+
 def limit_up_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
-    """涨停价：前收价 ×(1+limit)，按交易 tick 半入取整。"""
-    limit = price_limit_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
-    return round_to_tick(prev_close * (1 + limit))
+    """涨停价：前收价 ×(1+limit_up)，按交易 tick 半入取整。无涨跌幅阶段返回 +inf。"""
+    rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
+    if not rule.has_price_limit:
+        return float("inf")
+    if rule.limit_up_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_up_pct")
+    return round_to_tick(prev_close * (1 + rule.limit_up_pct), tick_size=_resolve_tick_size(quote))
 
 
 def limit_down_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
-    """跌停价：前收价 ×(1-limit)，按交易 tick 半入取整。"""
-    limit = price_limit_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
-    return round_to_tick(prev_close * (1 - limit))
+    """跌停价：前收价 ×(1-limit_down)，按交易 tick 半入取整。无涨跌幅阶段返回 -inf。"""
+    rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
+    if not rule.has_price_limit:
+        return float("-inf")
+    if rule.limit_down_pct is None:
+        raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_down_pct")
+    return round_to_tick(prev_close * (1 - rule.limit_down_pct), tick_size=_resolve_tick_size(quote))
 
 
 def can_buy(open_price: float, prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> bool:

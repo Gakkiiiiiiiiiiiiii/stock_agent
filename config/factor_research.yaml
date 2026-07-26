@@ -44,6 +44,7 @@ high_position:
   amount_ratio_quantile: 0.8
   prev_close_mismatch_threshold: 0.01
   max_mismatch_ratio: 0.05
+  block_on_historical_risk_status_missing: false
 
 factor_library:
   lock_timeout_seconds: 30

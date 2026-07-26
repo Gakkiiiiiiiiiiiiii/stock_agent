@@ -186,7 +186,9 @@ def test_miner_default_oos_uses_purged_walkforward(tmp_path, monkeypatch):
     assert calls
     assert result["accepted"][0]["metrics"]["final_oos_summary"]["method"] == "purged_walkforward"
     assert result["accepted"][0]["metrics"]["final_oos_summary"]["withheld"] is True
-    assert result["accepted"][0]["metrics"]["final_oos_audit_ref"].endswith(".jsonl")
+    audit_ref = result["accepted"][0]["metrics"]["final_oos_audit_ref"]
+    assert audit_ref.startswith("factor-oos://")
+    assert "#" in audit_ref
 
 
 def test_neutralized_metrics_present(tmp_path, monkeypatch):
@@ -285,3 +287,59 @@ def test_miner_tightens_threshold_after_many_evaluations(tmp_path, monkeypatch):
     assert result["evaluated"] == 32
     assert len(result["accepted"]) == 30  # 前 30 个按基础门槛入库
     assert result["rejected"][-1]["reason"] == "未达门槛"  # 第 31 个起门槛收紧
+
+
+def test_prompt_uses_configured_thresholds(tmp_path):
+    from financial_agent.research_config import EvaluationConfig
+
+    miner = FactorMiner(model_client=FakeModelClient([]), library_path=str(tmp_path / "lib.yaml"))
+    evaluation = EvaluationConfig(min_coverage=0.7, min_rank_ic=0.03, min_icir=0.5, min_topk_excess_annual_return=0.01)
+    prompt = miner._build_prompt({"factors": []}, 8, 5, 1, None, evaluation)
+    assert "coverage >= 0.7" in prompt
+    assert "rank_ic >= 0.03" in prompt
+    assert "icir >= 0.5" in prompt
+    assert "topk_excess_annual_return > 0.01" in prompt
+    # 不得回退到硬编码旧阈值
+    assert "rank_ic >= 0.02" not in prompt
+    assert "icir >= 0.3\n" not in prompt
+
+
+def test_prompt_describes_excess_return_fitness(tmp_path):
+    from financial_agent.research_config import EvaluationConfig
+
+    miner = FactorMiner(model_client=FakeModelClient([]), library_path=str(tmp_path / "lib.yaml"))
+    prompt = miner._build_prompt({"factors": []}, 8, 5, 1, None, EvaluationConfig())
+    assert "5*rank_ic + 0.5*icir + topk_excess_annual_return" in prompt
+    assert "超额年化收益" in prompt
+    assert "topk_annual_return" not in prompt
+
+
+def test_audit_records_contain_universe_hash_and_events(tmp_path, monkeypatch):
+    monkeypatch.setattr("engines.factor.miner.evaluate_oos_splits", lambda *a, **k: {"passed": True, "windows": [{"test": (0, 1)}]})
+    panel, symbols = _panel()
+    miner = FactorMiner(model_client=FakeModelClient([_good_candidate()]), library_path=str(tmp_path / "lib.yaml"))
+    result = miner.mine(panel, symbols, rounds=1, candidates_per_round=1, horizon=5, data_version="dv-1", data_snapshot_id="snap-1")
+    assert len(result["accepted"]) == 1
+
+    import json as _json
+    from engines.factor.oos_audit import read_oos_audit, resolve_oos_audit_uri
+
+    audit_ref = result["accepted"][0]["metrics"]["final_oos_audit_ref"]
+    path, fragment = resolve_oos_audit_uri(audit_ref)
+    assert fragment == result["accepted"][0]["candidate_hash"]
+    events = [
+        _json.loads(line)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip() and _json.loads(line).get("candidate_hash") == fragment
+    ]
+    by_event = {record["event"]: record for record in events}
+    assert "FINAL_OOS_EVALUATED" in by_event
+    assert "FACTOR_ID_ASSIGNED" in by_event
+    evaluated = by_event["FINAL_OOS_EVALUATED"]
+    assert evaluated["universe_size"] == len(symbols)
+    assert len(evaluated["universe_hash"]) == 64
+    assert evaluated["data_version"] == "dv-1"
+    assert evaluated["data_snapshot_id"] == "snap-1"
+    assert evaluated["factor_id"] is None
+    assert by_event["FACTOR_ID_ASSIGNED"]["factor_id"] == result["accepted"][0]["id"]
+    assert read_oos_audit(audit_ref)["event"] == "FACTOR_ID_ASSIGNED"

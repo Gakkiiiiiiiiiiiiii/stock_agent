@@ -64,6 +64,9 @@ class HighPositionConfig(BaseModel):
     amount_ratio_quantile: float = 0.8
     prev_close_mismatch_threshold: float = 0.01
     max_mismatch_ratio: float = 0.05
+    # 旧制度（2026-07-06 前）主板 ST 状态缺失时是否阻断正式高位指标；
+    # 默认 False：仅写入质量标记并降低证据可信度。
+    block_on_historical_risk_status_missing: bool = False
 
 
 class NeutralizationConfig(BaseModel):
