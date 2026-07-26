@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import os
 import sys
 from datetime import date, datetime, timezone
@@ -42,6 +41,11 @@ from engines.factor.lookback import max_lookback_from_rpn
 from engines.factor.miner import FactorMiner
 from engines.market.trading_calendar import next_trading_day
 from engines.factor.versioning import is_known_version
+from engines.market.price_limit_metadata import (
+    OptionalPriceStatus,
+    inspect_price_limit_meta,
+    parse_optional_price,
+)
 from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
@@ -456,6 +460,27 @@ def _quote_for_symbol(quotes: dict, symbol: str) -> dict:
     return quotes.get(to_qmt_symbol(symbol)) or {}
 
 
+def _quote_rule_capabilities(quote: dict) -> dict[str, bool]:
+    caps = inspect_price_limit_meta(quote or {})
+    return {
+        "buy_rule_meta": caps.buy_rule_meta,
+        "sell_rule_meta": caps.sell_rule_meta,
+        "actual_up": caps.actual_upper,
+        "actual_down": caps.actual_lower,
+    }
+
+
+def _quote_limit_price(quote: dict, field_name: str, *, fail_on_invalid: bool = False) -> float | None:
+    parsed = parse_optional_price((quote or {}).get(field_name), field_name)
+    if parsed.status is OptionalPriceStatus.MISSING:
+        return None
+    if parsed.status is OptionalPriceStatus.INVALID:
+        if fail_on_invalid:
+            raise ValueError(parsed.error or f"PRICE_LIMIT_PRICE_INVALID:{field_name}")
+        return None
+    return parsed.value
+
+
 def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date: str, quotes: dict | None = None) -> dict:
     """对"昨日持仓→今日"记账并落库状态，返回记账摘要。"""
     state_path = state_dir / "portfolio_state.json"
@@ -483,16 +508,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
 
     def _rule_context(i: int) -> TradeRuleContext:
         quote = _quote_for_symbol(quotes, symbols[i])
-
-        def _limit_price(key: str) -> float | None:
-            value = quote.get(key)
-            if value in (None, ""):
-                return None
-            try:
-                price = float(value)
-            except (TypeError, ValueError):
-                return None
-            return price if math.isfinite(price) and price > 0 else None
+        fail_on_invalid = get_research_config().paper_trading.fail_on_invalid_price_limit_meta
 
         return TradeRuleContext(
             symbol=symbols[i],
@@ -500,8 +516,8 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
             prev_close=float(prev_closes[i]),
             open_price=float(opens[i, t]),
             quote=quote,
-            upper_limit_price=_limit_price("upper_limit_price"),
-            lower_limit_price=_limit_price("lower_limit_price"),
+            upper_limit_price=_quote_limit_price(quote, "upper_limit_price", fail_on_invalid=fail_on_invalid),
+            lower_limit_price=_quote_limit_price(quote, "lower_limit_price", fail_on_invalid=fail_on_invalid),
         )
 
     def do_sell(symbol: str, i: int, shares: float) -> None:
@@ -693,22 +709,74 @@ def run_daily(
         quotes, quote_failed_chunks = quote_result or {}, 0
     quote_received = sum(1 for s in required_symbols if _quote_for_symbol(quotes, s))
     quote_coverage = quote_received / len(required_symbols) if required_symbols else None
+    price_limit_meta_received = 0
+    buy_rule_meta_received = 0
+    sell_rule_meta_received = 0
+    invalid_upper_limit_price_count = 0
+    invalid_lower_limit_price_count = 0
+    for symbol in required_symbols:
+        quote = _quote_for_symbol(quotes, symbol)
+        capabilities = _quote_rule_capabilities(quote)
+        if capabilities["buy_rule_meta"] or capabilities["sell_rule_meta"]:
+            price_limit_meta_received += 1
+        if capabilities["buy_rule_meta"]:
+            buy_rule_meta_received += 1
+        if capabilities["sell_rule_meta"]:
+            sell_rule_meta_received += 1
+        upper = parse_optional_price((quote or {}).get("upper_limit_price"), "upper_limit_price")
+        lower = parse_optional_price((quote or {}).get("lower_limit_price"), "lower_limit_price")
+        if upper.status is OptionalPriceStatus.INVALID:
+            invalid_upper_limit_price_count += 1
+        if lower.status is OptionalPriceStatus.INVALID:
+            invalid_lower_limit_price_count += 1
+    price_limit_meta_coverage = price_limit_meta_received / len(required_symbols) if required_symbols else None
+    buy_rule_meta_coverage = buy_rule_meta_received / len(required_symbols) if required_symbols else None
+    sell_rule_meta_coverage = sell_rule_meta_received / len(required_symbols) if required_symbols else None
     paper_config = get_research_config().paper_trading
     quote_quality_flags: list[str] = []
-    if quote_coverage is not None and quote_coverage < paper_config.min_quote_coverage:
+    if invalid_upper_limit_price_count:
+        quote_quality_flags.append("INVALID_UPPER_LIMIT_PRICE")
+    if invalid_lower_limit_price_count:
+        quote_quality_flags.append("INVALID_LOWER_LIMIT_PRICE")
+    if quote_coverage is not None and quote_coverage < paper_config.min_quote_transport_coverage:
+        quote_quality_flags.append("PAPER_QUOTE_TRANSPORT_COVERAGE_LOW")
         quote_quality_flags.append("PAPER_QUOTE_COVERAGE_LOW")
-        if paper_config.fail_on_low_quote_coverage:
+        if paper_config.fail_on_low_quote_transport_coverage or paper_config.fail_on_low_quote_coverage:
             return {
                 "date": execution_date,
                 "execution_date": execution_date,
                 "skipped": True,
-                "warning": f"PAPER_QUOTE_COVERAGE_LOW:{quote_coverage:.4f}",
+                "warning": f"PAPER_QUOTE_TRANSPORT_COVERAGE_LOW:{quote_coverage:.4f}",
                 "quote_requested_count": len(required_symbols),
                 "quote_received_count": quote_received,
                 "quote_coverage": quote_coverage,
+                "quote_transport_requested_count": len(required_symbols),
+                "quote_transport_received_count": quote_received,
+                "quote_transport_coverage": quote_coverage,
                 "quote_failed_chunk_count": quote_failed_chunks,
                 "quote_quality_flags": quote_quality_flags,
             }
+    if price_limit_meta_coverage is not None and price_limit_meta_coverage < paper_config.min_price_limit_meta_coverage:
+        quote_quality_flags.append("PAPER_PRICE_LIMIT_META_COVERAGE_LOW")
+        if paper_config.fail_on_low_price_limit_meta_coverage:
+            return {
+                "date": execution_date,
+                "execution_date": execution_date,
+                "skipped": True,
+                "warning": f"PAPER_PRICE_LIMIT_META_COVERAGE_LOW:{price_limit_meta_coverage:.4f}",
+                "quote_transport_requested_count": len(required_symbols),
+                "quote_transport_received_count": quote_received,
+                "quote_transport_coverage": quote_coverage,
+                "price_limit_meta_requested_count": len(required_symbols),
+                "price_limit_meta_received_count": price_limit_meta_received,
+                "price_limit_meta_coverage": price_limit_meta_coverage,
+                "quote_failed_chunk_count": quote_failed_chunks,
+                "quote_quality_flags": quote_quality_flags,
+            }
+    if buy_rule_meta_coverage is not None and buy_rule_meta_coverage < paper_config.min_price_limit_meta_coverage:
+        quote_quality_flags.append("PAPER_BUY_RULE_META_COVERAGE_LOW")
+    if sell_rule_meta_coverage is not None and sell_rule_meta_coverage < paper_config.min_price_limit_meta_coverage:
+        quote_quality_flags.append("PAPER_SELL_RULE_META_COVERAGE_LOW")
     bookkeeping = _advance_portfolio(
         panel, dates, symbols, pick_symbols, state, execution_date, quotes=quotes
     )
@@ -737,8 +805,20 @@ def run_daily(
         "quote_requested_count": len(required_symbols),
         "quote_received_count": quote_received,
         "quote_coverage": quote_coverage,
+        "quote_transport_requested_count": len(required_symbols),
+        "quote_transport_received_count": quote_received,
+        "quote_transport_coverage": quote_coverage,
+        "price_limit_meta_requested_count": len(required_symbols),
+        "price_limit_meta_received_count": price_limit_meta_received,
+        "price_limit_meta_coverage": price_limit_meta_coverage,
+        "price_limit_buy_meta_received_count": buy_rule_meta_received,
+        "price_limit_buy_meta_coverage": buy_rule_meta_coverage,
+        "price_limit_sell_meta_received_count": sell_rule_meta_received,
+        "price_limit_sell_meta_coverage": sell_rule_meta_coverage,
         "quote_failed_chunk_count": quote_failed_chunks,
-        "price_limit_rule_fallback_count": len(required_symbols) - quote_received,
+        "price_limit_rule_fallback_count": len(required_symbols) - price_limit_meta_received,
+        "invalid_upper_limit_price_count": invalid_upper_limit_price_count,
+        "invalid_lower_limit_price_count": invalid_lower_limit_price_count,
         "quote_quality_flags": quote_quality_flags,
         "warning": warning,
     }

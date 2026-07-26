@@ -35,6 +35,11 @@ paper_trading:
   remine_days: 5
   min_quote_coverage: 0.9
   fail_on_low_quote_coverage: false
+  min_quote_transport_coverage: 0.9
+  min_price_limit_meta_coverage: 0.8
+  fail_on_low_quote_transport_coverage: false
+  fail_on_low_price_limit_meta_coverage: false
+  fail_on_invalid_price_limit_meta: false
 
 high_position:
   min_pool_size: 10
@@ -53,5 +58,6 @@ factor_library:
 
 backtest:
   fail_on_ambiguous_price_limit: false
+  fail_on_invalid_price_limit_meta: true
 
 require_data_version_for_oos: true

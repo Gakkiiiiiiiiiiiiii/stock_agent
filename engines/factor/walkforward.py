@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
@@ -38,6 +39,46 @@ DISCLAIMER = (
     "本预检仅作辅助判据，因子有效性最终以每日前向模拟盘"
     "（workers/factor_paper_worker）为准。不构成投资建议。"
 )
+
+
+@dataclass(frozen=True)
+class WalkForwardWindow:
+    rebalance_index: int
+    start_index: int
+    end_index: int
+    dates: list[str]
+    panel: dict[str, np.ndarray]
+    data_version: str
+    snapshot_id: str
+
+
+def _build_walkforward_window(
+    panel: dict[str, np.ndarray],
+    dates: list[str],
+    symbols: list[str],
+    t: int,
+) -> WalkForwardWindow:
+    start = max(0, t - (MINING_WINDOW - 1))
+    window_dates = list(dates[start:t + 1])
+    sub_panel = {name: values[:, start:t + 1] for name, values in panel.items()}
+    expected_days = len(window_dates)
+    for name, values in sub_panel.items():
+        if values.ndim != 2 or values.shape[1] != expected_days:
+            raise ValueError(
+                "WALKFORWARD_WINDOW_SHAPE_MISMATCH:"
+                f"{name}:{values.shape}!={expected_days}"
+            )
+    data_version = build_panel_data_version(symbols, window_dates, sub_panel, "walkforward", "none")
+    snapshot_id = f"walkforward:{window_dates[0]}:{window_dates[-1]}:{uuid4().hex[:12]}"
+    return WalkForwardWindow(
+        rebalance_index=t,
+        start_index=start,
+        end_index=t,
+        dates=window_dates,
+        panel=sub_panel,
+        data_version=data_version,
+        snapshot_id=snapshot_id,
+    )
 
 
 def default_rebalance_points(n_days: int, start: int = DEFAULT_START_DAY, step: int = DEFAULT_STEP_DAYS) -> list[int]:
@@ -66,15 +107,16 @@ def run_walkforward(
     model_client=None,
     data_version: str | None = None,
     data_snapshot_id: str | None = None,
+    security_meta=None,
+    upper_limit_prices=None,
+    lower_limit_prices=None,
 ) -> dict:
     """执行 walk-forward 滚动重挖预检，返回净值/指标/分窗口明细。"""
     closes = panel.get("close")
     if closes is None or closes.size == 0 or not symbols:
         return _empty_result("特征面板为空，无法执行 walk-forward 预检")
-    if data_version is None:
-        data_version = build_panel_data_version(symbols, dates, panel, "walkforward", "none")
-    if data_snapshot_id is None:
-        data_snapshot_id = f"walkforward-{uuid4().hex[:12]}"
+    parent_data_version = data_version or build_panel_data_version(symbols, dates, panel, "walkforward", "none")
+    parent_data_snapshot_id = data_snapshot_id or f"walkforward-{uuid4().hex[:12]}"
     n_days = closes.shape[1]
     points = rebalance_points if rebalance_points is not None else default_rebalance_points(n_days)
     points = [t for t in points if 0 <= t < n_days - 1]
@@ -97,8 +139,7 @@ def run_walkforward(
         prev_lib: Path | None = None
         for t in points:
             # 挖掘窗口：[T-249, T]，只用 ≤T 的列
-            start = max(0, t - (MINING_WINDOW - 1))
-            sub_panel = {name: values[:, start:t + 1] for name, values in panel.items()}
+            window = _build_walkforward_window(panel, dates, symbols, t)
 
             # 挖掘库写入临时文件，从上一点快照继承（首点继承正式库），避免污染正式库
             cur_lib = tmp / f"lib_{t}.yaml"
@@ -107,11 +148,20 @@ def run_walkforward(
                 shutil.copy(inherit, cur_lib)
             miner = FactorMiner(model_client=model_client, library_path=str(cur_lib))
             mining = miner.mine(
-                sub_panel, symbols,
+                window.panel, symbols,
                 rounds=rounds, candidates_per_round=candidates_per_round, horizon=horizon,
-                dates=list(dates[: t + 1]),
-                data_version=data_version,
-                data_snapshot_id=data_snapshot_id,
+                dates=window.dates,
+                data_version=window.data_version,
+                data_snapshot_id=window.snapshot_id,
+                data_context={
+                    "mode": "walkforward",
+                    "parent_data_version": parent_data_version,
+                    "parent_data_snapshot_id": parent_data_snapshot_id,
+                    "window_start": window.dates[0],
+                    "window_end": window.dates[-1],
+                    "rebalance_date": dates[t],
+                    "rebalance_index": t,
+                },
             )
             if mining.get("warning"):
                 warnings.append(f"{dates[t]}: {mining['warning']}")
@@ -124,7 +174,7 @@ def run_walkforward(
             factors = research_validated_factors(library)
 
             # T 日截面等权合成 alpha_score（因子面板只含 ≤T 的列，无显性前视）
-            scores, factor_count = compose_alpha_scores(sub_panel, factors)
+            scores, factor_count = compose_alpha_scores(window.panel, factors)
             picks: list[str] = []
             if scores is not None:
                 valid_idx = np.where(~np.isnan(scores))[0]
@@ -138,6 +188,21 @@ def run_walkforward(
             score_panel = np.full(closes[:, t + 1:end].shape, np.nan)
             if scores is not None:
                 score_panel[:, 0] = scores
+            seg_security_meta = (
+                np.asarray(security_meta, dtype=object)[:, t + 1:end]
+                if security_meta is not None
+                else None
+            )
+            seg_upper = (
+                np.asarray(upper_limit_prices, dtype=object)[:, t + 1:end]
+                if upper_limit_prices is not None
+                else None
+            )
+            seg_lower = (
+                np.asarray(lower_limit_prices, dtype=object)[:, t + 1:end]
+                if lower_limit_prices is not None
+                else None
+            )
             seg = run_topk_backtest(
                 score_panel,
                 panel["open"][:, t + 1:end],
@@ -150,6 +215,9 @@ def run_walkforward(
                 top_k=resolved_top_k,
                 initial_cash=equity_curve[-1] if equity_curve else 1_000_000.0,
                 score_metadata=_score_metadata(dates[t], seg_dates),
+                security_meta=seg_security_meta,
+                upper_limit_prices=seg_upper,
+                lower_limit_prices=seg_lower,
             )
 
             seg_eq = seg["equity_curve"]
@@ -159,8 +227,13 @@ def run_walkforward(
             excess = window_return - bench_return
             per_window.append({
                 "rebalance_date": dates[t],
-                "window_start": seg_dates[0],
-                "window_end": seg_dates[-1],
+                "window_start": window.dates[0],
+                "window_end": window.dates[-1],
+                "execution_start": seg_dates[0],
+                "execution_end": seg_dates[-1],
+                "window_data_version": window.data_version,
+                "window_snapshot_id": window.snapshot_id,
+                "parent_data_version": parent_data_version,
                 "window_return": round(window_return, 4),
                 "benchmark_return": round(bench_return, 4),
                 "excess_return": round(excess, 4),
@@ -169,6 +242,9 @@ def run_walkforward(
                 "factor_ids": [f.get("id") for f in factors],
                 "accepted_count": len(mining.get("accepted") or []),
                 "picks": picks,
+                "price_limit_meta_coverage": seg.get("price_limit_meta_coverage"),
+                "price_limit_fallback_count": seg.get("price_limit_fallback_count"),
+                "price_limit_quality_flags": seg.get("price_limit_quality_flags") or [],
             })
 
             equity_curve.extend(seg_eq)
@@ -219,4 +295,10 @@ def _score_metadata(signal_date: str, execution_dates: list[str]) -> list[dict]:
     return rows
 
 
-__all__ = ["run_walkforward", "default_rebalance_points", "DISCLAIMER"]
+__all__ = [
+    "run_walkforward",
+    "default_rebalance_points",
+    "DISCLAIMER",
+    "WalkForwardWindow",
+    "_build_walkforward_window",
+]

@@ -52,6 +52,11 @@ class PaperTradingConfig(BaseModel):
     scoring_buffer_days: int = 10
     min_quote_coverage: float = 0.9
     fail_on_low_quote_coverage: bool = False
+    min_quote_transport_coverage: float = 0.9
+    min_price_limit_meta_coverage: float = 0.8
+    fail_on_low_quote_transport_coverage: bool = False
+    fail_on_low_price_limit_meta_coverage: bool = False
+    fail_on_invalid_price_limit_meta: bool = False
 
 
 class HighPositionConfig(BaseModel):
@@ -89,6 +94,7 @@ class BacktestConfig(BaseModel):
 
     # 严格研究模式：历史回放中主板旧制度 ST 状态缺失时直接报错，不做模糊回放
     fail_on_ambiguous_price_limit: bool = False
+    fail_on_invalid_price_limit_meta: bool = True
 
 
 class ResearchConfig(BaseModel):
@@ -151,6 +157,12 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "paper_trading.mining_panel_days", _env_int("FACTOR_PAPER_MINING_PANEL_DAYS"))
     _set_nested(merged, "paper_trading.remine_days", _env_int("FACTOR_PAPER_REMINE_DAYS"))
     _set_nested(merged, "paper_trading.scoring_buffer_days", _env_int("FACTOR_PAPER_SCORING_BUFFER_DAYS"))
+    _set_nested(merged, "paper_trading.min_quote_transport_coverage", _env_float("FACTOR_PAPER_MIN_QUOTE_TRANSPORT_COVERAGE"))
+    _set_nested(merged, "paper_trading.min_price_limit_meta_coverage", _env_float("FACTOR_PAPER_MIN_PRICE_LIMIT_META_COVERAGE"))
+    _set_nested(merged, "paper_trading.fail_on_low_quote_transport_coverage", _env_bool("FACTOR_PAPER_FAIL_ON_LOW_QUOTE_TRANSPORT_COVERAGE"))
+    _set_nested(merged, "paper_trading.fail_on_low_price_limit_meta_coverage", _env_bool("FACTOR_PAPER_FAIL_ON_LOW_PRICE_LIMIT_META_COVERAGE"))
+    _set_nested(merged, "paper_trading.fail_on_invalid_price_limit_meta", _env_bool("FACTOR_PAPER_FAIL_ON_INVALID_PRICE_LIMIT_META"))
+    _set_nested(merged, "backtest.fail_on_invalid_price_limit_meta", _env_bool("FACTOR_BACKTEST_FAIL_ON_INVALID_PRICE_LIMIT_META"))
     _set_nested(merged, "factor_library.lock_timeout_seconds", _env_int("FACTOR_LIBRARY_LOCK_TIMEOUT_SECONDS"))
     if _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS") is not None:
         merged["require_data_version_for_oos"] = _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS")

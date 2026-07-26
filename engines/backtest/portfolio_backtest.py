@@ -24,6 +24,11 @@ from engines.backtest.execution import (
     is_suspended,
 )
 from engines.market.price_limit_rules import MAIN_BOARD_ST_10_EFFECTIVE_DATE, board_of
+from engines.market.price_limit_metadata import (
+    OptionalPriceStatus,
+    inspect_price_limit_meta,
+    parse_optional_price,
+)
 from financial_agent.research_config import get_research_config
 
 # 调仓时忽略的价值偏差阈值（元），避免无意义的碎单
@@ -152,12 +157,19 @@ def run_topk_backtest(
     top_k = max(1, min(top_k, n_symbols))
     rebalance_interval = max(1, int(rebalance_interval))
     fail_on_ambiguous = get_research_config().backtest.fail_on_ambiguous_price_limit
+    fail_on_invalid_meta = get_research_config().backtest.fail_on_invalid_price_limit_meta
     pl_stats = {
         "unique_cells": 0,
         "meta_covered_cells": 0,
+        "buy_meta_covered_cells": 0,
+        "sell_meta_covered_cells": 0,
+        "actual_limit_price_cells": 0,
+        "rate_based_cells": 0,
         "fallback_cells": 0,
         "buy_ambiguous_cells": 0,
         "sell_ambiguous_cells": 0,
+        "invalid_upper_limit_price_count": 0,
+        "invalid_lower_limit_price_count": 0,
         "conflicts": set(),
     }
 
@@ -203,6 +215,7 @@ def run_topk_backtest(
                 lower_cells=lower_cells,
                 pl_stats=pl_stats,
                 fail_on_ambiguous=fail_on_ambiguous,
+                fail_on_invalid_meta=fail_on_invalid_meta,
             )
 
         equity = state.cash + sum(
@@ -233,9 +246,23 @@ def run_topk_backtest(
             round(pl_stats["meta_covered_cells"] / pl_stats["unique_cells"], 6)
             if pl_stats["unique_cells"] else None
         ),
+        "price_limit_buy_meta_coverage": (
+            round(pl_stats["buy_meta_covered_cells"] / pl_stats["unique_cells"], 6)
+            if pl_stats["unique_cells"] else None
+        ),
+        "price_limit_sell_meta_coverage": (
+            round(pl_stats["sell_meta_covered_cells"] / pl_stats["unique_cells"], 6)
+            if pl_stats["unique_cells"] else None
+        ),
+        "actual_limit_price_coverage": (
+            round(pl_stats["actual_limit_price_cells"] / pl_stats["unique_cells"], 6)
+            if pl_stats["unique_cells"] else None
+        ),
         "price_limit_fallback_count": pl_stats["fallback_cells"],
         "price_limit_buy_ambiguous_count": pl_stats["buy_ambiguous_cells"],
         "price_limit_sell_ambiguous_count": pl_stats["sell_ambiguous_cells"],
+        "invalid_upper_limit_price_count": pl_stats["invalid_upper_limit_price_count"],
+        "invalid_lower_limit_price_count": pl_stats["invalid_lower_limit_price_count"],
         "price_limit_quality_flags": quality_flags,
     }
 
@@ -271,6 +298,35 @@ def _optional_price(value) -> float | None:
     if not math.isfinite(price) or price <= 0:
         return None
     return price
+
+
+def _parse_limit_price_cell(
+    value,
+    field_name: str,
+    *,
+    treat_nan_as_missing: bool,
+    fail_on_invalid: bool,
+    pl_stats: dict | None,
+) -> float | None:
+    if treat_nan_as_missing:
+        try:
+            if value is not None and isinstance(float(value), float) and math.isnan(float(value)):
+                return None
+        except (TypeError, ValueError):
+            pass
+    parsed = parse_optional_price(value, field_name)
+    if parsed.status is OptionalPriceStatus.MISSING:
+        return None
+    if parsed.status is OptionalPriceStatus.INVALID:
+        code = "INVALID_UPPER_LIMIT_PRICE" if field_name == "upper_limit_price" else "INVALID_LOWER_LIMIT_PRICE"
+        if pl_stats is not None:
+            pl_stats["conflicts"].add(code)
+            count_key = "invalid_upper_limit_price_count" if field_name == "upper_limit_price" else "invalid_lower_limit_price_count"
+            pl_stats[count_key] += 1
+        if fail_on_invalid:
+            raise ValueError(parsed.error or f"PRICE_LIMIT_PRICE_INVALID:{field_name}")
+        return None
+    return parsed.value
 
 
 def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None, allow_unsafe_without_metadata: bool) -> None:
@@ -363,6 +419,7 @@ def _rebalance_day(
     lower_cells: np.ndarray | None = None,
     pl_stats: dict | None = None,
     fail_on_ambiguous: bool = False,
+    fail_on_invalid_meta: bool = True,
 ) -> float:
     """在调仓日 t 以开盘价执行调仓，返回当日成交总额（双边合计）。"""
     traded = 0.0
@@ -390,19 +447,60 @@ def _rebalance_day(
         if idx in context_cache:
             return context_cache[idx]
         meta = _meta_to_dict(meta_cells[idx, t]) if meta_cells is not None else {}
-        panel_upper = _optional_price(upper_cells[idx, t]) if upper_cells is not None else None
-        panel_lower = _optional_price(lower_cells[idx, t]) if lower_cells is not None else None
-        meta_upper = _optional_price(meta.get("upper_limit_price"))
-        meta_lower = _optional_price(meta.get("lower_limit_price"))
+        panel_upper = (
+            _parse_limit_price_cell(
+                upper_cells[idx, t],
+                "upper_limit_price",
+                treat_nan_as_missing=True,
+                fail_on_invalid=fail_on_invalid_meta,
+                pl_stats=pl_stats,
+            )
+            if upper_cells is not None
+            else None
+        )
+        panel_lower = (
+            _parse_limit_price_cell(
+                lower_cells[idx, t],
+                "lower_limit_price",
+                treat_nan_as_missing=True,
+                fail_on_invalid=fail_on_invalid_meta,
+                pl_stats=pl_stats,
+            )
+            if lower_cells is not None
+            else None
+        )
+        meta_upper = _parse_limit_price_cell(
+            meta.get("upper_limit_price"),
+            "upper_limit_price",
+            treat_nan_as_missing=False,
+            fail_on_invalid=fail_on_invalid_meta,
+            pl_stats=pl_stats,
+        )
+        meta_lower = _parse_limit_price_cell(
+            meta.get("lower_limit_price"),
+            "lower_limit_price",
+            treat_nan_as_missing=False,
+            fail_on_invalid=fail_on_invalid_meta,
+            pl_stats=pl_stats,
+        )
         # 执行优先级：独立 Limit Price 面板 > Meta 中的 Limit Price > Limit Rate > 状态/阶段 > 本地规则
         upper = panel_upper if panel_upper is not None else meta_upper
         lower = panel_lower if panel_lower is not None else meta_lower
         if pl_stats is not None:
+            capabilities = inspect_price_limit_meta(meta, upper_limit_price=upper, lower_limit_price=lower)
             pl_stats["unique_cells"] += 1
-            if meta or upper is not None or lower is not None:
+            if capabilities.buy_rule_meta or capabilities.sell_rule_meta:
                 pl_stats["meta_covered_cells"] += 1
             else:
                 pl_stats["fallback_cells"] += 1
+            if capabilities.buy_rule_meta:
+                pl_stats["buy_meta_covered_cells"] += 1
+            if capabilities.sell_rule_meta:
+                pl_stats["sell_meta_covered_cells"] += 1
+            if capabilities.actual_upper or capabilities.actual_lower:
+                pl_stats["actual_limit_price_cells"] += 1
+            if capabilities.rate_upper or capabilities.rate_lower:
+                pl_stats["rate_based_cells"] += 1
             if panel_upper is not None and meta_upper is not None and abs(panel_upper - meta_upper) > 1e-9:
                 pl_stats["conflicts"].add("UPPER_LIMIT_PRICE_CONFLICT")
             if panel_lower is not None and meta_lower is not None and abs(panel_lower - meta_lower) > 1e-9:

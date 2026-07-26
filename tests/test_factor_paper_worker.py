@@ -476,10 +476,11 @@ def test_run_daily_returns_quote_summary(env):
     assert result["quote_received_count"] < result["quote_requested_count"]
     assert 0 < result["quote_coverage"] < 1
     assert result["quote_failed_chunk_count"] == 0
-    assert result["price_limit_rule_fallback_count"] == (
-        result["quote_requested_count"] - result["quote_received_count"]
-    )
+    assert result["quote_transport_coverage"] == result["quote_coverage"]
+    assert result["price_limit_meta_received_count"] == 0
+    assert result["price_limit_rule_fallback_count"] == result["quote_requested_count"]
     assert "PAPER_QUOTE_COVERAGE_LOW" in result["quote_quality_flags"]
+    assert "PAPER_PRICE_LIMIT_META_COVERAGE_LOW" in result["quote_quality_flags"]
 
 
 def test_run_daily_full_quote_coverage_has_no_quality_flag(env):
@@ -491,4 +492,37 @@ def test_run_daily_full_quote_coverage_has_no_quality_flag(env):
     result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
                            panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
     assert result["quote_coverage"] == 1.0
+    assert result["quote_transport_coverage"] == 1.0
+    assert result["price_limit_meta_coverage"] == 0.0
+    assert "PAPER_QUOTE_TRANSPORT_COVERAGE_LOW" not in result["quote_quality_flags"]
+    assert "PAPER_PRICE_LIMIT_META_COVERAGE_LOW" in result["quote_quality_flags"]
+
+
+def test_actual_limit_prices_count_as_buy_and_sell_meta(env):
+    def loader(symbols):
+        return {s: {"last_price": 10.0, "upper_limit_price": 11.0, "lower_limit_price": 9.0} for s in symbols}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["quote_transport_coverage"] == 1.0
+    assert result["price_limit_meta_coverage"] == 1.0
+    assert result["price_limit_buy_meta_coverage"] == 1.0
+    assert result["price_limit_sell_meta_coverage"] == 1.0
+    assert result["price_limit_rule_fallback_count"] == 0
     assert result["quote_quality_flags"] == []
+
+
+def test_only_upper_limit_counts_as_buy_meta_not_sell_meta(env):
+    def loader(symbols):
+        return {s: {"last_price": 10.0, "upper_limit_price": 11.0} for s in symbols}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["price_limit_meta_coverage"] == 1.0
+    assert result["price_limit_buy_meta_coverage"] == 1.0
+    assert result["price_limit_sell_meta_coverage"] == 0.0
+    assert "PAPER_SELL_RULE_META_COVERAGE_LOW" in result["quote_quality_flags"]

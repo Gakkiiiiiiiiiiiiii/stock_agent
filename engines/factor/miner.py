@@ -248,6 +248,7 @@ class FactorMiner:
         lease_guard: Callable[[], None] | None = None,
         data_version: str | None = None,
         data_snapshot_id: str | None = None,
+        data_context: dict | None = None,
     ) -> dict:
         """执行挖掘，返回 {accepted, rejected, warning, stopped_early, stop_reason, evaluated} 摘要。"""
         rounds = rounds or int(os.getenv("FACTOR_MINING_ROUNDS", _DEFAULT_ROUNDS))
@@ -452,6 +453,7 @@ class FactorMiner:
             lease_guard=lease_guard,
             data_version=data_version,
             data_snapshot_id=data_snapshot_id,
+            data_context=data_context,
         )
         rejected.extend(oos_rejected)
         diagnostics.update(oos_diagnostics)
@@ -480,6 +482,7 @@ class FactorMiner:
         lease_guard: Callable[[], None] | None = None,
         data_version: str | None = None,
         data_snapshot_id: str | None = None,
+        data_context: dict | None = None,
     ) -> tuple[list[dict], list[dict], dict]:
         _ = panel
         accepted: list[dict] = []
@@ -515,6 +518,7 @@ class FactorMiner:
                     research_run_id=research_run_id,
                     data_version=data_version,
                     data_snapshot_id=data_snapshot_id,
+                    data_context=data_context,
                 )
                 diagnostics["run_valid"] = False
                 diagnostics["run_failure_code"] = "FINAL_OOS_WINDOW_UNAVAILABLE"
@@ -540,6 +544,7 @@ class FactorMiner:
                     research_run_id=research_run_id,
                     data_version=data_version,
                     data_snapshot_id=data_snapshot_id,
+                    data_context=data_context,
                 )
                 rejected.append({
                     "rpn": candidate.rpn,
@@ -564,6 +569,7 @@ class FactorMiner:
                 research_run_id=research_run_id,
                 data_version=data_version,
                 data_snapshot_id=data_snapshot_id,
+                data_context=data_context,
             )
             final_oos_summary = {
                 "method": oos.get("method"),
@@ -643,6 +649,7 @@ class FactorMiner:
         research_run_id: str,
         data_version: str | None = None,
         data_snapshot_id: str | None = None,
+        data_context: dict | None = None,
     ) -> AuditWriteResult:
         return append_oos_audit(
             {
@@ -660,6 +667,7 @@ class FactorMiner:
                 "universe_hash": _universe_hash(symbols),
                 "data_version": data_version,
                 "data_snapshot_id": data_snapshot_id,
+                "data_context": data_context or {},
                 "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
             }
         )

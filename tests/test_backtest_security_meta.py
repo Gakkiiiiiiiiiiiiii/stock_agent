@@ -344,3 +344,68 @@ def test_upper_limit_missing_does_not_block_precise_sell(monkeypatch):
             rebalance_interval=5, top_k=2, initial_cash=100_000.0,
             allow_unsafe_without_metadata=True, security_meta=meta,
         )
+
+
+def test_source_only_meta_does_not_count_as_limit_meta():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    meta = _meta_grid(4, 11, {(0, 5): {"source": "qmt", "data_version": "dv-1"}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert result["price_limit_meta_coverage"] == 0.0
+    assert result["price_limit_buy_meta_coverage"] == 0.0
+    assert result["price_limit_sell_meta_coverage"] == 0.0
+
+
+def test_name_only_meta_counts_as_limit_meta():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    meta = _meta_grid(4, 11, {(0, 5): {"name": "ST测试"}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert result["price_limit_meta_coverage"] > 0
+    assert result["price_limit_buy_meta_coverage"] > 0
+    assert result["price_limit_sell_meta_coverage"] > 0
+
+
+def test_invalid_upper_limit_price_sets_quality_flag(monkeypatch):
+    from financial_agent.research_config import BacktestConfig, ResearchConfig
+
+    monkeypatch.setattr(
+        "engines.backtest.portfolio_backtest.get_research_config",
+        lambda: ResearchConfig(backtest=BacktestConfig(fail_on_invalid_price_limit_meta=False)),
+    )
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    meta = _meta_grid(4, 11, {(0, 5): {"upper_limit_price": "nan"}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert "INVALID_UPPER_LIMIT_PRICE" in result["price_limit_quality_flags"]
+    assert result["invalid_upper_limit_price_count"] == 1
+
+
+def test_strict_mode_rejects_invalid_actual_limit_price(monkeypatch):
+    from financial_agent.research_config import BacktestConfig, ResearchConfig
+
+    monkeypatch.setattr(
+        "engines.backtest.portfolio_backtest.get_research_config",
+        lambda: ResearchConfig(backtest=BacktestConfig(fail_on_invalid_price_limit_meta=True)),
+    )
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    meta = _meta_grid(4, 11, {(0, 5): {"lower_limit_price": -1}})
+    with pytest.raises(ValueError, match="PRICE_LIMIT_PRICE_INVALID:lower_limit_price"):
+        run_topk_backtest(
+            scores, opens, highs, lows, closes, volume, symbols, dates,
+            rebalance_interval=5, top_k=2, initial_cash=100_000.0,
+            allow_unsafe_without_metadata=True, security_meta=meta,
+        )

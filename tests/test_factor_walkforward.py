@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from engines.factor.miner import FactorMiner
-from engines.factor.walkforward import DISCLAIMER, run_walkforward
+from engines.factor.walkforward import DISCLAIMER, MINING_WINDOW, _build_walkforward_window, run_walkforward
 
 
 class FakeModelClient:
@@ -134,6 +134,64 @@ def test_walkforward_no_lookahead():
         assert w_base["factor_count"] == w_alt["factor_count"]
     # 记账区间使用 >T 的数据，净值理应变化
     assert base["equity_curve"] != alt["equity_curve"]
+
+
+def test_walkforward_dates_match_subpanel_columns():
+    panel, symbols, dates = _trend_panel(n_days=320)
+    window = _build_walkforward_window(panel, dates, symbols, 260)
+    assert window.start_index == 260 - (MINING_WINDOW - 1)
+    assert window.end_index == 260
+    assert len(window.dates) == window.panel["close"].shape[1]
+    assert window.dates[0] == dates[window.start_index]
+    assert window.dates[-1] == dates[260]
+
+
+def test_walkforward_window_version_excludes_future_columns():
+    panel, symbols, dates = _trend_panel(n_days=320)
+    base = _build_walkforward_window(panel, dates, symbols, 260)
+    mutated = {key: value.copy() for key, value in panel.items()}
+    mutated["close"][:, 280:] *= 2
+    mutated["ret"][:, 280:] *= -1
+    alt = _build_walkforward_window(mutated, dates, symbols, 260)
+    assert alt.data_version == base.data_version
+
+
+def test_window_snapshot_id_is_unique():
+    panel, symbols, dates = _trend_panel(n_days=320)
+    first = _build_walkforward_window(panel, dates, symbols, 260)
+    second = _build_walkforward_window(panel, dates, symbols, 260)
+    assert first.data_version == second.data_version
+    assert first.snapshot_id != second.snapshot_id
+
+
+def test_walkforward_passes_security_meta_to_backtest(monkeypatch):
+    panel, symbols, dates = _trend_panel()
+    security_meta = [[None for _ in dates] for _ in symbols]
+    for i in range(len(symbols)):
+        for t in range(len(dates)):
+            security_meta[i][t] = {"upper_limit_price": 999.0, "lower_limit_price": 0.01}
+    captured = {}
+
+    def fake_backtest(*args, **kwargs):
+        captured["security_meta"] = kwargs.get("security_meta")
+        return {
+            "equity_curve": [1_000_000.0, 1_001_000.0],
+            "benchmark_curve": [1_000_000.0, 1_000_500.0],
+            "trades": [],
+            "daily_turnover": [0.0, 0.0],
+            "price_limit_meta_coverage": 1.0,
+            "price_limit_fallback_count": 0,
+            "price_limit_quality_flags": [],
+        }
+
+    monkeypatch.setattr("engines.factor.walkforward.run_topk_backtest", fake_backtest)
+    result = _run(panel, dates, symbols, security_meta=security_meta, rebalance_points=[60])
+    window = result["per_window"][0]
+    assert captured["security_meta"].shape == (len(symbols), 5)
+    assert captured["security_meta"][0, 0]["upper_limit_price"] == 999.0
+    assert window["price_limit_meta_coverage"] == 1.0
+    assert window["price_limit_fallback_count"] == 0
+    assert window["price_limit_quality_flags"] == []
 
 
 def test_walkforward_rejects_insufficient_sample():

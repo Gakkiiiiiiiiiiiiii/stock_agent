@@ -15,6 +15,7 @@ import numpy as np
 import yaml
 
 from engines.factor.lifecycle import FactorLifecycleStatus
+from engines.factor.versioning import is_known_version
 from financial_agent.research_config import get_research_config
 from financial_agent.utils import project_root
 
@@ -81,6 +82,11 @@ _IMMUTABLE_RESEARCH_METRIC_KEYS = {
     "topk_excess_annual_return",
 }
 
+_RESERVED_METRIC_SECTIONS = {
+    "research",
+    "monitoring",
+}
+
 # 终态：退役因子不允许被自动流程重新激活。
 _TERMINAL_STATUSES = {
     FactorLifecycleStatus.RETIRED.value,
@@ -102,6 +108,15 @@ class LibraryMergeResult:
             for item in self.persisted_entries
             if item.get("candidate_hash")
         }
+
+
+@dataclass(frozen=True)
+class MonitoringSnapshot:
+    as_of: str
+    updated_at: str
+    revision: int
+    data_version: str
+    metrics: dict
 
 
 def _default_path() -> Path:
@@ -322,34 +337,51 @@ def _compare_freshness(existing: MetricsFreshness, incoming: MetricsFreshness) -
 
 
 def _merge_metrics(existing: dict, incoming: dict) -> dict:
-    existing_freshness = _metrics_freshness(existing)
-    incoming_freshness = _metrics_freshness(incoming)
-    if incoming_freshness.has_version() or existing_freshness.has_version():
-        comparison = _compare_freshness(existing_freshness, incoming_freshness)
-        # 旧快照不得覆盖较新指标；两边都无版本信息时保持原合并行为（兼容模式）。
-        if incoming_freshness.has_version() and comparison < 0:
-            return dict(existing)
-        # 严格模式：existing 有版本而 incoming 无版本时禁止覆盖。
-        if existing_freshness.has_version() and not incoming_freshness.has_version():
-            return dict(existing)
-    merged = {**existing, **incoming}
-    for key in _PROTECTED_METRIC_KEYS:
-        if key in existing and key not in incoming:
-            merged[key] = existing[key]
-    # 研究类指标一旦写入即不可变（因子版本化在 v2.3 PostgreSQL 完成）。
-    for key in _IMMUTABLE_RESEARCH_METRIC_KEYS:
-        if key in existing:
-            merged[key] = existing[key]
-    # research 块整体不可变：禁止覆盖既有研究记录
-    if "research" in existing:
-        merged["research"] = deepcopy(existing["research"])
-    elif "research" in incoming:
-        merged["research"] = deepcopy(incoming["research"])
-    # monitoring 块按自身新鲜度合并
-    merged["monitoring"] = _merge_monitoring_metrics(
+    merged = _merge_legacy_flat_metrics(existing, incoming)
+    research = _merge_research_metrics(existing.get("research"), incoming.get("research"))
+    monitoring = _merge_monitoring_metrics(
         existing.get("monitoring") or {},
         incoming.get("monitoring") or {},
     )
+    if research:
+        merged["research"] = research
+    if monitoring:
+        merged["monitoring"] = monitoring
+    return merged
+
+
+def _flat_metrics(metrics: dict) -> dict:
+    return {
+        key: value
+        for key, value in (metrics or {}).items()
+        if key not in _RESERVED_METRIC_SECTIONS
+    }
+
+
+def _merge_research_metrics(existing: dict | None, incoming: dict | None) -> dict:
+    if existing:
+        return deepcopy(existing)
+    return deepcopy(incoming or {})
+
+
+def _merge_legacy_flat_metrics(existing: dict, incoming: dict) -> dict:
+    existing_flat = _flat_metrics(existing)
+    incoming_flat = _flat_metrics(incoming)
+    existing_freshness = _metrics_freshness(existing_flat)
+    incoming_freshness = _metrics_freshness(incoming_flat)
+    if existing_freshness.has_version() and not incoming_freshness.has_version():
+        merged = dict(existing_flat)
+    elif incoming_freshness.has_version() or existing_freshness.has_version():
+        comparison = _compare_freshness(existing_freshness, incoming_freshness)
+        merged = {**existing_flat, **incoming_flat} if comparison >= 0 else dict(existing_flat)
+    else:
+        merged = {**existing_flat, **incoming_flat}
+    for key in _PROTECTED_METRIC_KEYS:
+        if key in existing_flat and key not in incoming_flat:
+            merged[key] = existing_flat[key]
+    for key in _IMMUTABLE_RESEARCH_METRIC_KEYS:
+        if key in existing_flat:
+            merged[key] = existing_flat[key]
     return merged
 
 
@@ -408,6 +440,78 @@ def build_research_metrics(
         "research_data_version": data_version,
         "research_run_id": research_run_id,
     }
+
+
+def build_monitoring_update(
+    existing_factor: dict,
+    *,
+    as_of: str,
+    data_version: str,
+    values: dict,
+    updated_at: str | None = None,
+) -> dict:
+    if not is_known_version(data_version):
+        raise ValueError("MONITORING_DATA_VERSION_REQUIRED")
+    existing_monitoring = ((existing_factor.get("metrics") or {}).get("monitoring") or {})
+    try:
+        revision = int(existing_monitoring.get("revision") or 0) + 1
+    except (TypeError, ValueError):
+        revision = 1
+    return {
+        "monitoring": {
+            **dict(values),
+            "as_of": as_of,
+            "updated_at": updated_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "revision": revision,
+            "data_version": data_version,
+        }
+    }
+
+
+def update_factor_monitoring(
+    factor_id: str,
+    values: dict,
+    *,
+    as_of: str,
+    data_version: str,
+    path: str | Path | None = None,
+    updated_at: str | None = None,
+) -> dict:
+    if not is_known_version(data_version):
+        raise ValueError("MONITORING_DATA_VERSION_REQUIRED")
+    cfg_path = Path(path) if path else _default_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    with _file_lock(cfg_path):
+        latest = _read_library_file(cfg_path)
+        latest.setdefault("factors", [])
+        target = None
+        for item in latest.get("factors") or []:
+            if str(item.get("id")) == str(factor_id):
+                target = item
+                break
+        if target is None:
+            raise KeyError(f"FACTOR_NOT_FOUND:{factor_id}")
+        update_metrics = build_monitoring_update(
+            target,
+            as_of=as_of,
+            data_version=data_version,
+            values=values,
+            updated_at=updated_at,
+        )
+        target["metrics"] = _merge_metrics(dict(target.get("metrics") or {}), update_metrics)
+        _validate_library_uniqueness(latest)
+        payload = yaml.safe_dump(latest, allow_unicode=True, sort_keys=False)
+        fd, tmp_name = tempfile.mkstemp(prefix=f".{cfg_path.name}.", suffix=".tmp", dir=str(cfg_path.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(payload)
+                fh.flush()
+                os.fsync(fh.fileno())
+            os.replace(tmp_name, cfg_path)
+        finally:
+            if os.path.exists(tmp_name):
+                os.remove(tmp_name)
+        return deepcopy(target)
 
 
 def _merge_status(old_status, incoming_status) -> str:
@@ -562,6 +666,9 @@ __all__ = [
     "LibraryMergeResult",
     "add_factor",
     "build_research_metrics",
+    "build_monitoring_update",
+    "update_factor_monitoring",
+    "MonitoringSnapshot",
     "active_factors",
     "research_validated_factors",
     "paper_trading_factors",
