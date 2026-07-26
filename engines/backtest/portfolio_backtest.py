@@ -26,6 +26,8 @@ from engines.backtest.execution import (
 from engines.market.price_limit_rules import MAIN_BOARD_ST_10_EFFECTIVE_DATE, board_of
 from engines.market.price_limit_metadata import (
     OptionalPriceStatus,
+    extract_lower_limit_price,
+    extract_upper_limit_price,
     inspect_price_limit_meta,
     parse_optional_price,
 )
@@ -166,6 +168,10 @@ def run_topk_backtest(
         "actual_limit_price_cells": 0,
         "rate_based_cells": 0,
         "fallback_cells": 0,
+        "buy_fallback_cells": 0,
+        "sell_fallback_cells": 0,
+        "any_side_fallback_cells": 0,
+        "both_sides_fallback_cells": 0,
         "buy_ambiguous_cells": 0,
         "sell_ambiguous_cells": 0,
         "invalid_upper_limit_price_count": 0,
@@ -259,6 +265,11 @@ def run_topk_backtest(
             if pl_stats["unique_cells"] else None
         ),
         "price_limit_fallback_count": pl_stats["fallback_cells"],
+        "price_limit_buy_fallback_count": pl_stats["buy_fallback_cells"],
+        "price_limit_sell_fallback_count": pl_stats["sell_fallback_cells"],
+        "price_limit_any_side_fallback_count": pl_stats["any_side_fallback_cells"],
+        "price_limit_both_sides_fallback_count": pl_stats["both_sides_fallback_cells"],
+        "price_limit_rule_fallback_semantics": "both_sides_missing",
         "price_limit_buy_ambiguous_count": pl_stats["buy_ambiguous_cells"],
         "price_limit_sell_ambiguous_count": pl_stats["sell_ambiguous_cells"],
         "invalid_upper_limit_price_count": pl_stats["invalid_upper_limit_price_count"],
@@ -470,14 +481,14 @@ def _rebalance_day(
             else None
         )
         meta_upper = _parse_limit_price_cell(
-            meta.get("upper_limit_price"),
+            extract_upper_limit_price(meta),
             "upper_limit_price",
             treat_nan_as_missing=False,
             fail_on_invalid=fail_on_invalid_meta,
             pl_stats=pl_stats,
         )
         meta_lower = _parse_limit_price_cell(
-            meta.get("lower_limit_price"),
+            extract_lower_limit_price(meta),
             "lower_limit_price",
             treat_nan_as_missing=False,
             fail_on_invalid=fail_on_invalid_meta,
@@ -493,6 +504,14 @@ def _rebalance_day(
                 pl_stats["meta_covered_cells"] += 1
             else:
                 pl_stats["fallback_cells"] += 1
+            if not capabilities.buy_rule_meta:
+                pl_stats["buy_fallback_cells"] += 1
+            if not capabilities.sell_rule_meta:
+                pl_stats["sell_fallback_cells"] += 1
+            if not capabilities.buy_rule_meta or not capabilities.sell_rule_meta:
+                pl_stats["any_side_fallback_cells"] += 1
+            if not capabilities.buy_rule_meta and not capabilities.sell_rule_meta:
+                pl_stats["both_sides_fallback_cells"] += 1
             if capabilities.buy_rule_meta:
                 pl_stats["buy_meta_covered_cells"] += 1
             if capabilities.sell_rule_meta:

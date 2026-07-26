@@ -6,6 +6,13 @@ from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
+from engines.market.price_limit_metadata import (
+    LIMIT_DOWN_RATE_KEYS,
+    LIMIT_UP_RATE_KEYS,
+    extract_listing_stage,
+    extract_risk_warning,
+)
+
 MAIN_BOARD_ST_10_EFFECTIVE_DATE = date(2026, 7, 6)
 
 
@@ -76,7 +83,7 @@ def resolve_price_limit_rule(
     day = _date_value(trade_date)
     payload = {**(security_meta or {}), **(quote or {})}
     board = board_of(symbol)
-    stage = str(listing_stage or payload.get("listing_stage") or payload.get("trade_status") or "").upper()
+    stage = str(listing_stage or extract_listing_stage(payload) or "").upper()
     if stage in {"IPO_FIRST_DAY", "RELISTING_FIRST_DAY", "NO_LIMIT", "NONE_LIMIT"}:
         return _validated(PriceLimitRule(board=board, limit_up_pct=None, limit_down_pct=None, has_price_limit=False, source="listing_stage", version=stage))
 
@@ -84,7 +91,8 @@ def resolve_price_limit_rule(
     if quote_rule is not None:
         return _validated(quote_rule)
 
-    risk_warning = _risk_warning(payload) if is_risk_warning is None else bool(is_risk_warning)
+    extracted_risk_warning = extract_risk_warning(payload)
+    risk_warning = extracted_risk_warning if is_risk_warning is None else bool(is_risk_warning)
     if board == "科创板":
         return _validated(PriceLimitRule(board=board, limit_up_pct=0.20, limit_down_pct=0.20, version="STAR_20"))
     if board == "创业板":
@@ -99,8 +107,8 @@ def resolve_price_limit_rule(
 
 
 def _quote_limit_rule(board: str, payload: dict[str, Any]) -> PriceLimitRule | None:
-    up = _first_float(payload, "limit_up_rate", "LimitUpRate", "up_limit_rate", "涨停幅度")
-    down = _first_float(payload, "limit_down_rate", "LimitDownRate", "down_limit_rate", "跌停幅度")
+    up = _first_float(payload, *LIMIT_UP_RATE_KEYS)
+    down = _first_float(payload, *LIMIT_DOWN_RATE_KEYS)
     if up is None and down is None:
         return None
     up = _normalize_rate(up if up is not None else down)
@@ -131,12 +139,6 @@ def _first_float(payload: dict[str, Any], *keys: str) -> float | None:
         except ValueError:
             continue
     return None
-
-
-def _risk_warning(payload: dict[str, Any]) -> bool:
-    text = str(payload.get("name") or payload.get("stock_name") or payload.get("instrument_name") or "")
-    return "ST" in text.upper() or "＊ST" in text.upper() or "*ST" in text.upper()
-
 
 def _date_value(value: date | datetime | str) -> date:
     if isinstance(value, datetime):

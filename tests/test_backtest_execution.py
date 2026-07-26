@@ -241,6 +241,14 @@ def test_calc_portfolio_metrics_hand_computed():
     assert metrics["trade_count"] == 2
     # 一买一卖盈利（1100-6 vs 1000+5），胜率 1.0
     assert metrics["win_rate"] == pytest.approx(1.0)
+    assert metrics["diagnostics"]["observation_count"] == 4
+
+
+def test_calc_portfolio_metrics_rejects_bad_dates():
+    with pytest.raises(ValueError, match="METRICS_DATE_LENGTH_MISMATCH"):
+        calc_portfolio_metrics([100.0, 101.0], dates=["2026-01-01"])
+    with pytest.raises(ValueError, match="METRICS_DUPLICATE_DATES"):
+        calc_portfolio_metrics([100.0, 101.0], dates=["2026-01-01", "2026-01-01"])
 
 
 def test_render_portfolio_report_markdown():

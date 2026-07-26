@@ -43,6 +43,8 @@ from engines.market.trading_calendar import next_trading_day
 from engines.factor.versioning import is_known_version
 from engines.market.price_limit_metadata import (
     OptionalPriceStatus,
+    extract_lower_limit_price,
+    extract_upper_limit_price,
     inspect_price_limit_meta,
     parse_optional_price,
 )
@@ -471,7 +473,12 @@ def _quote_rule_capabilities(quote: dict) -> dict[str, bool]:
 
 
 def _quote_limit_price(quote: dict, field_name: str, *, fail_on_invalid: bool = False) -> float | None:
-    parsed = parse_optional_price((quote or {}).get(field_name), field_name)
+    raw_value = (
+        extract_upper_limit_price(quote)
+        if field_name == "upper_limit_price"
+        else extract_lower_limit_price(quote)
+    )
+    parsed = parse_optional_price(raw_value, field_name)
     if parsed.status is OptionalPriceStatus.MISSING:
         return None
     if parsed.status is OptionalPriceStatus.INVALID:
@@ -712,6 +719,8 @@ def run_daily(
     price_limit_meta_received = 0
     buy_rule_meta_received = 0
     sell_rule_meta_received = 0
+    any_side_fallback_count = 0
+    both_sides_fallback_count = 0
     invalid_upper_limit_price_count = 0
     invalid_lower_limit_price_count = 0
     for symbol in required_symbols:
@@ -723,8 +732,12 @@ def run_daily(
             buy_rule_meta_received += 1
         if capabilities["sell_rule_meta"]:
             sell_rule_meta_received += 1
-        upper = parse_optional_price((quote or {}).get("upper_limit_price"), "upper_limit_price")
-        lower = parse_optional_price((quote or {}).get("lower_limit_price"), "lower_limit_price")
+        if not capabilities["buy_rule_meta"] or not capabilities["sell_rule_meta"]:
+            any_side_fallback_count += 1
+        if not capabilities["buy_rule_meta"] and not capabilities["sell_rule_meta"]:
+            both_sides_fallback_count += 1
+        upper = parse_optional_price(extract_upper_limit_price(quote), "upper_limit_price")
+        lower = parse_optional_price(extract_lower_limit_price(quote), "lower_limit_price")
         if upper.status is OptionalPriceStatus.INVALID:
             invalid_upper_limit_price_count += 1
         if lower.status is OptionalPriceStatus.INVALID:
@@ -738,6 +751,30 @@ def run_daily(
         quote_quality_flags.append("INVALID_UPPER_LIMIT_PRICE")
     if invalid_lower_limit_price_count:
         quote_quality_flags.append("INVALID_LOWER_LIMIT_PRICE")
+    if paper_config.fail_on_invalid_price_limit_meta and (
+        invalid_upper_limit_price_count > 0 or invalid_lower_limit_price_count > 0
+    ):
+        return {
+            "date": execution_date,
+            "execution_date": execution_date,
+            "skipped": True,
+            "warning": "PAPER_INVALID_PRICE_LIMIT_META",
+            "quote_transport_requested_count": len(required_symbols),
+            "quote_transport_received_count": quote_received,
+            "quote_transport_coverage": quote_coverage,
+            "price_limit_meta_requested_count": len(required_symbols),
+            "price_limit_meta_received_count": price_limit_meta_received,
+            "price_limit_meta_coverage": price_limit_meta_coverage,
+            "price_limit_buy_fallback_count": len(required_symbols) - buy_rule_meta_received,
+            "price_limit_sell_fallback_count": len(required_symbols) - sell_rule_meta_received,
+            "price_limit_any_side_fallback_count": any_side_fallback_count,
+            "price_limit_both_sides_fallback_count": both_sides_fallback_count,
+            "price_limit_rule_fallback_count": both_sides_fallback_count,
+            "price_limit_rule_fallback_semantics": "both_sides_missing",
+            "invalid_upper_limit_price_count": invalid_upper_limit_price_count,
+            "invalid_lower_limit_price_count": invalid_lower_limit_price_count,
+            "quote_quality_flags": quote_quality_flags,
+        }
     if quote_coverage is not None and quote_coverage < paper_config.min_quote_transport_coverage:
         quote_quality_flags.append("PAPER_QUOTE_TRANSPORT_COVERAGE_LOW")
         quote_quality_flags.append("PAPER_QUOTE_COVERAGE_LOW")
@@ -777,9 +814,24 @@ def run_daily(
         quote_quality_flags.append("PAPER_BUY_RULE_META_COVERAGE_LOW")
     if sell_rule_meta_coverage is not None and sell_rule_meta_coverage < paper_config.min_price_limit_meta_coverage:
         quote_quality_flags.append("PAPER_SELL_RULE_META_COVERAGE_LOW")
-    bookkeeping = _advance_portfolio(
-        panel, dates, symbols, pick_symbols, state, execution_date, quotes=quotes
-    )
+    try:
+        bookkeeping = _advance_portfolio(
+            panel, dates, symbols, pick_symbols, state, execution_date, quotes=quotes
+        )
+    except ValueError as exc:
+        if str(exc).startswith("PRICE_LIMIT_PRICE_INVALID"):
+            return {
+                "date": execution_date,
+                "execution_date": execution_date,
+                "skipped": True,
+                "warning": str(exc),
+                "quote_transport_coverage": quote_coverage,
+                "price_limit_meta_coverage": price_limit_meta_coverage,
+                "invalid_upper_limit_price_count": invalid_upper_limit_price_count,
+                "invalid_lower_limit_price_count": invalid_lower_limit_price_count,
+                "quote_quality_flags": quote_quality_flags,
+            }
+        raise
     generated_next = None
     if generate_next_orders and next_execution_date:
         generated_next = generate_orders(
@@ -816,7 +868,12 @@ def run_daily(
         "price_limit_sell_meta_received_count": sell_rule_meta_received,
         "price_limit_sell_meta_coverage": sell_rule_meta_coverage,
         "quote_failed_chunk_count": quote_failed_chunks,
-        "price_limit_rule_fallback_count": len(required_symbols) - price_limit_meta_received,
+        "price_limit_buy_fallback_count": len(required_symbols) - buy_rule_meta_received,
+        "price_limit_sell_fallback_count": len(required_symbols) - sell_rule_meta_received,
+        "price_limit_any_side_fallback_count": any_side_fallback_count,
+        "price_limit_both_sides_fallback_count": both_sides_fallback_count,
+        "price_limit_rule_fallback_count": both_sides_fallback_count,
+        "price_limit_rule_fallback_semantics": "both_sides_missing",
         "invalid_upper_limit_price_count": invalid_upper_limit_price_count,
         "invalid_lower_limit_price_count": invalid_lower_limit_price_count,
         "quote_quality_flags": quote_quality_flags,

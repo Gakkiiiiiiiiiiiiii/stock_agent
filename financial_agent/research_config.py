@@ -97,6 +97,13 @@ class BacktestConfig(BaseModel):
     fail_on_invalid_price_limit_meta: bool = True
 
 
+class WalkForwardConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    gap_policy: str = "cash"
+    overlapping_target_policy: str = "replace"
+
+
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -108,6 +115,7 @@ class ResearchConfig(BaseModel):
     neutralization: NeutralizationConfig = NeutralizationConfig()
     factor_library: FactorLibraryConfig = FactorLibraryConfig()
     backtest: BacktestConfig = BacktestConfig()
+    walkforward: WalkForwardConfig = WalkForwardConfig()
     # 严格模式：Final OOS 前必须提供数据版本（生产建议开启，开发测试可关闭）
     require_data_version_for_oos: bool = False
 
@@ -163,6 +171,8 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "paper_trading.fail_on_low_price_limit_meta_coverage", _env_bool("FACTOR_PAPER_FAIL_ON_LOW_PRICE_LIMIT_META_COVERAGE"))
     _set_nested(merged, "paper_trading.fail_on_invalid_price_limit_meta", _env_bool("FACTOR_PAPER_FAIL_ON_INVALID_PRICE_LIMIT_META"))
     _set_nested(merged, "backtest.fail_on_invalid_price_limit_meta", _env_bool("FACTOR_BACKTEST_FAIL_ON_INVALID_PRICE_LIMIT_META"))
+    _set_nested(merged, "walkforward.gap_policy", os.getenv("FACTOR_WALKFORWARD_GAP_POLICY"))
+    _set_nested(merged, "walkforward.overlapping_target_policy", os.getenv("FACTOR_WALKFORWARD_OVERLAP_POLICY"))
     _set_nested(merged, "factor_library.lock_timeout_seconds", _env_int("FACTOR_LIBRARY_LOCK_TIMEOUT_SECONDS"))
     if _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS") is not None:
         merged["require_data_version_for_oos"] = _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS")
@@ -209,5 +219,6 @@ __all__ = [
     "HighPositionConfig",
     "FactorLibraryConfig",
     "BacktestConfig",
+    "WalkForwardConfig",
     "get_research_config",
 ]

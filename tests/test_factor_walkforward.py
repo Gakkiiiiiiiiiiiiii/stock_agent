@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from engines.factor.miner import FactorMiner
-from engines.factor.walkforward import DISCLAIMER, MINING_WINDOW, _build_walkforward_window, run_walkforward
+from engines.factor.research_window import resolve_research_window_requirement
+from engines.factor.walkforward import DISCLAIMER, _build_walkforward_window, default_rebalance_points, run_walkforward
 
 
 class FakeModelClient:
@@ -73,7 +74,7 @@ def _run(panel, dates, symbols, **kwargs):
     client = FakeModelClient([{"rpn": ["ret", "cs_rank"], "hypothesis": "趋势延续"}])
     params = dict(
         rebalance_points=[60, 80], rounds=1, candidates_per_round=1,
-        horizon=5, top_k=3, model_client=client,
+        horizon=5, top_k=3, model_client=client, mining_window_days=60,
     )
     params.update(kwargs)
     return run_walkforward(panel, dates, symbols, **params)
@@ -86,9 +87,13 @@ def test_walkforward_output_structure():
     assert result["disclaimer"] == DISCLAIMER
     assert "前向模拟盘" in result["disclaimer"]
     assert len(result["per_window"]) == 2
-    # 每个窗口 5 个记账日（T+1 起），两窗口共 10 天
-    assert len(result["dates"]) == 10
-    assert len(result["equity_curve"]) == len(result["benchmark_curve"]) == 10
+    assert result["mode"] == "continuous_walkforward"
+    assert result["status"] == "VALID"
+    assert len(result["target_schedule"]) == 2
+    assert len(result["dates"]) == 59  # 从首个 execution date 到样本末尾，连续日期轴
+    assert len(result["equity_curve"]) == len(result["benchmark_curve"]) == len(result["dates"])
+    assert result["diagnostics"]["continuous_calendar"] is True
+    assert result["diagnostics"]["portfolio_benchmark_independent"] is True
     metrics = result["metrics"]
     for key in ("total_return", "sharpe", "max_drawdown", "excess_annual_return", "excess_sharpe"):
         assert key in metrics
@@ -138,8 +143,8 @@ def test_walkforward_no_lookahead():
 
 def test_walkforward_dates_match_subpanel_columns():
     panel, symbols, dates = _trend_panel(n_days=320)
-    window = _build_walkforward_window(panel, dates, symbols, 260)
-    assert window.start_index == 260 - (MINING_WINDOW - 1)
+    window = _build_walkforward_window(panel, dates, symbols, 260, window_days=250)
+    assert window.start_index == 260 - (250 - 1)
     assert window.end_index == 260
     assert len(window.dates) == window.panel["close"].shape[1]
     assert window.dates[0] == dates[window.start_index]
@@ -148,18 +153,18 @@ def test_walkforward_dates_match_subpanel_columns():
 
 def test_walkforward_window_version_excludes_future_columns():
     panel, symbols, dates = _trend_panel(n_days=320)
-    base = _build_walkforward_window(panel, dates, symbols, 260)
+    base = _build_walkforward_window(panel, dates, symbols, 260, window_days=250)
     mutated = {key: value.copy() for key, value in panel.items()}
     mutated["close"][:, 280:] *= 2
     mutated["ret"][:, 280:] *= -1
-    alt = _build_walkforward_window(mutated, dates, symbols, 260)
+    alt = _build_walkforward_window(mutated, dates, symbols, 260, window_days=250)
     assert alt.data_version == base.data_version
 
 
 def test_window_snapshot_id_is_unique():
     panel, symbols, dates = _trend_panel(n_days=320)
-    first = _build_walkforward_window(panel, dates, symbols, 260)
-    second = _build_walkforward_window(panel, dates, symbols, 260)
+    first = _build_walkforward_window(panel, dates, symbols, 260, window_days=250)
+    second = _build_walkforward_window(panel, dates, symbols, 260, window_days=250)
     assert first.data_version == second.data_version
     assert first.snapshot_id != second.snapshot_id
 
@@ -174,11 +179,12 @@ def test_walkforward_passes_security_meta_to_backtest(monkeypatch):
 
     def fake_backtest(*args, **kwargs):
         captured["security_meta"] = kwargs.get("security_meta")
+        n_days = captured["security_meta"].shape[1]
         return {
-            "equity_curve": [1_000_000.0, 1_001_000.0],
-            "benchmark_curve": [1_000_000.0, 1_000_500.0],
+            "equity_curve": [1_000_000.0 + i for i in range(n_days)],
+            "benchmark_curve": [1_000_000.0 + i * 0.5 for i in range(n_days)],
             "trades": [],
-            "daily_turnover": [0.0, 0.0],
+            "daily_turnover": [0.0 for _ in range(n_days)],
             "price_limit_meta_coverage": 1.0,
             "price_limit_fallback_count": 0,
             "price_limit_quality_flags": [],
@@ -187,16 +193,16 @@ def test_walkforward_passes_security_meta_to_backtest(monkeypatch):
     monkeypatch.setattr("engines.factor.walkforward.run_topk_backtest", fake_backtest)
     result = _run(panel, dates, symbols, security_meta=security_meta, rebalance_points=[60])
     window = result["per_window"][0]
-    assert captured["security_meta"].shape == (len(symbols), 5)
+    assert captured["security_meta"].shape == (len(symbols), 59)
     assert captured["security_meta"][0, 0]["upper_limit_price"] == 999.0
     assert window["price_limit_meta_coverage"] == 1.0
     assert window["price_limit_fallback_count"] == 0
-    assert window["price_limit_quality_flags"] == []
+    assert window["quality_flags"] == []
 
 
 def test_walkforward_rejects_insufficient_sample():
     panel, symbols, dates = _trend_panel()
-    result = _run(panel, dates, symbols, rebalance_points=[119])  # 119 无 T+1 可用
+    result = _run(panel, dates, symbols, rebalance_points=[119], mining_window_days=60)  # 119 无 T+1 可用
     assert result["equity_curve"] == []
     assert "无可用调仓点" in result["warning"]
 
@@ -215,9 +221,28 @@ def test_walkforward_graceful_when_model_unavailable():
     result = run_walkforward(
         panel, dates, symbols,
         rebalance_points=[60], rounds=1, candidates_per_round=1,
-        horizon=5, top_k=3, model_client=client,
+        horizon=5, top_k=3, model_client=client, mining_window_days=60,
     )
     assert result["warning"]
     assert result["per_window"][0]["factor_count"] == 0
     assert result["per_window"][0]["picks"] == []
-    assert len(result["equity_curve"]) == 5
+    assert len(result["equity_curve"]) == 59
+
+
+def test_walkforward_default_window_satisfies_production_split():
+    requirement = resolve_research_window_requirement()
+    assert requirement.resolved_window_days >= requirement.minimum_required_days
+    assert requirement.resolved_window_days >= 500
+
+
+def test_default_rebalance_start_is_after_full_research_window():
+    points = default_rebalance_points(620, step=20, window_days=500)
+    assert points[0] == 499
+
+
+def test_walkforward_reports_required_and_available_days():
+    panel, symbols, dates = _trend_panel(n_days=120)
+    result = run_walkforward(panel, dates, symbols)
+    assert result["warning"] == "WALKFORWARD_SAMPLE_INSUFFICIENT"
+    assert result["diagnostics"]["available_days"] == 120
+    assert result["diagnostics"]["required_window_days"] >= result["diagnostics"]["minimum_research_days"]

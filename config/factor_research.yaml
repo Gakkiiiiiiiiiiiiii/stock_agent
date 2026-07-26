@@ -60,4 +60,8 @@ backtest:
   fail_on_ambiguous_price_limit: false
   fail_on_invalid_price_limit_meta: true
 
+walkforward:
+  gap_policy: cash
+  overlapping_target_policy: replace
+
 require_data_version_for_oos: true

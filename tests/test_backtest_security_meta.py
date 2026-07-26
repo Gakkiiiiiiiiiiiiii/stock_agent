@@ -409,3 +409,50 @@ def test_strict_mode_rejects_invalid_actual_limit_price(monkeypatch):
             rebalance_interval=5, top_k=2, initial_cash=100_000.0,
             allow_unsafe_without_metadata=True, security_meta=meta,
         )
+
+
+@pytest.mark.parametrize("key", ["limit_up_rate", "LimitUpRate", "up_limit_rate", "涨停幅度"])
+def test_all_up_rate_aliases_match_execution_and_coverage(key):
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    opens[0, 5] = 10.6
+    meta = _meta_grid(4, 11, {(0, 5): {key: 5}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=1, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] not in result["holdings_log"][5]
+    assert result["price_limit_buy_meta_coverage"] > 0
+
+
+@pytest.mark.parametrize("key", ["lower_limit_price", "LowerLimitPrice", "down_limit_price", "跌停价"])
+def test_all_lower_price_aliases_match_execution_and_coverage(key):
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), 1.0)
+    scores[0, :5] = 100.0
+    scores[:, 5:] = np.nan
+    opens[0, 5] = 9.4
+    meta = _meta_grid(4, 11, {(0, 5): {key: 9.5}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=1, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert symbols[0] in result["holdings_log"][5]
+    assert result["price_limit_sell_meta_coverage"] > 0
+
+
+def test_upper_only_meta_has_sell_fallback():
+    symbols, dates, opens, highs, lows, closes, volume = _panels()
+    scores = np.full((4, 11), np.nan)
+    scores[0, 5:] = 100.0
+    meta = _meta_grid(4, 11, {(0, 5): {"upper_limit_price": 11.0}})
+    result = run_topk_backtest(
+        scores, opens, highs, lows, closes, volume, symbols, dates,
+        rebalance_interval=5, top_k=1, initial_cash=100_000.0,
+        allow_unsafe_without_metadata=True, security_meta=meta,
+    )
+    assert result["price_limit_buy_fallback_count"] < result["price_limit_sell_fallback_count"]
+    assert result["price_limit_any_side_fallback_count"] >= result["price_limit_both_sides_fallback_count"]

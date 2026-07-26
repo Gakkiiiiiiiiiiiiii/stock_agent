@@ -88,6 +88,11 @@ def calc_portfolio_metrics(
     dates: Sequence | None = None,
 ) -> dict:
     """组合回测指标：收益/风险/超额/月度收益/换手/胜率（无风险利率取 0）。"""
+    if dates is not None:
+        if len(dates) != len(equity_curve):
+            raise ValueError("METRICS_DATE_LENGTH_MISMATCH")
+        if len(set(dates)) != len(dates):
+            raise ValueError("METRICS_DUPLICATE_DATES")
     equity = np.asarray(list(equity_curve), dtype=float)
     if equity.size < 2 or equity[0] <= 0:
         return {
@@ -111,6 +116,11 @@ def calc_portfolio_metrics(
             bench_annual = _annualized_return(float(bench[-1] / bench[0] - 1), bench.size - 1)
             excess = round(annual_return - bench_annual, 4)
 
+    diagnostics = {
+        "observation_count": len(dates) if dates is not None else int(equity.size),
+        "first_date": str(dates[0]) if dates else None,
+        "last_date": str(dates[-1]) if dates else None,
+    }
     return {
         "total_return": round(total_return, 4),
         "annual_return": round(annual_return, 4),
@@ -122,5 +132,5 @@ def calc_portfolio_metrics(
         "avg_daily_turnover": round(float(np.mean(list(daily_turnover))), 4) if daily_turnover else None,
         "trade_count": len(trades) if trades else 0,
         "win_rate": _round_trip_win_rate(trades or []),
+        "diagnostics": diagnostics,
     }
-

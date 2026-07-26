@@ -525,4 +525,39 @@ def test_only_upper_limit_counts_as_buy_meta_not_sell_meta(env):
     assert result["price_limit_meta_coverage"] == 1.0
     assert result["price_limit_buy_meta_coverage"] == 1.0
     assert result["price_limit_sell_meta_coverage"] == 0.0
+    assert result["price_limit_buy_fallback_count"] == 0
+    assert result["price_limit_sell_fallback_count"] == result["quote_requested_count"]
+    assert result["price_limit_any_side_fallback_count"] == result["quote_requested_count"]
+    assert result["price_limit_both_sides_fallback_count"] == 0
+    assert result["price_limit_rule_fallback_semantics"] == "both_sides_missing"
     assert "PAPER_SELL_RULE_META_COVERAGE_LOW" in result["quote_quality_flags"]
+
+
+def test_paper_strict_mode_blocks_invalid_unused_quote(env, monkeypatch):
+    monkeypatch.setenv("FACTOR_PAPER_FAIL_ON_INVALID_PRICE_LIMIT_META", "true")
+    fpw.get_research_config.cache_clear()
+
+    def loader(symbols):
+        return {s: {"last_price": 10.0, "upper_limit_price": "nan"} for s in symbols}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["skipped"] is True
+    assert result["warning"] == "PAPER_INVALID_PRICE_LIMIT_META"
+    assert result["invalid_upper_limit_price_count"] == result["quote_transport_requested_count"]
+    assert "INVALID_UPPER_LIMIT_PRICE" in result["quote_quality_flags"]
+
+
+def test_paper_relaxed_mode_records_invalid_meta_and_continues(env):
+    def loader(symbols):
+        return {s: {"last_price": 10.0, "lower_limit_price": -1} for s in symbols}
+
+    fpw.generate_orders(execution_date="2026-07-30", state_dir=env["state"], library_path=env["lib"],
+                        panel_loader=env["make_loader"](29), remine_days=9999)
+    result = fpw.run_daily(state_dir=env["state"], library_path=env["lib"],
+                           panel_loader=env["make_loader"](30), remine_days=9999, quote_loader=loader)
+    assert result["skipped"] is False
+    assert result["invalid_lower_limit_price_count"] == result["quote_requested_count"]
+    assert "INVALID_LOWER_LIMIT_PRICE" in result["quote_quality_flags"]
