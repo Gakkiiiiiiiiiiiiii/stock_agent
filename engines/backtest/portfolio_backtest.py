@@ -26,11 +26,16 @@ from engines.backtest.execution import (
 from engines.market.price_limit_rules import MAIN_BOARD_ST_10_EFFECTIVE_DATE, board_of
 from engines.market.price_limit_metadata import (
     OptionalPriceStatus,
+    extract_limit_down_rate,
+    extract_limit_up_rate,
+    extract_listing_stage,
     extract_lower_limit_price,
+    extract_risk_warning,
     extract_upper_limit_price,
     inspect_price_limit_meta,
     parse_optional_price,
 )
+from engines.factor.versioning import is_known_version
 from financial_agent.research_config import get_research_config
 
 # 调仓时忽略的价值偏差阈值（元），避免无意义的碎单
@@ -47,6 +52,7 @@ class ScoreMetadata(BaseModel):
     executable_from: datetime
     data_snapshot_id: str
     algorithm_version: str
+    data_version: str | None = None
 
 
 def _valid_price(value: float) -> bool:
@@ -128,6 +134,7 @@ def run_topk_backtest(
     symbols: Sequence[str],
     dates: Sequence,
     rebalance_interval: int = 5,
+    rebalance_mask: Sequence[bool] | None = None,
     top_k: int | None = None,
     initial_cash: float = 1_000_000.0,
     score_metadata: Sequence[dict] | None = None,
@@ -147,6 +154,9 @@ def run_topk_backtest(
     closes = np.asarray(closes, dtype=float)
     volumes = np.asarray(volumes, dtype=float)
     n_symbols, n_days = scores.shape
+    if rebalance_mask is not None and len(rebalance_mask) != n_days:
+        raise ValueError("REBALANCE_MASK_LENGTH_MISMATCH")
+    normalized_rebalance_mask = [bool(value) for value in rebalance_mask] if rebalance_mask is not None else None
     _validate_optional_panel_shape(security_meta, (n_symbols, n_days), "security_meta")
     _validate_optional_panel_shape(upper_limit_prices, (n_symbols, n_days), "upper_limit_prices")
     _validate_optional_panel_shape(lower_limit_prices, (n_symbols, n_days), "lower_limit_prices")
@@ -187,6 +197,7 @@ def run_topk_backtest(
     trades: list[dict] = []
     daily_turnover: list[float] = []
     holdings_log: list[dict] = []
+    price_limit_daily_stats: list[dict] = []
 
     def mark_price(idx: int) -> float:
         """估值价：当日收盘价，缺失时用最近有效收盘价。"""
@@ -194,7 +205,6 @@ def run_topk_backtest(
         return price if _valid_price(price) else last_close[idx]
 
     for t in range(n_days):
-        _check_score_time_contract(t, dates, score_metadata, allow_unsafe_without_metadata)
         # 更新最近有效收盘价
         for i in range(n_symbols):
             if _valid_price(closes[i, t]):
@@ -212,7 +222,14 @@ def run_topk_backtest(
             benchmark_curve.append(benchmark_curve[-1] * (1 + float(np.mean(rets)) if rets else 1.0))
 
         traded_value = 0.0
-        if t % rebalance_interval == 0:
+        should_rebalance = (
+            normalized_rebalance_mask[t]
+            if normalized_rebalance_mask is not None
+            else t % rebalance_interval == 0
+        )
+        if should_rebalance:
+            _check_score_time_contract(t, dates, score_metadata, allow_unsafe_without_metadata)
+            before_stats = _snapshot_pl_stats(pl_stats)
             traded_value = _rebalance_day(
                 t, state, scores, opens, closes, volumes, last_close,
                 symbols, dates, trades, top_k, n_symbols,
@@ -223,6 +240,7 @@ def run_topk_backtest(
                 fail_on_ambiguous=fail_on_ambiguous,
                 fail_on_invalid_meta=fail_on_invalid_meta,
             )
+            price_limit_daily_stats.append(_daily_pl_stats(dates[t], before_stats, pl_stats))
 
         equity = state.cash + sum(
             state.shares_of(i) * mark_price(i)
@@ -275,7 +293,38 @@ def run_topk_backtest(
         "invalid_upper_limit_price_count": pl_stats["invalid_upper_limit_price_count"],
         "invalid_lower_limit_price_count": pl_stats["invalid_lower_limit_price_count"],
         "price_limit_quality_flags": quality_flags,
+        "price_limit_daily_stats": price_limit_daily_stats,
+        "diagnostics": {
+            "rebalance_mode": "explicit_mask" if normalized_rebalance_mask is not None else "interval",
+            "rebalance_interval": None if normalized_rebalance_mask is not None else rebalance_interval,
+        },
     }
+
+
+def _snapshot_pl_stats(stats: dict) -> dict:
+    return {
+        key: (set(value) if isinstance(value, set) else value)
+        for key, value in (stats or {}).items()
+    }
+
+
+def _daily_pl_stats(date_value, before: dict, after: dict) -> dict:
+    fields = (
+        "unique_cells",
+        "meta_covered_cells",
+        "buy_meta_covered_cells",
+        "sell_meta_covered_cells",
+        "buy_fallback_cells",
+        "sell_fallback_cells",
+        "any_side_fallback_cells",
+        "both_sides_fallback_cells",
+        "invalid_upper_limit_price_count",
+        "invalid_lower_limit_price_count",
+    )
+    row = {"date": date_value, "quality_flags": sorted((after.get("conflicts") or set()) - (before.get("conflicts") or set()))}
+    for field in fields:
+        row[field] = int((after.get(field) or 0) - (before.get(field) or 0))
+    return row
 
 
 def _validate_optional_panel_shape(value, expected_shape: tuple, field_name: str) -> None:
@@ -367,6 +416,10 @@ def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence
             f"LOOKAHEAD_VIOLATION at {dates[t]}: available_at={meta.available_at.isoformat()} "
             f"executable_from={meta.executable_from.isoformat()}"
         )
+    if not is_known_version(meta.data_snapshot_id):
+        raise LookaheadViolation(f"LOOKAHEAD_VIOLATION at {dates[t]}: data_snapshot_id is required")
+    if meta.data_version is not None and not is_known_version(meta.data_version):
+        raise LookaheadViolation(f"LOOKAHEAD_VIOLATION at {dates[t]}: data_version is required")
     execution_date = _parse_date(dates[t])
     if execution_date is not None and meta.executable_from.date() != execution_date:
         raise LookaheadViolation(
@@ -530,11 +583,11 @@ def _rebalance_day(
                 trade_date is not None
                 and trade_date < MAIN_BOARD_ST_10_EFFECTIVE_DATE
                 and board_of(symbols[idx]) == "主板"
-                and meta.get("is_risk_warning") is None
-                and not meta.get("listing_stage")
+                and extract_risk_warning(meta) is None
+                and extract_listing_stage(meta) is None
             )
-            buy_ambiguous = base_ambiguous and upper is None and meta.get("limit_up_rate") is None
-            sell_ambiguous = base_ambiguous and lower is None and meta.get("limit_down_rate") is None
+            buy_ambiguous = base_ambiguous and upper is None and extract_limit_up_rate(meta) is None
+            sell_ambiguous = base_ambiguous and lower is None and extract_limit_down_rate(meta) is None
             if buy_ambiguous:
                 pl_stats["buy_ambiguous_cells"] += 1
             if sell_ambiguous:

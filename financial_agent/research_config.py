@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict
@@ -98,10 +98,11 @@ class BacktestConfig(BaseModel):
 
 
 class WalkForwardConfig(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
-    gap_policy: str = "cash"
-    overlapping_target_policy: str = "replace"
+    gap_policy: Literal["cash", "hold_last_target"] = "cash"
+    overlapping_target_policy: Literal["replace"] = "replace"
+    retry_unfilled_target: bool = False
 
 
 class ResearchConfig(BaseModel):
@@ -173,6 +174,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
     _set_nested(merged, "backtest.fail_on_invalid_price_limit_meta", _env_bool("FACTOR_BACKTEST_FAIL_ON_INVALID_PRICE_LIMIT_META"))
     _set_nested(merged, "walkforward.gap_policy", os.getenv("FACTOR_WALKFORWARD_GAP_POLICY"))
     _set_nested(merged, "walkforward.overlapping_target_policy", os.getenv("FACTOR_WALKFORWARD_OVERLAP_POLICY"))
+    _set_nested(merged, "walkforward.retry_unfilled_target", _env_bool("FACTOR_WALKFORWARD_RETRY_UNFILLED_TARGET"))
     _set_nested(merged, "factor_library.lock_timeout_seconds", _env_int("FACTOR_LIBRARY_LOCK_TIMEOUT_SECONDS"))
     if _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS") is not None:
         merged["require_data_version_for_oos"] = _env_bool("FACTOR_REQUIRE_DATA_VERSION_FOR_OOS")

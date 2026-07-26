@@ -18,13 +18,18 @@ class ResearchWindowRequirement:
 
 def resolve_research_window_requirement(
     config: ResearchConfig | None = None,
+    *,
+    horizon_days: int | None = None,
 ) -> ResearchWindowRequirement:
     cfg = config or get_research_config()
+    resolved_horizon = int(horizon_days) if horizon_days is not None else cfg.evaluation.horizon_days
+    if resolved_horizon <= 0:
+        raise ValueError("HORIZON_DAYS_INVALID")
     minimum_required = (
         cfg.data_split.max_warmup_days
         + cfg.data_split.discovery_days
         + cfg.data_split.final_oos_days
-        + cfg.evaluation.horizon_days
+        + resolved_horizon
     )
     resolved = max(
         minimum_required,
@@ -35,7 +40,7 @@ def resolve_research_window_requirement(
         warmup_days=cfg.data_split.max_warmup_days,
         discovery_days=cfg.data_split.discovery_days,
         final_oos_days=cfg.data_split.final_oos_days,
-        horizon_days=cfg.evaluation.horizon_days,
+        horizon_days=resolved_horizon,
         minimum_required_days=minimum_required,
         configured_total_days=cfg.data_split.total_days,
         resolved_window_days=resolved,

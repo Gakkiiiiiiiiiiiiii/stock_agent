@@ -15,6 +15,7 @@ from engines.backtest.execution import (
 )
 from engines.backtest.metrics import calc_portfolio_metrics
 from engines.backtest.portfolio_backtest import run_topk_backtest
+from engines.backtest.portfolio_backtest import LookaheadViolation
 from engines.backtest.reports import render_portfolio_report
 
 # ---------- 板块与涨跌停判定 ----------
@@ -249,6 +250,29 @@ def test_calc_portfolio_metrics_rejects_bad_dates():
         calc_portfolio_metrics([100.0, 101.0], dates=["2026-01-01"])
     with pytest.raises(ValueError, match="METRICS_DUPLICATE_DATES"):
         calc_portfolio_metrics([100.0, 101.0], dates=["2026-01-01", "2026-01-01"])
+
+
+def test_rebalance_mask_enforces_score_metadata_contract():
+    symbols, dates, opens, highs, lows, closes, volume = _make_panels(n_symbols=2, n_days=2)
+    scores = np.ones((2, 2))
+    metadata = [
+        None,
+        {
+            "feature_time": "2026-01-01T15:00:00+08:00",
+            "available_at": "2026-01-02T10:00:00+08:00",
+            "executable_from": "2026-01-02T09:30:00+08:00",
+            "data_snapshot_id": "snap-1",
+            "data_version": "dv-1",
+            "algorithm_version": "test",
+        },
+    ]
+    with pytest.raises(LookaheadViolation):
+        run_topk_backtest(
+            scores, opens, highs, lows, closes, volume, symbols, dates,
+            rebalance_mask=[False, True],
+            top_k=1,
+            score_metadata=metadata,
+        )
 
 
 def test_render_portfolio_report_markdown():

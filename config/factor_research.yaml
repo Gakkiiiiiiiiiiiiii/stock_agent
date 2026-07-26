@@ -63,5 +63,6 @@ backtest:
 walkforward:
   gap_policy: cash
   overlapping_target_policy: replace
+  retry_unfilled_target: false
 
 require_data_version_for_oos: true

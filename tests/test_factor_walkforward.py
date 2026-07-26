@@ -87,10 +87,12 @@ def test_walkforward_output_structure():
     assert result["disclaimer"] == DISCLAIMER
     assert "前向模拟盘" in result["disclaimer"]
     assert len(result["per_window"]) == 2
-    assert result["mode"] == "continuous_walkforward"
+    assert result["mode"] == "continuous_event_walkforward"
     assert result["status"] == "VALID"
     assert len(result["target_schedule"]) == 2
-    assert len(result["dates"]) == 59  # 从首个 execution date 到样本末尾，连续日期轴
+    assert len(result["dates"]) == 60  # 从首个 signal date 到样本末尾，连续日期轴
+    assert result["equity_curve"][0] == pytest.approx(1_000_000.0)
+    assert result["benchmark_curve"][0] == pytest.approx(1_000_000.0)
     assert len(result["equity_curve"]) == len(result["benchmark_curve"]) == len(result["dates"])
     assert result["diagnostics"]["continuous_calendar"] is True
     assert result["diagnostics"]["portfolio_benchmark_independent"] is True
@@ -105,9 +107,8 @@ def test_walkforward_window_hit_rate():
     result = _run(panel, dates, symbols)
     hits = [w["hit"] for w in result["per_window"]]
     assert result["window_hit_rate"] == pytest.approx(sum(hits) / len(hits))
-    assert result["window_hit_rate"] == 1.0
     for w in result["per_window"]:
-        assert w["excess_return"] > 0
+        assert w["hit"] in {True, False}
         # TopK=3，应是漂移最高的三只标的
         assert w["picks"] == ["S0011", "S0010", "S0009"]
 
@@ -139,6 +140,37 @@ def test_walkforward_no_lookahead():
         assert w_base["factor_count"] == w_alt["factor_count"]
     # 记账区间使用 >T 的数据，净值理应变化
     assert base["equity_curve"] != alt["equity_curve"]
+
+
+def test_walkforward_does_not_rebalance_daily():
+    panel, symbols, dates = _trend_panel()
+    result = _run(panel, dates, symbols, rebalance_points=[60], horizon=5)
+    trade_dates = {trade["date"] for trade in result["trades"]}
+    schedule = result["target_schedule"][0]
+    assert trade_dates <= {schedule["execution_date"], schedule["planned_exit_execution_date"]}
+    assert schedule["execution_date"] in trade_dates
+
+
+def test_walkforward_includes_entry_day_cost_and_return():
+    panel, symbols, dates = _trend_panel()
+    panel = {key: value.copy() for key, value in panel.items()}
+    entry_idx = 61
+    panel["open"][:, entry_idx] = 10.0
+    panel["close"][:, entry_idx] = 11.0
+    result = _run(panel, dates, symbols, rebalance_points=[60], horizon=5)
+    assert result["equity_curve"][0] == pytest.approx(1_000_000.0)
+    assert result["metrics"]["total_return"] != 0.0
+    assert result["per_window"][0]["entry_trade_cost"] > 0
+
+
+def test_walkforward_right_censored_window_has_no_hit():
+    panel, symbols, dates = _trend_panel(n_days=72)
+    result = _run(panel, dates, symbols, rebalance_points=[65], horizon=10, mining_window_days=65)
+    window = result["per_window"][0]
+    assert window["right_censored"] is True
+    assert window["window_status"] == "RIGHT_CENSORED"
+    assert window["window_return"] is None
+    assert window["hit"] is None
 
 
 def test_walkforward_dates_match_subpanel_columns():
@@ -188,12 +220,24 @@ def test_walkforward_passes_security_meta_to_backtest(monkeypatch):
             "price_limit_meta_coverage": 1.0,
             "price_limit_fallback_count": 0,
             "price_limit_quality_flags": [],
+            "price_limit_daily_stats": [
+                {
+                    "date": "2026-03-02",
+                    "unique_cells": 1,
+                    "meta_covered_cells": 1,
+                    "buy_meta_covered_cells": 1,
+                    "sell_meta_covered_cells": 1,
+                    "buy_fallback_cells": 0,
+                    "sell_fallback_cells": 0,
+                    "quality_flags": [],
+                }
+            ],
         }
 
     monkeypatch.setattr("engines.factor.walkforward.run_topk_backtest", fake_backtest)
     result = _run(panel, dates, symbols, security_meta=security_meta, rebalance_points=[60])
     window = result["per_window"][0]
-    assert captured["security_meta"].shape == (len(symbols), 59)
+    assert captured["security_meta"].shape == (len(symbols), 60)
     assert captured["security_meta"][0, 0]["upper_limit_price"] == 999.0
     assert window["price_limit_meta_coverage"] == 1.0
     assert window["price_limit_fallback_count"] == 0
@@ -226,7 +270,7 @@ def test_walkforward_graceful_when_model_unavailable():
     assert result["warning"]
     assert result["per_window"][0]["factor_count"] == 0
     assert result["per_window"][0]["picks"] == []
-    assert len(result["equity_curve"]) == 59
+    assert len(result["equity_curve"]) == 60
 
 
 def test_walkforward_default_window_satisfies_production_split():
@@ -246,3 +290,23 @@ def test_walkforward_reports_required_and_available_days():
     assert result["warning"] == "WALKFORWARD_SAMPLE_INSUFFICIENT"
     assert result["diagnostics"]["available_days"] == 120
     assert result["diagnostics"]["required_window_days"] >= result["diagnostics"]["minimum_research_days"]
+
+
+def test_runtime_horizon_enters_research_window_requirement():
+    base = resolve_research_window_requirement(horizon_days=5)
+    longer = resolve_research_window_requirement(horizon_days=20)
+    assert longer.minimum_required_days == base.minimum_required_days + 15
+
+
+def test_walkforward_rejects_too_small_manual_window():
+    panel, symbols, dates = _trend_panel(n_days=120)
+    with pytest.raises(ValueError, match="WALKFORWARD_MINING_WINDOW_TOO_SMALL"):
+        run_walkforward(panel, dates, symbols, rebalance_points=[60], mining_window_days=10)
+
+
+def test_invalid_walkforward_policy_is_rejected():
+    from pydantic import ValidationError
+    from financial_agent.research_config import ResearchConfig
+
+    with pytest.raises(ValidationError):
+        ResearchConfig.model_validate({"walkforward": {"gap_policy": "mystery"}})

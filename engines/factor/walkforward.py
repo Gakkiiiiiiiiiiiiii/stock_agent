@@ -14,6 +14,7 @@ import logging
 import shutil
 import tempfile
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from uuid import uuid4
 
@@ -56,9 +57,11 @@ class WalkForwardWindow:
 
 @dataclass(frozen=True)
 class WalkForwardTarget:
+    target_id: str
     signal_date: str
     execution_date: str
-    exit_date: str
+    last_holding_date: str
+    planned_exit_execution_date: str | None
     target_symbols: tuple[str, ...]
     scores: dict[str, float]
     factor_ids: tuple[str, ...]
@@ -66,6 +69,15 @@ class WalkForwardTarget:
     research_run_id: str | None
     window_data_version: str
     window_snapshot_id: str
+
+
+class WalkForwardEventType(str, Enum):
+    TARGET_ACTIVATED = "TARGET_ACTIVATED"
+    TARGET_REPLACED = "TARGET_REPLACED"
+    TARGET_EXPIRED = "TARGET_EXPIRED"
+    EXIT_REQUESTED = "EXIT_REQUESTED"
+    EXIT_COMPLETED = "EXIT_COMPLETED"
+    MOVED_TO_CASH = "MOVED_TO_CASH"
 
 
 def _build_walkforward_window(
@@ -143,8 +155,10 @@ def run_walkforward(
     closes = panel.get("close")
     if closes is None or closes.size == 0 or not symbols:
         return _empty_result("特征面板为空，无法执行 walk-forward 预检")
-    research_requirement = resolve_research_window_requirement()
+    research_requirement = resolve_research_window_requirement(horizon_days=horizon)
     window_days = int(mining_window_days or research_requirement.resolved_window_days)
+    if mining_window_days is not None and window_days < research_requirement.minimum_required_days:
+        raise ValueError("WALKFORWARD_MINING_WINDOW_TOO_SMALL")
     if closes.shape[1] < window_days + 1:
         return _empty_result(
             "WALKFORWARD_SAMPLE_INSUFFICIENT",
@@ -220,18 +234,24 @@ def run_walkforward(
                 order = valid_idx[np.argsort(-scores[valid_idx])]
                 picks = [symbols[i] for i in order[:resolved_top_k]]
 
-            end = min(t + 1 + horizon, n_days)
             execution_date = dates[t + 1]
-            exit_date = dates[end - 1]
+            entry_index = t + 1
+            last_holding_index = min(entry_index + horizon - 1, n_days - 1)
+            planned_exit_index = last_holding_index + 1
+            planned_exit_execution_date = dates[planned_exit_index] if planned_exit_index < n_days else None
+            last_holding_date = dates[last_holding_index]
             score_map = (
                 {symbols[i]: float(scores[i]) for i in np.where(~np.isnan(scores))[0]}
                 if scores is not None
                 else {}
             )
+            target_id = f"{dates[t]}:{window.data_version[:12]}:{uuid4().hex[:8]}"
             target = WalkForwardTarget(
+                target_id=target_id,
                 signal_date=dates[t],
                 execution_date=execution_date,
-                exit_date=exit_date,
+                last_holding_date=last_holding_date,
+                planned_exit_execution_date=planned_exit_execution_date,
                 target_symbols=tuple(picks),
                 scores=score_map,
                 factor_ids=tuple(str(f.get("id")) for f in factors),
@@ -245,8 +265,15 @@ def run_walkforward(
             per_window.append({
                 "signal_date": dates[t],
                 "rebalance_date": dates[t],
-                "execution_date": execution_date,
-                "scheduled_exit_date": exit_date,
+                "target_id": target_id,
+                "entry_execution_date": execution_date,
+                "entry_baseline_date": dates[t],
+                "last_holding_date": last_holding_date,
+                "planned_exit_execution_date": planned_exit_execution_date,
+                "actual_exit_execution_date": None,
+                "exit_reason": None,
+                "right_censored": planned_exit_execution_date is None,
+                "window_status": "RIGHT_CENSORED" if planned_exit_execution_date is None else "PENDING_ATTRIBUTION",
                 "window_start": window.dates[0],
                 "window_end": window.dates[-1],
                 "window_data_version": window.data_version,
@@ -262,43 +289,108 @@ def run_walkforward(
                 "picks": picks,
             })
 
-    first_execution_idx = min(dates.index(item.execution_date) for item in targets_by_execution_date.values())
-    wf_dates = list(dates[first_execution_idx:])
+    first_signal_idx = min(dates.index(item.signal_date) for item in targets_by_execution_date.values())
+    wf_dates = list(dates[first_signal_idx:])
     score_panel = np.full((len(symbols), len(wf_dates)), np.nan)
+    rebalance_mask = np.zeros(len(wf_dates), dtype=bool)
+    score_metadata: list[dict | None] = [None for _ in wf_dates]
     symbol_index = {symbol: idx for idx, symbol in enumerate(symbols)}
     cfg = get_research_config().walkforward
     gap_policy = cfg.gap_policy
     overlap_policy = cfg.overlapping_target_policy
     sorted_targets = sorted(targets_by_execution_date.values(), key=lambda item: item.execution_date)
-    active_target: WalkForwardTarget | None = None
     target_schedule: list[dict] = []
-    state_events: list[dict] = []
+    execution_events: list[dict] = []
+    target_by_id = {item.target_id: item for item in targets_by_execution_date.values()}
+    active_target: WalkForwardTarget | None = None
     for local_idx, trade_date in enumerate(wf_dates):
         target = targets_by_execution_date.get(trade_date)
         if target is not None:
-            if active_target is not None and trade_date <= active_target.exit_date:
-                state_events.append({"date": trade_date, "event": "TARGET_REPLACED"})
+            if (
+                active_target is not None
+                and active_target.planned_exit_execution_date is not None
+                and trade_date <= active_target.planned_exit_execution_date
+            ):
+                execution_events.append({
+                    "event_date": trade_date,
+                    "event_type": WalkForwardEventType.TARGET_REPLACED.value,
+                    "target_id": active_target.target_id,
+                    "replacement_target_id": target.target_id,
+                    "reason": "overlap_replace",
+                })
+                for window_item in per_window:
+                    if window_item["target_id"] == active_target.target_id and not window_item["right_censored"]:
+                        window_item["actual_exit_execution_date"] = trade_date
+                        window_item["exit_reason"] = "TARGET_REPLACED"
+                        window_item["window_status"] = "COMPLETE"
                 if overlap_policy != "replace":
                     target = active_target
             else:
-                state_events.append({"date": trade_date, "event": "TARGET_ACTIVATED"})
+                execution_events.append({
+                    "event_date": trade_date,
+                    "event_type": WalkForwardEventType.TARGET_ACTIVATED.value,
+                    "target_id": target.target_id,
+                    "replacement_target_id": None,
+                    "reason": "scheduled_entry",
+                })
             active_target = target
-        if active_target is not None and trade_date > active_target.exit_date:
-            state_events.append({"date": trade_date, "event": "TARGET_EXPIRED"})
+            rebalance_mask[local_idx] = True
+            for rank, symbol in enumerate(active_target.target_symbols):
+                idx = symbol_index.get(symbol)
+                if idx is not None:
+                    score_panel[idx, local_idx] = len(active_target.target_symbols) - rank
+        if active_target is not None and active_target.planned_exit_execution_date == trade_date:
+            execution_events.append({
+                "event_date": trade_date,
+                "event_type": WalkForwardEventType.TARGET_EXPIRED.value,
+                "target_id": active_target.target_id,
+                "replacement_target_id": None,
+                "reason": "horizon_elapsed",
+            })
             if gap_policy == "cash":
+                rebalance_mask[local_idx] = True
+                execution_events.append({
+                    "event_date": trade_date,
+                    "event_type": WalkForwardEventType.EXIT_REQUESTED.value,
+                    "target_id": active_target.target_id,
+                    "replacement_target_id": None,
+                    "reason": "gap_policy_cash",
+                })
+                execution_events.append({
+                    "event_date": trade_date,
+                    "event_type": WalkForwardEventType.EXIT_COMPLETED.value,
+                    "target_id": active_target.target_id,
+                    "replacement_target_id": None,
+                    "reason": "requested_cash_exit",
+                })
+                execution_events.append({
+                    "event_date": trade_date,
+                    "event_type": WalkForwardEventType.MOVED_TO_CASH.value,
+                    "target_id": active_target.target_id,
+                    "replacement_target_id": None,
+                    "reason": "gap_policy_cash",
+                })
+                for window_item in per_window:
+                    if window_item["target_id"] == active_target.target_id:
+                        window_item["actual_exit_execution_date"] = trade_date
+                        window_item["exit_reason"] = "TARGET_EXPIRED"
+                        window_item["window_status"] = "COMPLETE"
                 active_target = None
-                state_events.append({"date": trade_date, "event": "MOVED_TO_CASH"})
-        if active_target is None:
-            continue
-        for rank, symbol in enumerate(active_target.target_symbols):
-            idx = symbol_index.get(symbol)
-            if idx is not None:
-                score_panel[idx, local_idx] = len(active_target.target_symbols) - rank
+        if rebalance_mask[local_idx]:
+            metadata_target = target if target is not None else active_target
+            if metadata_target is None:
+                # Cash exit after active_target was cleared above: find the event target.
+                event_target_id = execution_events[-1]["target_id"] if execution_events else None
+                metadata_target = target_by_id.get(event_target_id)
+            if metadata_target is not None:
+                score_metadata[local_idx] = _target_score_metadata(metadata_target, trade_date)
     target_schedule = [
         {
+            "target_id": item.target_id,
             "signal_date": item.signal_date,
             "execution_date": item.execution_date,
-            "exit_date": item.exit_date,
+            "last_holding_date": item.last_holding_date,
+            "planned_exit_execution_date": item.planned_exit_execution_date,
             "target_symbols": list(item.target_symbols),
             "factor_ids": list(item.factor_ids),
             "factor_count": item.factor_count,
@@ -308,7 +400,7 @@ def run_walkforward(
         for item in sorted_targets
     ]
 
-    date_slice = slice(first_execution_idx, n_days)
+    date_slice = slice(first_signal_idx, n_days)
     continuous = run_topk_backtest(
         score_panel,
         panel["open"][:, date_slice],
@@ -321,7 +413,9 @@ def run_walkforward(
         rebalance_interval=1,
         top_k=resolved_top_k,
         initial_cash=1_000_000.0,
-        allow_unsafe_without_metadata=True,
+        allow_unsafe_without_metadata=False,
+        rebalance_mask=rebalance_mask,
+        score_metadata=score_metadata,
         security_meta=np.asarray(security_meta, dtype=object)[:, date_slice] if security_meta is not None else None,
         upper_limit_prices=np.asarray(upper_limit_prices, dtype=object)[:, date_slice] if upper_limit_prices is not None else None,
         lower_limit_prices=np.asarray(lower_limit_prices, dtype=object)[:, date_slice] if lower_limit_prices is not None else None,
@@ -331,26 +425,34 @@ def run_walkforward(
     benchmark_curve = continuous["benchmark_curve"]
     all_trades = continuous["trades"]
     all_turnover = continuous["daily_turnover"]
+    price_limit_daily_stats = continuous.get("price_limit_daily_stats") or []
     date_to_local = {date_value: idx for idx, date_value in enumerate(wf_dates)}
     for item in per_window:
-        start_idx = date_to_local.get(item["execution_date"])
-        end_idx = date_to_local.get(item["scheduled_exit_date"])
-        if start_idx is None or end_idx is None or end_idx <= start_idx:
-            window_return = 0.0
-            bench_return = 0.0
+        baseline_idx = date_to_local.get(item["entry_baseline_date"])
+        exit_date = item.get("actual_exit_execution_date")
+        exit_idx = date_to_local.get(exit_date) if exit_date else None
+        if item["right_censored"] or baseline_idx is None or exit_idx is None or exit_idx <= baseline_idx:
+            window_return = None
+            bench_return = None
+            excess = None
         else:
-            window_return = equity_curve[end_idx] / equity_curve[start_idx] - 1
-            bench_return = benchmark_curve[end_idx] / benchmark_curve[start_idx] - 1
-        excess = window_return - bench_return
-        item["window_return"] = round(window_return, 4)
-        item["benchmark_return"] = round(bench_return, 4)
-        item["excess_return"] = round(excess, 4)
-        item["hit"] = bool(excess > 0)
-        item["price_limit_meta_coverage"] = continuous.get("price_limit_meta_coverage")
-        item["price_limit_buy_meta_coverage"] = continuous.get("price_limit_buy_meta_coverage")
-        item["price_limit_sell_meta_coverage"] = continuous.get("price_limit_sell_meta_coverage")
-        item["price_limit_fallback_count"] = continuous.get("price_limit_fallback_count")
-        item["quality_flags"] = continuous.get("price_limit_quality_flags") or []
+            window_return = equity_curve[exit_idx] / equity_curve[baseline_idx] - 1
+            bench_return = benchmark_curve[exit_idx] / benchmark_curve[baseline_idx] - 1
+            excess = window_return - bench_return
+        item["window_return"] = round(window_return, 4) if window_return is not None else None
+        item["benchmark_return"] = round(bench_return, 4) if bench_return is not None else None
+        item["excess_return"] = round(excess, 4) if excess is not None else None
+        item["hit"] = bool(excess > 0) if excess is not None else None
+        window_stats = _aggregate_daily_rule_stats(price_limit_daily_stats, item["entry_execution_date"], exit_date)
+        item.update(window_stats)
+        item["entry_trade_cost"] = round(_trade_cost_on_date(all_trades, item["entry_execution_date"]), 4)
+        item["exit_trade_cost"] = round(_trade_cost_on_date(all_trades, exit_date), 4) if exit_date else None
+        turnover = (
+            sum(all_turnover[baseline_idx + 1: exit_idx + 1])
+            if baseline_idx is not None and exit_idx is not None and exit_idx >= baseline_idx
+            else 0.0
+        )
+        item["window_turnover"] = round(turnover, 4)
 
     metrics = calc_portfolio_metrics(
         equity_curve, benchmark_curve, all_trades, all_turnover, wf_dates,
@@ -366,16 +468,21 @@ def run_walkforward(
             excess_sharpe = float(excess_daily.mean() / std * np.sqrt(TRADING_DAYS_PER_YEAR))
     metrics["excess_sharpe"] = round(excess_sharpe, 4)
 
-    hits = [w["hit"] for w in per_window]
+    hits = [w["hit"] for w in per_window if w["hit"] is not None]
     return {
-        "mode": "continuous_walkforward",
+        "mode": "continuous_event_walkforward",
         "status": "VALID",
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
         "dates": wf_dates,
+        "trades": all_trades,
+        "daily_turnover": all_turnover,
         "metrics": metrics,
         "window_hit_rate": round(sum(hits) / len(hits), 4) if hits else None,
         "target_schedule": target_schedule,
+        "execution_events": execution_events,
+        "daily_execution_log": _daily_execution_log(wf_dates, equity_curve, benchmark_curve, all_turnover, all_trades, execution_events),
+        "price_limit_daily_stats": price_limit_daily_stats,
         "per_window": per_window,
         "diagnostics": {
             "research_window_days": window_days,
@@ -385,8 +492,10 @@ def run_walkforward(
             "gap_policy": gap_policy,
             "overlap_policy": overlap_policy,
             "continuous_calendar": True,
+            "event_driven_rebalance": True,
             "portfolio_benchmark_independent": True,
-            "state_events": state_events,
+            "score_metadata_enforced": True,
+            "retry_unfilled_target": cfg.retry_unfilled_target,
             "observation_count": len(wf_dates),
             "first_date": wf_dates[0] if wf_dates else None,
             "last_date": wf_dates[-1] if wf_dates else None,
@@ -406,6 +515,85 @@ def _score_metadata(signal_date: str, execution_dates: list[str]) -> list[dict]:
                 "executable_from": f"{execution_date}T09:30:00",
                 "data_snapshot_id": f"factor_walkforward:{signal_date}",
                 "algorithm_version": "factor_walkforward_v1",
+            }
+        )
+    return rows
+
+
+def _target_score_metadata(target: WalkForwardTarget, execution_date: str) -> dict:
+    return {
+        "target_id": target.target_id,
+        "feature_time": f"{target.signal_date}T15:00:00+08:00",
+        "available_at": f"{target.signal_date}T15:05:00+08:00",
+        "executable_from": f"{execution_date}T09:30:00+08:00",
+        "data_snapshot_id": target.window_snapshot_id,
+        "data_version": target.window_data_version,
+        "algorithm_version": "factor_walkforward_v2",
+    }
+
+
+def _trade_cost_on_date(trades: list[dict], trade_date: str | None) -> float:
+    if not trade_date:
+        return 0.0
+    return float(sum(float(item.get("cost") or 0.0) for item in trades if item.get("date") == trade_date))
+
+
+def _aggregate_daily_rule_stats(rows: list[dict], start_date: str, end_date: str | None) -> dict:
+    if end_date is None:
+        return {
+            "price_limit_meta_coverage": None,
+            "price_limit_buy_meta_coverage": None,
+            "price_limit_sell_meta_coverage": None,
+            "price_limit_fallback_count": 0,
+            "price_limit_buy_fallback_count": 0,
+            "price_limit_sell_fallback_count": 0,
+            "quality_flags": [],
+        }
+    selected = [row for row in rows if start_date <= str(row.get("date")) <= end_date]
+    unique = sum(int(row.get("unique_cells") or 0) for row in selected)
+    meta = sum(int(row.get("meta_covered_cells") or 0) for row in selected)
+    buy_meta = sum(int(row.get("buy_meta_covered_cells") or 0) for row in selected)
+    sell_meta = sum(int(row.get("sell_meta_covered_cells") or 0) for row in selected)
+    buy_fallback = sum(int(row.get("buy_fallback_cells") or 0) for row in selected)
+    sell_fallback = sum(int(row.get("sell_fallback_cells") or 0) for row in selected)
+    both_fallback = sum(int(row.get("both_sides_fallback_cells") or 0) for row in selected)
+    flags = sorted({flag for row in selected for flag in (row.get("quality_flags") or [])})
+    return {
+        "price_limit_meta_coverage": round(meta / unique, 6) if unique else None,
+        "price_limit_buy_meta_coverage": round(buy_meta / unique, 6) if unique else None,
+        "price_limit_sell_meta_coverage": round(sell_meta / unique, 6) if unique else None,
+        "price_limit_fallback_count": both_fallback,
+        "price_limit_buy_fallback_count": buy_fallback,
+        "price_limit_sell_fallback_count": sell_fallback,
+        "quality_flags": flags,
+    }
+
+
+def _daily_execution_log(
+    dates: list[str],
+    equity_curve: list[float],
+    benchmark_curve: list[float],
+    turnover: list[float],
+    trades: list[dict],
+    events: list[dict],
+) -> list[dict]:
+    events_by_date: dict[str, list[dict]] = {}
+    for event in events:
+        events_by_date.setdefault(str(event.get("event_date")), []).append(event)
+    rows = []
+    for idx, trade_date in enumerate(dates):
+        day_events = events_by_date.get(trade_date) or []
+        trade_count = sum(1 for trade in trades if trade.get("date") == trade_date)
+        rows.append(
+            {
+                "date": trade_date,
+                "event": day_events[-1]["event_type"] if day_events else "NO_TARGET",
+                "target_id": day_events[-1].get("target_id") if day_events else None,
+                "rebalance_requested": bool(day_events),
+                "trade_count": trade_count,
+                "turnover": turnover[idx] if idx < len(turnover) else 0.0,
+                "portfolio_equity": equity_curve[idx],
+                "benchmark_equity": benchmark_curve[idx],
             }
         )
     return rows
