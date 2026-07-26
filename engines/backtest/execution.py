@@ -20,7 +20,7 @@ DEFAULT_TICK_SIZE = 0.01  # 默认最小价格变动单位（元）
 
 
 def _resolve_tick_size(quote: dict | None, default: float = DEFAULT_TICK_SIZE) -> float:
-    """行情元数据可覆盖默认 tick；缺失或非法时回退 0.01 元。"""
+    """行情元数据可覆盖默认 tick；缺失、非有限或非正时回退 0.01 元。"""
     payload = quote or {}
     for key in ("tick_size", "price_tick", "min_price_change"):
         value = payload.get(key)
@@ -30,12 +30,87 @@ def _resolve_tick_size(quote: dict | None, default: float = DEFAULT_TICK_SIZE) -
             tick = float(value)
         except (TypeError, ValueError):
             continue
-        if tick > 0:
+        if math.isfinite(tick) and tick > 0:
             return tick
     return default
 
 
-def price_limit_up_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+@dataclass(frozen=True)
+class DailySecurityMeta:
+    """单标的单交易日的交易规则元数据（历史回放按日对齐）。"""
+
+    is_risk_warning: bool | None = None
+    listing_stage: str | None = None
+    limit_up_rate: float | None = None
+    limit_down_rate: float | None = None
+    upper_limit_price: float | None = None
+    lower_limit_price: float | None = None
+    tick_size: float | None = None
+    source: str | None = None
+    data_version: str | None = None
+
+
+@dataclass(frozen=True)
+class TradeRuleContext:
+    """单笔交易的可执行性判断上下文：实际 Limit Price 优先于比例规则。"""
+
+    symbol: str
+    trade_date: object
+    prev_close: float
+    open_price: float
+    quote: dict
+    upper_limit_price: float | None = None
+    lower_limit_price: float | None = None
+
+
+def _meta_risk_warning(meta: dict | None) -> bool | None:
+    """三态风险状态：缺失返回 None，不得当作 False 覆盖名称识别。"""
+    value = (meta or {}).get("is_risk_warning")
+    if value is None or value == "":
+        return None
+    return bool(value)
+
+
+def _checked_limit_price(value: float | None, field_name: str) -> float | None:
+    if value is None:
+        return None
+    price = float(value)
+    if not math.isfinite(price) or price <= 0:
+        raise ValueError(f"PRICE_LIMIT_PRICE_INVALID:{field_name}")
+    return price
+
+
+def can_buy_with_context(context: TradeRuleContext) -> bool:
+    """实际涨停价优先；缺失时回退到比例规则（quote/is_st/trade_date）。"""
+    upper = _checked_limit_price(context.upper_limit_price, "upper_limit_price")
+    if upper is not None:
+        return context.open_price < upper
+    return can_buy(
+        context.open_price,
+        context.prev_close,
+        context.symbol,
+        is_st=_meta_risk_warning(context.quote),
+        trade_date=context.trade_date,
+        quote=context.quote,
+    )
+
+
+def can_sell_with_context(context: TradeRuleContext) -> bool:
+    """实际跌停价优先；缺失时回退到比例规则（quote/is_st/trade_date）。"""
+    lower = _checked_limit_price(context.lower_limit_price, "lower_limit_price")
+    if lower is not None:
+        return context.open_price > lower
+    return can_sell(
+        context.open_price,
+        context.prev_close,
+        context.symbol,
+        is_st=_meta_risk_warning(context.quote),
+        trade_date=context.trade_date,
+        quote=context.quote,
+    )
+
+
+def price_limit_up_pct(symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> float:
     """涨停比例。历史回放必须显式传入 trade_date。无涨跌幅阶段返回 +inf。"""
     rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
     if not rule.has_price_limit:
@@ -45,7 +120,7 @@ def price_limit_up_pct(symbol: str, is_st: bool = False, trade_date=None, quote:
     return rule.limit_up_pct
 
 
-def price_limit_down_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+def price_limit_down_pct(symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> float:
     """跌停比例。历史回放必须显式传入 trade_date。无涨跌幅阶段返回 +inf。"""
     rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
     if not rule.has_price_limit:
@@ -55,7 +130,7 @@ def price_limit_down_pct(symbol: str, is_st: bool = False, trade_date=None, quot
     return rule.limit_down_pct
 
 
-def price_limit_pct(symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+def price_limit_pct(symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> float:
     """Deprecated: 仅返回涨停比例，请改用 price_limit_up_pct()/price_limit_down_pct()。"""
     warnings.warn(
         "price_limit_pct() returns the upper limit only; use "
@@ -66,7 +141,7 @@ def price_limit_pct(symbol: str, is_st: bool = False, trade_date=None, quote: di
     return price_limit_up_pct(symbol, is_st=is_st, trade_date=trade_date, quote=quote)
 
 
-def limit_up_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+def limit_up_price(prev_close: float, symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> float:
     """涨停价：前收价 ×(1+limit_up)，按交易 tick 半入取整。无涨跌幅阶段返回 +inf。"""
     rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
     if not rule.has_price_limit:
@@ -76,7 +151,7 @@ def limit_up_price(prev_close: float, symbol: str, is_st: bool = False, trade_da
     return round_to_tick(prev_close * (1 + rule.limit_up_pct), tick_size=_resolve_tick_size(quote))
 
 
-def limit_down_price(prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> float:
+def limit_down_price(prev_close: float, symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> float:
     """跌停价：前收价 ×(1-limit_down)，按交易 tick 半入取整。无涨跌幅阶段返回 -inf。"""
     rule = resolve_price_limit_rule(symbol, trade_date, quote=quote, is_risk_warning=is_st)
     if not rule.has_price_limit:
@@ -86,12 +161,12 @@ def limit_down_price(prev_close: float, symbol: str, is_st: bool = False, trade_
     return round_to_tick(prev_close * (1 - rule.limit_down_pct), tick_size=_resolve_tick_size(quote))
 
 
-def can_buy(open_price: float, prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> bool:
+def can_buy(open_price: float, prev_close: float, symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> bool:
     """以开盘价成交的假设下，open≥涨停价则当日不可买入。"""
     return open_price < limit_up_price(prev_close, symbol, is_st=is_st, trade_date=trade_date, quote=quote)
 
 
-def can_sell(open_price: float, prev_close: float, symbol: str, is_st: bool = False, trade_date=None, quote: dict | None = None) -> bool:
+def can_sell(open_price: float, prev_close: float, symbol: str, is_st: bool | None = None, trade_date=None, quote: dict | None = None) -> bool:
     """以开盘价成交的假设下，open≤跌停价则当日不可卖出。"""
     return open_price > limit_down_price(prev_close, symbol, is_st=is_st, trade_date=trade_date, quote=quote)
 

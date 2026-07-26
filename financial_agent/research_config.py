@@ -82,6 +82,13 @@ class FactorLibraryConfig(BaseModel):
     lock_timeout_seconds: int = 30
 
 
+class BacktestConfig(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    # 严格研究模式：历史回放中主板旧制度 ST 状态缺失时直接报错，不做模糊回放
+    fail_on_ambiguous_price_limit: bool = False
+
+
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -92,6 +99,9 @@ class ResearchConfig(BaseModel):
     high_position: HighPositionConfig = HighPositionConfig()
     neutralization: NeutralizationConfig = NeutralizationConfig()
     factor_library: FactorLibraryConfig = FactorLibraryConfig()
+    backtest: BacktestConfig = BacktestConfig()
+    # 严格模式：Final OOS 前必须提供数据版本（生产建议开启，开发测试可关闭）
+    require_data_version_for_oos: bool = False
 
     def validate_runtime(self) -> None:
         required = (
@@ -175,5 +185,6 @@ __all__ = [
     "PaperTradingConfig",
     "HighPositionConfig",
     "FactorLibraryConfig",
+    "BacktestConfig",
     "get_research_config",
 ]

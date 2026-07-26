@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, field
@@ -61,6 +60,17 @@ _PROTECTED_METRIC_KEYS = {
     "final_oos_summary",
     "final_oos_audit_ref",
     "final_oos_audit",
+}
+
+# 研究类指标：对某一因子身份不可变，普通监控更新不得覆盖。
+_IMMUTABLE_RESEARCH_METRIC_KEYS = {
+    "final_oos_summary",
+    "final_oos_audit_ref",
+    "final_oos_audit",
+    "discovery_rank_ic",
+    "discovery_icir",
+    "research_data_version",
+    "research_run_id",
 }
 
 # 终态：退役因子不允许被自动流程重新激活。
@@ -260,26 +270,33 @@ def _merge_factor(existing: dict, incoming: dict) -> None:
     existing["validation_stage"] = _merge_status(old_stage, incoming.get("validation_stage"))
 
 
+def _metrics_freshness(metrics: dict) -> tuple[str, str, str]:
+    """指标新鲜度：metrics_as_of > metrics_updated_at > metrics_data_version。"""
+    return (
+        str(metrics.get("metrics_as_of") or ""),
+        str(metrics.get("metrics_updated_at") or ""),
+        str(metrics.get("metrics_data_version") or ""),
+    )
+
+
 def _merge_metrics(existing: dict, incoming: dict) -> dict:
+    existing_freshness = _metrics_freshness(existing)
+    incoming_freshness = _metrics_freshness(incoming)
+    # 旧快照不得覆盖较新指标；两边都无版本信息时保持原合并行为（兼容模式）。
+    if any(incoming_freshness) and incoming_freshness < existing_freshness:
+        return dict(existing)
+    # 严格模式：existing 有版本而 incoming 无版本时禁止覆盖。
+    if any(existing_freshness) and not any(incoming_freshness):
+        return dict(existing)
     merged = {**existing, **incoming}
     for key in _PROTECTED_METRIC_KEYS:
         if key in existing and key not in incoming:
             merged[key] = existing[key]
-    # Incoming 的 OOS 审计早于 existing 时，不得覆盖最新审计引用。
-    # 审计日期从 URI 文件名（factor_oos_YYYYMMDD.jsonl）解析。
-    existing_ref = existing.get("final_oos_audit_ref")
-    incoming_ref = incoming.get("final_oos_audit_ref")
-    if existing_ref and incoming_ref:
-        existing_day = _audit_ref_date(str(existing_ref))
-        incoming_day = _audit_ref_date(str(incoming_ref))
-        if existing_day and incoming_day and incoming_day < existing_day:
-            merged["final_oos_audit_ref"] = existing_ref
+    # 研究类指标一旦写入即不可变（因子版本化在 v2.3 PostgreSQL 完成）。
+    for key in _IMMUTABLE_RESEARCH_METRIC_KEYS:
+        if key in existing:
+            merged[key] = existing[key]
     return merged
-
-
-def _audit_ref_date(ref: str) -> str:
-    match = re.search(r"factor_oos_(\d{8})", ref)
-    return match.group(1) if match else ""
 
 
 def _merge_status(old_status, incoming_status) -> str:

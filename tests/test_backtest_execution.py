@@ -337,3 +337,65 @@ def test_validate_price_limit_rule():
         validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=None, limit_down_pct=0.1))
     with pytest.raises(ValueError, match="INVALID"):
         validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=0.0, limit_down_pct=0.1))
+
+
+# ---------- PriceLimitRule 强制校验（v2.2.3 第八轮 P1） ----------
+
+
+def test_zero_quote_limit_rate_is_rejected():
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": 0, "limit_down_rate": 0}
+    with pytest.raises(ValueError, match="PRICE_LIMIT_RULE_INVALID"):
+        limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote)
+
+
+def test_nan_quote_limit_rate_is_rejected():
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": "nan"}
+    with pytest.raises(ValueError, match="non_finite"):
+        limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote)
+
+
+def test_infinite_quote_limit_rate_is_rejected():
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": float("inf")}
+    with pytest.raises(ValueError, match="non_finite"):
+        limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote)
+
+
+def test_over_100_percent_quote_limit_rate_is_rejected():
+    day = date(2026, 7, 26)
+    quote = {"limit_up_rate": 150}
+    with pytest.raises(ValueError, match="greater_than_100_percent"):
+        limit_up_price(10.0, "600000.SH", trade_date=day, quote=quote)
+
+
+def test_invalid_tick_size_falls_back_to_default():
+    day = date(2026, 7, 26)
+    for bad_tick in ("nan", float("inf"), -1, 0, "abc"):
+        quote = {"limit_up_rate": 15, "limit_down_rate": 12, "tick_size": bad_tick}
+        # 非法 tick 回退 0.01：10.03 × 1.15 = 11.5345 → 11.53
+        assert limit_up_price(10.03, "600000.SH", trade_date=day, quote=quote) == pytest.approx(11.53)
+
+
+def test_invalid_actual_limit_price_is_rejected():
+    from engines.backtest.execution import TradeRuleContext, can_buy_with_context, can_sell_with_context
+
+    day = date(2026, 7, 26)
+    with pytest.raises(ValueError, match="PRICE_LIMIT_PRICE_INVALID:upper_limit_price"):
+        can_buy_with_context(TradeRuleContext(
+            symbol="600000.SH", trade_date=day, prev_close=10.0, open_price=10.0,
+            quote={}, upper_limit_price=float("nan"),
+        ))
+    with pytest.raises(ValueError, match="PRICE_LIMIT_PRICE_INVALID:lower_limit_price"):
+        can_sell_with_context(TradeRuleContext(
+            symbol="600000.SH", trade_date=day, prev_close=10.0, open_price=10.0,
+            quote={}, lower_limit_price=-1,
+        ))
+
+
+def test_three_state_risk_warning_not_forced_false():
+    # is_st=None 时不得覆盖名称识别：名称含 ST 仍按 ST 规则
+    day = date(2026, 7, 3)
+    quote = {"name": "ST测试"}
+    assert limit_up_price(10.0, "600000.SH", is_st=None, trade_date=day, quote=quote) == pytest.approx(10.5)

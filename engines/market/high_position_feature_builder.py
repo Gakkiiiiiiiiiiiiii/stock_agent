@@ -35,6 +35,8 @@ class HighPositionFeatures:
     high_position_prev_close_mismatch_count: int
     high_position_prev_close_mismatch_ratio: float | None
     high_position_quality_flags: list[str]
+    # 命中涨停但历史风险状态缺失（证据不可靠）的标的数，仅作诊断，不单独触发入池
+    high_position_uncertain_limit_count: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return self.__dict__.copy()
@@ -112,7 +114,9 @@ class HighPositionFeatureBuilder:
                     "ret20": ret20,
                     "ret60": ret60,
                     "near_high": near_high,
-                    "recent_limit": recent_limit_result.hit,
+                    # 可靠涨停可独立入池；不可靠涨停只能增强已有高位证据
+                    "recent_limit_confirmed": recent_limit_result.hit and recent_limit_result.reliable,
+                    "recent_limit_uncertain": recent_limit_result.hit and not recent_limit_result.reliable,
                     "amount_ratio": amount_ratio,
                     "prev_close": float(closes[-1]),
                     "ma20": float(np.nanmean(closes[-20:])),
@@ -127,18 +131,28 @@ class HighPositionFeatureBuilder:
         ret60_cut = _quantile([item["ret60"] for item in stats], config.ret60_quantile)
         amount_cut = _quantile([item["amount_ratio"] for item in stats], config.amount_ratio_quantile)
         pool = []
+        uncertain_limit_count = 0
         for item in stats:
             return_leader = item["ret20"] >= ret20_cut or item["ret60"] >= ret60_cut
-            is_high_position = return_leader or item["near_high"] or item["recent_limit"]
+            is_high_position = (
+                return_leader
+                or item["near_high"]
+                or item["recent_limit_confirmed"]
+                or (item["recent_limit_uncertain"] and (return_leader or item["near_high"]))
+            )
             is_crowded = item["amount_ratio"] >= amount_cut
-            if is_high_position and (is_crowded or item["recent_limit"] or return_leader):
+            if is_high_position and (is_crowded or item["recent_limit_confirmed"] or return_leader):
                 pool.append(item)
+            if item["recent_limit_uncertain"]:
+                uncertain_limit_count += 1
+        if uncertain_limit_count:
+            global_flags.append("HIGH_POSITION_UNCERTAIN_LIMIT_EVIDENCE")
 
         flags: list[str] = list(global_flags)
         if len(pool) < config.min_pool_size:
             flags.append("HIGH_POSITION_POOL_TOO_SMALL")
         if not pool:
-            return _empty(flags or ["HIGH_POSITION_FEATURES_UNAVAILABLE"])
+            return _empty(flags or ["HIGH_POSITION_FEATURES_UNAVAILABLE"], uncertain_limit_count)
 
         loss = limit_down = breakdown = big_negative = valid = mismatch = 0
         for item in pool:
@@ -194,6 +208,7 @@ class HighPositionFeatureBuilder:
             return HighPositionFeatures(
                 None, None, None, None, len(pool), valid, _round_or_none(coverage),
                 mismatch, _round_or_none(mismatch_ratio), flags,
+                high_position_uncertain_limit_count=uncertain_limit_count,
             )
 
         return HighPositionFeatures(
@@ -207,11 +222,15 @@ class HighPositionFeatureBuilder:
             high_position_prev_close_mismatch_count=mismatch,
             high_position_prev_close_mismatch_ratio=_round_or_none(mismatch_ratio),
             high_position_quality_flags=flags,
+            high_position_uncertain_limit_count=uncertain_limit_count,
         )
 
 
-def _empty(flags: list[str]) -> HighPositionFeatures:
-    return HighPositionFeatures(None, None, None, None, 0, 0, None, 0, None, sorted(set(flags)))
+def _empty(flags: list[str], uncertain_limit_count: int = 0) -> HighPositionFeatures:
+    return HighPositionFeatures(
+        None, None, None, None, 0, 0, None, 0, None, sorted(set(flags)),
+        high_position_uncertain_limit_count=uncertain_limit_count,
+    )
 
 
 def _split_pool_and_outcome(

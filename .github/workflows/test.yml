@@ -17,6 +17,12 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -e ".[test]"
+      - name: Check runtime artifacts are not tracked
+        run: |
+          if git ls-files | grep -E '(^|/)\.coverage$|storage/runtime/.*\.jsonl$|storage/runtime/.*\.log$'; then
+            echo "runtime artifacts are tracked"
+            exit 1
+          fi
       - name: Collect
         run: |
           pytest --collect-only -q \

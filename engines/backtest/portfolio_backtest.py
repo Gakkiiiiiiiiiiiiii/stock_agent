@@ -3,9 +3,11 @@
 每个调仓日按 scores 面板选取得分最高的 top_k 只股票等权配置，
 以当日开盘价为目标执行调仓（受涨跌停/停牌/T+1 约束），非调仓日持有不动。
 面板形状均为 (n_symbols, n_days)，NaN 表示缺失；scores 为 NaN 表示当日不入选。
+交易可执行性判断优先级：实际涨跌停价 > 每日 Limit Rate/风险状态/上市阶段 > 本地版本化规则。
 """
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from datetime import datetime
 
@@ -14,11 +16,14 @@ from pydantic import BaseModel
 
 from engines.backtest.execution import (
     PositionBook,
-    can_buy,
-    can_sell,
+    TradeRuleContext,
+    can_buy_with_context,
+    can_sell_with_context,
     cost_of,
     is_suspended,
 )
+from engines.market.price_limit_rules import MAIN_BOARD_ST_10_EFFECTIVE_DATE, board_of
+from financial_agent.research_config import get_research_config
 
 # 调仓时忽略的价值偏差阈值（元），避免无意义的碎单
 _MIN_TRADE_VALUE = 1.0
@@ -119,18 +124,34 @@ def run_topk_backtest(
     initial_cash: float = 1_000_000.0,
     score_metadata: Sequence[dict] | None = None,
     allow_unsafe_without_metadata: bool = False,
+    security_meta: Sequence[Sequence[dict | None]] | None = None,
+    upper_limit_prices=None,
+    lower_limit_prices=None,
 ) -> dict:
-    """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。"""
+    """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。
+
+    security_meta / upper_limit_prices / lower_limit_prices 为可选的
+    (n_symbols, n_days) 每日交易规则元数据面板：提供后历史 ST、IPO 首日、
+    非对称 Limit Rate、实际涨跌停价与 Tick Size 才会真实进入执行。
+    """
     scores = np.asarray(scores, dtype=float)
     opens = np.asarray(opens, dtype=float)
     closes = np.asarray(closes, dtype=float)
     volumes = np.asarray(volumes, dtype=float)
     n_symbols, n_days = scores.shape
+    _validate_optional_panel_shape(security_meta, (n_symbols, n_days), "security_meta")
+    _validate_optional_panel_shape(upper_limit_prices, (n_symbols, n_days), "upper_limit_prices")
+    _validate_optional_panel_shape(lower_limit_prices, (n_symbols, n_days), "lower_limit_prices")
+    meta_cells = np.asarray(security_meta, dtype=object) if security_meta is not None else None
+    upper_cells = np.asarray(upper_limit_prices, dtype=object) if upper_limit_prices is not None else None
+    lower_cells = np.asarray(lower_limit_prices, dtype=object) if lower_limit_prices is not None else None
     if top_k is None:
         # 默认池子的 1%，下限 5 只
         top_k = max(5, int(n_symbols * 0.01))
     top_k = max(1, min(top_k, n_symbols))
     rebalance_interval = max(1, int(rebalance_interval))
+    fail_on_ambiguous = get_research_config().backtest.fail_on_ambiguous_price_limit
+    pl_stats = {"cells": 0, "covered": 0, "fallback": 0, "ambiguous": 0}
 
     state = _PortfolioState(initial_cash)
     last_close = np.full(n_symbols, np.nan)  # 各标的最近有效收盘价（停牌股估值用）
@@ -169,6 +190,11 @@ def run_topk_backtest(
             traded_value = _rebalance_day(
                 t, state, scores, opens, closes, volumes, last_close,
                 symbols, dates, trades, top_k, n_symbols,
+                meta_cells=meta_cells,
+                upper_cells=upper_cells,
+                lower_cells=lower_cells,
+                pl_stats=pl_stats,
+                fail_on_ambiguous=fail_on_ambiguous,
             )
 
         equity = state.cash + sum(
@@ -184,6 +210,9 @@ def run_topk_backtest(
             if state.shares_of(i) > 1e-9
         })
 
+    quality_flags: list[str] = []
+    if pl_stats["ambiguous"]:
+        quality_flags.append("BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE")
     return {
         "equity_curve": equity_curve,
         "benchmark_curve": benchmark_curve,
@@ -191,7 +220,32 @@ def run_topk_backtest(
         "daily_turnover": daily_turnover,
         "holdings_log": holdings_log,
         "dates": list(dates),
+        "price_limit_meta_coverage": (
+            round(pl_stats["covered"] / pl_stats["cells"], 6) if pl_stats["cells"] else None
+        ),
+        "price_limit_fallback_count": pl_stats["fallback"],
+        "price_limit_quality_flags": quality_flags,
     }
+
+
+def _validate_optional_panel_shape(value, expected_shape: tuple, field_name: str) -> None:
+    if value is None:
+        return
+    array = np.asarray(value, dtype=object)
+    if array.shape != expected_shape:
+        raise ValueError(f"{field_name} shape mismatch: {array.shape} != {expected_shape}")
+
+
+def _optional_price(value) -> float | None:
+    if value is None:
+        return None
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(price) or price <= 0:
+        return None
+    return price
 
 
 def _check_score_time_contract(t: int, dates: Sequence, score_metadata: Sequence[dict] | None, allow_unsafe_without_metadata: bool) -> None:
@@ -279,6 +333,11 @@ def _rebalance_day(
     trades: list,
     top_k: int,
     n_symbols: int,
+    meta_cells: np.ndarray | None = None,
+    upper_cells: np.ndarray | None = None,
+    lower_cells: np.ndarray | None = None,
+    pl_stats: dict | None = None,
+    fail_on_ambiguous: bool = False,
 ) -> float:
     """在调仓日 t 以开盘价执行调仓，返回当日成交总额（双边合计）。"""
     traded = 0.0
@@ -298,16 +357,52 @@ def _rebalance_day(
     prev_closes = closes[:, t - 1] if t > 0 else None
     trade_date = _parse_date(dates[t])
 
+    def _rule_context(idx: int) -> TradeRuleContext:
+        meta: dict = {}
+        if meta_cells is not None:
+            meta = dict(meta_cells[idx, t] or {})
+        upper = _optional_price(upper_cells[idx, t]) if upper_cells is not None else None
+        lower = _optional_price(lower_cells[idx, t]) if lower_cells is not None else None
+        if pl_stats is not None:
+            pl_stats["cells"] += 1
+            if meta or upper is not None or lower is not None:
+                pl_stats["covered"] += 1
+            else:
+                pl_stats["fallback"] += 1
+            if (
+                trade_date is not None
+                and trade_date < MAIN_BOARD_ST_10_EFFECTIVE_DATE
+                and board_of(symbols[idx]) == "主板"
+                and meta.get("is_risk_warning") is None
+                and meta.get("limit_up_rate") is None
+                and upper is None
+            ):
+                pl_stats["ambiguous"] += 1
+                if fail_on_ambiguous:
+                    raise ValueError(
+                        "BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE:"
+                        f"{symbols[idx]}@{trade_date}"
+                    )
+        return TradeRuleContext(
+            symbol=symbols[idx],
+            trade_date=trade_date,
+            prev_close=prev_closes[idx],
+            open_price=opens[idx, t],
+            quote=meta,
+            upper_limit_price=upper,
+            lower_limit_price=lower,
+        )
+
     def sell_allowed(idx: int) -> bool:
         # 首日无前收价，不做涨跌停约束
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_sell(opens[idx, t], prev_closes[idx], symbols[idx], trade_date=trade_date)
+        return can_sell_with_context(_rule_context(idx))
 
     def buy_allowed(idx: int) -> bool:
         if prev_closes is None or not _valid_price(prev_closes[idx]):
             return True
-        return can_buy(opens[idx, t], prev_closes[idx], symbols[idx], trade_date=trade_date)
+        return can_buy_with_context(_rule_context(idx))
 
     # 未持有且开盘涨停买不进的股票不占目标名额，名额顺延给下一只
     if any(not buy_allowed(i) and state.shares_of(i) <= 1e-9 for i in ranked):

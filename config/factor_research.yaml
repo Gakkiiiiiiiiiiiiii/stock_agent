@@ -48,3 +48,8 @@ high_position:
 
 factor_library:
   lock_timeout_seconds: 30
+
+backtest:
+  fail_on_ambiguous_price_limit: false
+
+require_data_version_for_oos: false

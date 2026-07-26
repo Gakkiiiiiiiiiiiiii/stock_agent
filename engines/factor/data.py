@@ -5,9 +5,13 @@ QMT 桥接不可用时返回 warning，不抛异常（与 engines/market 惯例�
 """
 from __future__ import annotations
 
+import json
 import logging
-from datetime import date, timedelta
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
+from hashlib import sha256
 from pathlib import Path
+from uuid import uuid4
 
 import numpy as np
 import yaml
@@ -21,6 +25,64 @@ logger = logging.getLogger(__name__)
 
 _MIN_KLINE_DAYS = 60
 _UNIVERSE_CONFIG = "config/factor_universe.yaml"
+_PANEL_SOURCE = "qmt"
+_PANEL_ADJUST = "front"
+_PANEL_PERIOD = "1d"
+
+
+@dataclass(frozen=True)
+class FactorPanelMetadata:
+    """面板元数据：Data Version 表示内容，Snapshot ID 表示本次获取动作。"""
+
+    source: str
+    data_version: str
+    data_snapshot_id: str
+    generated_at: str
+    start_date: str | None
+    end_date: str | None
+    universe_hash: str
+    adjust: str
+    period: str
+
+
+@dataclass
+class FactorPanelBundle:
+    panel: dict[str, np.ndarray]
+    dates: list[str]
+    symbols: list[str]
+    warning: str | None
+    metadata: FactorPanelMetadata
+
+
+def build_panel_data_version(
+    symbols: list[str],
+    dates: list[str],
+    panel: dict[str, np.ndarray],
+    source: str,
+    adjust: str,
+) -> str:
+    """内容版本：同一数据内容必得同一版本号，与获取时间无关。"""
+    digest = sha256()
+    digest.update(source.encode("utf-8"))
+    digest.update(adjust.encode("utf-8"))
+    digest.update(json.dumps(symbols, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    digest.update(json.dumps(dates, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+    for key in sorted(panel):
+        digest.update(key.encode("utf-8"))
+        values = np.asarray(panel[key])
+        digest.update(repr(values.shape).encode("utf-8"))
+        digest.update(
+            np.nan_to_num(values, nan=0.0, posinf=1e308, neginf=-1e308)
+            .astype(np.float64, copy=False)
+            .tobytes()
+        )
+    return digest.hexdigest()
+
+
+def _universe_hash(symbols: list[str]) -> str:
+    return sha256(
+        json.dumps(sorted(symbols), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def load_universe(path: str | Path | None = None) -> list[str]:
@@ -71,17 +133,66 @@ def _fetch_history(symbols: list[str], days: int) -> tuple[dict[str, list[KlineR
     return grouped, "; ".join(warnings) if warnings else None
 
 
+def load_factor_panel_bundle(
+    symbols: list[str] | None = None,
+    days: int = 250,
+) -> FactorPanelBundle:
+    """加载特征面板并附带数据版本元数据（生产路径推荐使用）。"""
+    panel, dates, ordered_symbols, warning = _build_panel(symbols, days)
+    if panel:
+        metadata = FactorPanelMetadata(
+            source=_PANEL_SOURCE,
+            data_version=build_panel_data_version(
+                ordered_symbols, dates, panel, _PANEL_SOURCE, _PANEL_ADJUST
+            ),
+            data_snapshot_id=f"qmt-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}-{uuid4().hex[:12]}",
+            generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            start_date=dates[0] if dates else None,
+            end_date=dates[-1] if dates else None,
+            universe_hash=_universe_hash(ordered_symbols),
+            adjust=_PANEL_ADJUST,
+            period=_PANEL_PERIOD,
+        )
+    else:
+        metadata = FactorPanelMetadata(
+            source=_PANEL_SOURCE,
+            data_version="UNKNOWN",
+            data_snapshot_id="UNKNOWN",
+            generated_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            start_date=None,
+            end_date=None,
+            universe_hash=_universe_hash(ordered_symbols),
+            adjust=_PANEL_ADJUST,
+            period=_PANEL_PERIOD,
+        )
+    return FactorPanelBundle(
+        panel=panel,
+        dates=dates,
+        symbols=ordered_symbols,
+        warning=warning,
+        metadata=metadata,
+    )
+
+
 def load_factor_panel(
     symbols: list[str] | None = None,
     days: int = 250,
 ) -> tuple[dict[str, np.ndarray], list[str], list[str], str | None]:
-    """加载特征面板。
+    """加载特征面板（向后兼容的四元组接口）。
 
     返回 (features, dates, symbols, warning)：
     - features: dict[特征名, (n_symbols, n_days) ndarray]，缺值为 NaN；
     - dates: 交易日（YYYY-MM-DD）升序列表，取各标的日期并集；
     - symbols: 实际纳入的标的列表（剔除 K 线不足的标的）。
     """
+    bundle = load_factor_panel_bundle(symbols, days)
+    return bundle.panel, bundle.dates, bundle.symbols, bundle.warning
+
+
+def _build_panel(
+    symbols: list[str] | None,
+    days: int,
+) -> tuple[dict[str, np.ndarray], list[str], list[str], str | None]:
     if not symbols:
         symbols = load_universe()
     if not symbols:
@@ -144,4 +255,11 @@ def load_factor_panel(
     return panels, dates, ordered_symbols, warning
 
 
-__all__ = ["load_factor_panel", "load_universe"]
+__all__ = [
+    "load_factor_panel",
+    "load_factor_panel_bundle",
+    "load_universe",
+    "FactorPanelBundle",
+    "FactorPanelMetadata",
+    "build_panel_data_version",
+]

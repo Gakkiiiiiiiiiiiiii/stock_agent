@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 from datetime import date, datetime, timezone
@@ -22,7 +23,13 @@ from pathlib import Path
 
 import numpy as np
 
-from engines.backtest.execution import can_buy, can_sell, cost_of, is_suspended
+from engines.backtest.execution import (
+    TradeRuleContext,
+    can_buy_with_context,
+    can_sell_with_context,
+    cost_of,
+    is_suspended,
+)
 from engines.factor.alpha import compose_alpha_scores
 from engines.factor.data import load_factor_panel, load_universe
 from engines.factor.library import load_library, paper_trading_factors
@@ -124,13 +131,39 @@ def _required_scoring_days(library: dict) -> int:
     return max(config.scoring_panel_days, max_lookback + config.scoring_buffer_days)
 
 
-def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory) -> dict:
+def _unpack_panel(result):
+    """兼容 FactorPanelBundle 与旧四元组，返回 (panel, dates, symbols, warning, metadata)。"""
+    from engines.factor.data import FactorPanelBundle, FactorPanelMetadata
+
+    if isinstance(result, FactorPanelBundle):
+        return result.panel, result.dates, result.symbols, result.warning, result.metadata
+    panel, dates, symbols, warning = result
+    metadata = FactorPanelMetadata(
+        source="legacy",
+        data_version="UNKNOWN",
+        data_snapshot_id="UNKNOWN",
+        generated_at=_now_iso(),
+        start_date=dates[0] if dates else None,
+        end_date=dates[-1] if dates else None,
+        universe_hash="",
+        adjust="",
+        period="",
+    )
+    return panel, dates, symbols, warning, metadata
+
+
+def _maybe_remine(panel, symbols, dates, state_dir, remine_days, miner_factory,
+                  data_version: str | None = None, data_snapshot_id: str | None = None) -> dict:
     """到期则先跑 FactorMiner 再组池；LLM 不可用时返回 warning，不阻塞记账。"""
     if not _remine_due(dates, state_dir, remine_days):
         return {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
     miner = miner_factory(model_client=None)
     try:
-        result = miner.mine(panel, symbols, dates=dates)
+        result = miner.mine(
+            panel, symbols, dates=dates,
+            data_version=data_version,
+            data_snapshot_id=data_snapshot_id,
+        )
     except Exception as exc:  # noqa: BLE001
         return {
             "attempted": True,
@@ -212,7 +245,7 @@ def generate_orders(
         return {"execution_date": execution_date, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
     library = load_library(library_path)
     scoring_days = _required_scoring_days(library)
-    panel, dates, symbols, warning = panel_loader(symbols, scoring_days)
+    panel, dates, symbols, warning, _scoring_meta = _unpack_panel(panel_loader(symbols, scoring_days))
     if not panel:
         return {"execution_date": execution_date, "warning": warning or "行情数据不可用（QMT 桥接不可达），无法生成订单"}
     signal_date = dates[-1]
@@ -232,7 +265,9 @@ def generate_orders(
     warnings = [warning] if warning else []
     remine_result = {"attempted": False, "run_valid": True, "accepted": 0, "oos_window_count": 0, "warning": None, "failure_code": None}
     if _remine_due(dates, state, remine_days):
-        mining_panel, mining_dates, mining_symbols, mining_warning = panel_loader(symbols, _mining_panel_days())
+        mining_panel, mining_dates, mining_symbols, mining_warning, mining_meta = _unpack_panel(
+            panel_loader(symbols, _mining_panel_days())
+        )
         if not mining_panel:
             remine_result = {
                 "attempted": True,
@@ -243,14 +278,18 @@ def generate_orders(
                 "failure_code": "REMINE_DATA_UNAVAILABLE",
             }
         else:
-            remine_result = _maybe_remine(mining_panel, mining_symbols, mining_dates, state, remine_days, miner_factory)
+            remine_result = _maybe_remine(
+                mining_panel, mining_symbols, mining_dates, state, remine_days, miner_factory,
+                data_version=mining_meta.data_version,
+                data_snapshot_id=mining_meta.data_snapshot_id,
+            )
         if remine_result.get("warning"):
             warnings.append(remine_result["warning"])
     if remine_result.get("accepted"):
         library = load_library(library_path)
         refreshed_days = _required_scoring_days(library)
         if refreshed_days > len(dates):
-            panel, dates, symbols, warning = panel_loader(symbols, refreshed_days)
+            panel, dates, symbols, warning, _ = _unpack_panel(panel_loader(symbols, refreshed_days))
             if not panel:
                 return {"execution_date": execution_date, "warning": warning or "重挖后评分面板取数不可用，无法生成订单"}
             signal_date = dates[-1]
@@ -351,7 +390,33 @@ def _sell(positions: dict, symbol: str, shares: float, trade_date: str) -> float
     return taken
 
 
-def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date: str) -> dict:
+def _default_quote_loader(symbols: list[str]) -> dict:
+    """T 日执行时从行情桥接拉取实时 Quote；不可用返回空 dict（回退到规则比例）。"""
+    try:
+        from engines.market.data_provider import get_market_data_provider, to_qmt_symbol
+
+        provider = get_market_data_provider()
+        bridge = getattr(provider, "bridge", None)
+        if bridge is None:
+            return {}
+        return bridge.get_quotes([to_qmt_symbol(s) for s in symbols]) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("T 日 Quote 获取失败，按规则比例回退执行: %s", exc)
+        return {}
+
+
+def _quote_for_symbol(quotes: dict, symbol: str) -> dict:
+    """QMT Quote 字典的键可能是 QMT 代码或原代码，两种都尝试。"""
+    if not quotes:
+        return {}
+    if symbol in quotes:
+        return quotes[symbol] or {}
+    from engines.market.data_provider import to_qmt_symbol
+
+    return quotes.get(to_qmt_symbol(symbol)) or {}
+
+
+def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date: str, quotes: dict | None = None) -> dict:
     """对"昨日持仓→今日"记账并落库状态，返回记账摘要。"""
     state_path = state_dir / "portfolio_state.json"
     state = _load_json(state_path, None)
@@ -371,9 +436,33 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
     positions = {s: [dict(lot) for lot in lots] for s, lots in (state.get("positions") or {}).items()}
     last_prices = dict(state.get("last_prices") or {})
     traded = 0.0
+    quotes = quotes or {}
 
     def tradable(i: int) -> bool:
         return not is_suspended(volumes[i, t]) and _valid_price(opens[i, t])
+
+    def _rule_context(i: int) -> TradeRuleContext:
+        quote = _quote_for_symbol(quotes, symbols[i])
+
+        def _limit_price(key: str) -> float | None:
+            value = quote.get(key)
+            if value in (None, ""):
+                return None
+            try:
+                price = float(value)
+            except (TypeError, ValueError):
+                return None
+            return price if math.isfinite(price) and price > 0 else None
+
+        return TradeRuleContext(
+            symbol=symbols[i],
+            trade_date=trade_day,
+            prev_close=float(prev_closes[i]),
+            open_price=float(opens[i, t]),
+            quote=quote,
+            upper_limit_price=_limit_price("upper_limit_price"),
+            lower_limit_price=_limit_price("lower_limit_price"),
+        )
 
     def do_sell(symbol: str, i: int, shares: float) -> None:
         nonlocal cash, traded
@@ -409,7 +498,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         i = idx.get(symbol)
         if i is None or not tradable(i):
             continue
-        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
+        if _valid_price(prev_closes[i]) and not can_sell_with_context(_rule_context(i)):
             continue
         do_sell(symbol, i, sum(lot["shares"] for lot in positions.get(symbol) or []))
 
@@ -435,7 +524,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         excess = shares_of(symbol) * open_price(i) - target_value
         if excess <= _MIN_TRADE_VALUE or not tradable(i):
             continue
-        if _valid_price(prev_closes[i]) and not can_sell(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
+        if _valid_price(prev_closes[i]) and not can_sell_with_context(_rule_context(i)):
             continue
         do_sell(symbol, i, excess / float(opens[i, t]))
 
@@ -447,7 +536,7 @@ def _advance_portfolio(panel, dates, symbols, picks, state_dir: Path, trade_date
         gap = target_value - shares_of(symbol) * open_price(i)
         if gap <= _MIN_TRADE_VALUE:
             continue
-        if _valid_price(prev_closes[i]) and not can_buy(opens[i, t], prev_closes[i], symbol, trade_date=trade_day):
+        if _valid_price(prev_closes[i]) and not can_buy_with_context(_rule_context(i)):
             continue
         do_buy(symbol, i, gap)
 
@@ -487,6 +576,7 @@ def run_daily(
     library_path: str | None = None,
     panel_loader=None,
     miner_factory=None,
+    quote_loader=None,
     force: bool = False,
     remine_days: int | None = None,
     generate_next_orders: bool = False,
@@ -498,12 +588,13 @@ def run_daily(
     remine_days = remine_days if remine_days is not None else _remine_days_default()
     panel_loader = panel_loader or load_factor_panel
     miner_factory = miner_factory or FactorMiner
+    quote_loader = quote_loader or _default_quote_loader
 
     symbols = load_universe()
     if not symbols:
         return {"date": None, "warning": "股票池为空（config/factor_universe.yaml 未配置或读取失败）"}
     library = load_library(library_path)
-    panel, dates, symbols, warning = panel_loader(symbols, _required_scoring_days(library))
+    panel, dates, symbols, warning, _ = _unpack_panel(panel_loader(symbols, _required_scoring_days(library)))
     if not panel:
         # QMT 桥接不可用（如容器内）等场景：告警并优雅退出
         return {"date": None, "warning": warning or "行情数据不可用（QMT 桥接不可达），今日跳过"}
@@ -547,7 +638,14 @@ def run_daily(
     picks = order_payload.get("picks") or []
     factor_count = int(order_payload.get("factor_count") or 0)
 
-    bookkeeping = _advance_portfolio(panel, dates, symbols, [p["symbol"] for p in picks], state, execution_date)
+    try:
+        quotes = quote_loader(symbols) or {}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("T 日 Quote 获取失败，按规则比例回退执行: %s", exc)
+        quotes = {}
+    bookkeeping = _advance_portfolio(
+        panel, dates, symbols, [p["symbol"] for p in picks], state, execution_date, quotes=quotes
+    )
     generated_next = None
     if generate_next_orders and next_execution_date:
         generated_next = generate_orders(

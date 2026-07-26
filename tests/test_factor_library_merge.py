@@ -192,3 +192,101 @@ def test_stale_incoming_audit_ref_does_not_overwrite_newer():
     result = merge_library(latest, incoming)
     persisted = result.persisted_by_hash["h1"]
     assert persisted["metrics"]["final_oos_audit_ref"] == "factor-oos://202607/factor_oos_20260726.jsonl#h1"
+
+
+# ---------- Metrics 按版本/时间合并（v2.2.3 第八轮 P1） ----------
+
+
+def test_stale_metrics_cannot_overwrite_newer_metrics():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
+             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-26"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
+             "metrics": {"fitness": 0.5, "metrics_as_of": "2026-07-01"}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 2.0
+
+
+def test_newer_monitoring_metrics_can_update_existing():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
+             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-01"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
+             "metrics": {"fitness": 0.5, "metrics_as_of": "2026-07-26", "metrics_run_id": "run-new"}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    assert metrics["fitness"] == 0.5
+    assert metrics["metrics_as_of"] == "2026-07-26"
+    assert metrics["metrics_run_id"] == "run-new"
+
+
+def test_incoming_without_version_cannot_overwrite_versioned_metrics():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
+             "metrics": {"fitness": 2.0, "metrics_as_of": "2026-07-26"}}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
+             "metrics": {"fitness": 0.5}}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 2.0
+
+
+def test_both_unversioned_metrics_keep_legacy_merge_behavior():
+    latest = {"factors": [{**_factor("F001", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 2.0}}]}
+    incoming = {"factors": [{**_factor("F009", ["ret", "cs_rank"], "h1"), "metrics": {"fitness": 0.5}}]}
+    result = merge_library(latest, incoming)
+    assert result.persisted_by_hash["h1"]["metrics"]["fitness"] == 0.5
+
+
+def test_final_oos_metrics_are_immutable():
+    latest = {
+        "factors": [
+            {**_factor("F001", ["ret", "cs_rank"], "h1", status="ACTIVE"),
+             "metrics": {
+                 "final_oos_summary": {"passed": True, "mean_rank_ic": 0.05},
+                 "final_oos_audit_ref": "factor-oos://202607/factor_oos_20260726.jsonl#rid-1",
+                 "discovery_rank_ic": 0.04,
+                 "metrics_as_of": "2026-07-01",
+             }}
+        ]
+    }
+    incoming = {
+        "factors": [
+            {**_factor("F009", ["ret", "cs_rank"], "h1", status="OOS_PASS"),
+             "metrics": {
+                 "final_oos_summary": {"passed": False},
+                 "final_oos_audit_ref": "factor-oos://202601/factor_oos_20260101.jsonl#rid-0",
+                 "discovery_rank_ic": 0.01,
+                 "fitness": 0.5,
+                 "metrics_as_of": "2026-07-26",
+             }}
+        ]
+    }
+    result = merge_library(latest, incoming)
+    metrics = result.persisted_by_hash["h1"]["metrics"]
+    # 研究类指标不可变，即使 incoming 更新
+    assert metrics["final_oos_summary"] == {"passed": True, "mean_rank_ic": 0.05}
+    assert metrics["final_oos_audit_ref"].endswith("#rid-1")
+    assert metrics["discovery_rank_ic"] == 0.04
+    # 普通监控指标允许被更新
+    assert metrics["fitness"] == 0.5

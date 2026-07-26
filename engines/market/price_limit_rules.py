@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -19,17 +20,25 @@ class PriceLimitRule:
 
 
 def validate_price_limit_rule(rule: PriceLimitRule) -> None:
-    """有涨跌幅限制时上下限比例必须齐全且为正。"""
+    """有涨跌幅限制时上下限比例必须齐全、有限且为正。"""
     if not rule.has_price_limit:
         return
     if rule.limit_up_pct is None:
         raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_up_pct")
     if rule.limit_down_pct is None:
         raise ValueError("PRICE_LIMIT_RULE_INCOMPLETE:limit_down_pct")
+    if not math.isfinite(rule.limit_up_pct) or not math.isfinite(rule.limit_down_pct):
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:non_finite")
     if rule.limit_up_pct <= 0:
         raise ValueError("PRICE_LIMIT_RULE_INVALID:limit_up_pct")
     if rule.limit_down_pct <= 0:
         raise ValueError("PRICE_LIMIT_RULE_INVALID:limit_down_pct")
+
+
+def _validated(rule: PriceLimitRule) -> PriceLimitRule:
+    """所有规则返回路径的统一校验出口：非法参数不得进入执行层。"""
+    validate_price_limit_rule(rule)
+    return rule
 
 
 def code_of(symbol: str) -> str:
@@ -69,24 +78,24 @@ def resolve_price_limit_rule(
     board = board_of(symbol)
     stage = str(listing_stage or payload.get("listing_stage") or payload.get("trade_status") or "").upper()
     if stage in {"IPO_FIRST_DAY", "RELISTING_FIRST_DAY", "NO_LIMIT", "NONE_LIMIT"}:
-        return PriceLimitRule(board=board, limit_up_pct=None, limit_down_pct=None, has_price_limit=False, source="listing_stage", version=stage)
+        return _validated(PriceLimitRule(board=board, limit_up_pct=None, limit_down_pct=None, has_price_limit=False, source="listing_stage", version=stage))
 
     quote_rule = _quote_limit_rule(board, payload)
     if quote_rule is not None:
-        return quote_rule
+        return _validated(quote_rule)
 
     risk_warning = _risk_warning(payload) if is_risk_warning is None else bool(is_risk_warning)
     if board == "科创板":
-        return PriceLimitRule(board=board, limit_up_pct=0.20, limit_down_pct=0.20, version="STAR_20")
+        return _validated(PriceLimitRule(board=board, limit_up_pct=0.20, limit_down_pct=0.20, version="STAR_20"))
     if board == "创业板":
-        return PriceLimitRule(board=board, limit_up_pct=0.20, limit_down_pct=0.20, version="CHINEXT_20")
+        return _validated(PriceLimitRule(board=board, limit_up_pct=0.20, limit_down_pct=0.20, version="CHINEXT_20"))
     if board == "北交所":
-        return PriceLimitRule(board=board, limit_up_pct=0.30, limit_down_pct=0.30, version="BSE_30")
+        return _validated(PriceLimitRule(board=board, limit_up_pct=0.30, limit_down_pct=0.30, version="BSE_30"))
     if risk_warning and day < MAIN_BOARD_ST_10_EFFECTIVE_DATE:
-        return PriceLimitRule(board=board, limit_up_pct=0.05, limit_down_pct=0.05, version="MAIN_BOARD_ST_PRE_20260706")
+        return _validated(PriceLimitRule(board=board, limit_up_pct=0.05, limit_down_pct=0.05, version="MAIN_BOARD_ST_PRE_20260706"))
     if risk_warning:
-        return PriceLimitRule(board=board, limit_up_pct=0.10, limit_down_pct=0.10, version="MAIN_BOARD_ST_FROM_20260706")
-    return PriceLimitRule(board=board, limit_up_pct=0.10, limit_down_pct=0.10, version="MAIN_BOARD_10")
+        return _validated(PriceLimitRule(board=board, limit_up_pct=0.10, limit_down_pct=0.10, version="MAIN_BOARD_ST_FROM_20260706"))
+    return _validated(PriceLimitRule(board=board, limit_up_pct=0.10, limit_down_pct=0.10, version="MAIN_BOARD_10"))
 
 
 def _quote_limit_rule(board: str, payload: dict[str, Any]) -> PriceLimitRule | None:
@@ -100,8 +109,16 @@ def _quote_limit_rule(board: str, payload: dict[str, Any]) -> PriceLimitRule | N
 
 
 def _normalize_rate(value: float) -> float:
-    value = abs(float(value))
-    return value / 100.0 if value > 1 else value
+    normalized = abs(float(value))
+    if not math.isfinite(normalized):
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:non_finite")
+    if normalized > 1:
+        normalized /= 100.0
+    if normalized <= 0:
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:non_positive")
+    if normalized > 1:
+        raise ValueError("PRICE_LIMIT_RULE_INVALID:greater_than_100_percent")
+    return normalized
 
 
 def _first_float(payload: dict[str, Any], *keys: str) -> float | None:

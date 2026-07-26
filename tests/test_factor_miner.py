@@ -324,22 +324,31 @@ def test_audit_records_contain_universe_hash_and_events(tmp_path, monkeypatch):
     import json as _json
     from engines.factor.oos_audit import read_oos_audit, resolve_oos_audit_uri
 
-    audit_ref = result["accepted"][0]["metrics"]["final_oos_audit_ref"]
+    accepted = result["accepted"][0]
+    audit_ref = accepted["metrics"]["final_oos_audit_ref"]
     path, fragment = resolve_oos_audit_uri(audit_ref)
-    assert fragment == result["accepted"][0]["candidate_hash"]
+    candidate_hash = accepted["candidate_hash"]
+    # URI fragment 是 Audit Record ID，不再是 Candidate Hash
+    assert fragment != candidate_hash
     events = [
         _json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
-        if line.strip() and _json.loads(line).get("candidate_hash") == fragment
+        if line.strip() and _json.loads(line).get("candidate_hash") == candidate_hash
     ]
     by_event = {record["event"]: record for record in events}
     assert "FINAL_OOS_EVALUATED" in by_event
     assert "FACTOR_ID_ASSIGNED" in by_event
     evaluated = by_event["FINAL_OOS_EVALUATED"]
+    assert evaluated["audit_record_id"] == fragment
     assert evaluated["universe_size"] == len(symbols)
     assert len(evaluated["universe_hash"]) == 64
     assert evaluated["data_version"] == "dv-1"
     assert evaluated["data_snapshot_id"] == "snap-1"
     assert evaluated["factor_id"] is None
-    assert by_event["FACTOR_ID_ASSIGNED"]["factor_id"] == result["accepted"][0]["id"]
-    assert read_oos_audit(audit_ref)["event"] == "FACTOR_ID_ASSIGNED"
+    assigned = by_event["FACTOR_ID_ASSIGNED"]
+    assert assigned["factor_id"] == accepted["id"]
+    # ID 分配事件回链 Final OOS 记录，两个事件互不覆盖
+    assert assigned["parent_audit_record_id"] == evaluated["audit_record_id"]
+    assert assigned["parent_audit_uri"] == audit_ref
+    # 因子库中的 URI 永远精确指向 FINAL_OOS_EVALUATED
+    assert read_oos_audit(audit_ref)["event"] == "FINAL_OOS_EVALUATED"

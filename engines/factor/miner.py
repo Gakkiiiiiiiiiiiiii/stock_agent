@@ -20,7 +20,7 @@ import yaml
 
 from engines.factor import fitness as fitness_mod
 from engines.factor.lookback import max_lookback_from_rpn
-from engines.factor.oos_audit import append_oos_audit
+from engines.factor.oos_audit import AuditWriteResult, append_oos_audit
 from engines.factor.purged_walkforward import run_purged_walkforward
 from engines.factor.research_split import FactorResearchSplit, build_research_split
 from engines.factor.library import (
@@ -254,6 +254,10 @@ class FactorMiner:
         research_config = get_research_config()
         horizon = horizon or research_config.evaluation.horizon_days
         max_candidates = int(os.getenv("FACTOR_MINING_MAX_CANDIDATES", _DEFAULT_MAX_CANDIDATES))
+        if research_config.require_data_version_for_oos and not data_version:
+            return {"accepted": [], "rejected": [], "warning": "DATA_VERSION_REQUIRED",
+                    "stopped_early": False, "stop_reason": None, "evaluated": 0,
+                    "diagnostics": {"run_valid": False, "run_failure_code": "DATA_VERSION_REQUIRED"}}
 
         if not self.model_client or not self.model_client.available():
             return {"accepted": [], "rejected": [], "warning": "挖掘模型不可用，请配置 ANALYSIS_MODEL_*",
@@ -473,6 +477,7 @@ class FactorMiner:
     ) -> tuple[list[dict], list[dict], dict]:
         _ = panel
         accepted: list[dict] = []
+        accepted_pending: list[dict] = []
         rejected: list[dict] = []
         diagnostics = {
             "oos_window_count": 0,
@@ -494,7 +499,7 @@ class FactorMiner:
             window_count = len(oos.get("windows") or [])
             diagnostics["oos_window_count"] = max(diagnostics["oos_window_count"], window_count)
             if not window_count:
-                audit_ref = self._write_oos_audit(
+                audit_result = self._write_oos_audit(
                     candidate=candidate,
                     oos={"passed": False, "warning": "FINAL_OOS_WINDOW_UNAVAILABLE"},
                     split=split,
@@ -514,12 +519,12 @@ class FactorMiner:
                     "metrics": {
                         **candidate.discovery_metrics,
                         "passed": False,
-                        "final_oos_audit_ref": audit_ref,
+                        "final_oos_audit_ref": audit_result.uri,
                     },
                 })
                 continue
             if not oos.get("passed"):
-                audit_ref = self._write_oos_audit(
+                audit_result = self._write_oos_audit(
                     candidate=candidate,
                     oos=oos,
                     split=split,
@@ -537,13 +542,13 @@ class FactorMiner:
                     "metrics": {
                         **candidate.discovery_metrics,
                         "passed": False,
-                        "final_oos_audit_ref": audit_ref,
+                        "final_oos_audit_ref": audit_result.uri,
                     },
                 })
                 continue
             if lease_guard:
                 lease_guard()
-            audit_ref = self._write_oos_audit(
+            audit_result = self._write_oos_audit(
                 candidate=candidate,
                 oos=oos,
                 split=split,
@@ -566,7 +571,7 @@ class FactorMiner:
                 "oos_excess_return": oos.get("oos_excess_return"),
                 "withheld": True,
             }
-            stored_metrics["final_oos_audit_ref"] = audit_ref
+            stored_metrics["final_oos_audit_ref"] = audit_result.uri
             entry = add_factor(
                 library,
                 candidate.rpn,
@@ -584,21 +589,27 @@ class FactorMiner:
             entry["lookback"] = candidate.lookback
             if eval_window:
                 entry["eval_window"] = eval_window
-            accepted.append(entry)
-        if accepted:
+            accepted_pending.append({"entry": entry, "oos_audit": audit_result})
+        if accepted_pending:
             if lease_guard:
                 lease_guard()
             merge_result = save_library(library, self.library_path, lease_guard=lease_guard)
             by_hash = merge_result.persisted_by_hash
-            accepted = [by_hash.get(str(item.get("candidate_hash"))) or item for item in accepted]
-            # 最终 Library ID 在保存时才确定：追加 ID 分配事件而不是回写原审计行。
-            for item in accepted:
+            # 最终 Library ID 在保存时才确定：追加 ID 分配事件并回链 Final OOS 记录，
+            # 不回写原审计行；因子库中的 URI 永远精确指向 FINAL_OOS_EVALUATED。
+            for pending in accepted_pending:
+                entry = pending["entry"]
+                persisted = by_hash.get(str(entry.get("candidate_hash"))) or entry
+                accepted.append(persisted)
+                oos_audit = pending["oos_audit"]
                 append_oos_audit(
                     {
                         "event": "FACTOR_ID_ASSIGNED",
                         "research_run_id": research_run_id,
-                        "candidate_hash": item.get("candidate_hash"),
-                        "factor_id": item.get("id"),
+                        "candidate_hash": persisted.get("candidate_hash"),
+                        "factor_id": persisted.get("id"),
+                        "parent_audit_record_id": oos_audit.record_id,
+                        "parent_audit_uri": oos_audit.uri,
                         "data_version": data_version,
                         "data_snapshot_id": data_snapshot_id,
                     }
@@ -617,8 +628,8 @@ class FactorMiner:
         research_run_id: str,
         data_version: str | None = None,
         data_snapshot_id: str | None = None,
-    ) -> str:
-        result = append_oos_audit(
+    ) -> AuditWriteResult:
+        return append_oos_audit(
             {
                 "event": "FINAL_OOS_EVALUATED",
                 "factor_id": None,
@@ -637,7 +648,6 @@ class FactorMiner:
                 "code_commit": os.getenv("CODE_COMMIT", "UNKNOWN"),
             }
         )
-        return result.uri
 
 
 __all__ = ["FactorMiner"]
