@@ -21,6 +21,7 @@ from engines.content.video_summary_exporter import VideoSummaryMarkdownExporter
 from engines.content.transcript_postprocessor import TranscriptPostprocessor
 from engines.content.video_vision_service import VideoVisionService
 from engines.content.video_summarizer import VideoSummarizer
+from engines.content.xiaoe_hls_adapter import XiaoeHlsAdapter
 from engines.memory.memory_writer import enqueue_memory_reindex, write_memory_and_enqueue
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from financial_agent.utils import project_root
@@ -53,8 +54,10 @@ class VideoIngestService:
         query_repo: ContentQueryRepository | None = None,
         storage_root: Path | None = None,
         summary_exporter: VideoSummaryMarkdownExporter | None = None,
+        xiaoe_hls_client: XiaoeHlsAdapter | None = None,
     ) -> None:
         self.bilibili_client = bilibili_client or BilibiliClient()
+        self.xiaoe_hls_client = xiaoe_hls_client or XiaoeHlsAdapter()
         self.audio_pipeline = audio_pipeline or AudioPipeline()
         self.asr_service = asr_service or AsrService()
         self.diarization_service = diarization_service or DiarizationService()
@@ -123,11 +126,87 @@ class VideoIngestService:
         task = self.task_repo.create(source_type="bilibili", source_ref=source_url, options=options, video_id=existing.id if existing else None)
         return {"task_id": task.id, "video_id": task.video_id, "status": task.status, "stage": task.stage, "deduplicated": False}
 
+    def enqueue_xiaoe_hls(
+        self,
+        *,
+        m3u8_url: str,
+        page_url: str | None = None,
+        title: str | None = None,
+        platform_video_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        authorized_content: bool = False,
+        force_reprocess: bool = False,
+        summary_mode: str = "investment",
+        index_to_memory: bool = True,
+        use_diarization: bool = False,
+        language_hint: str | None = "zh",
+        enable_visual_context: bool = False,
+        author_name: str | None = None,
+        publish_time: str | None = None,
+        duration_seconds: int | None = None,
+        cover_url: str | None = None,
+        description: str | None = None,
+        engine: str = "ffmpeg-direct",
+        quality: str = "best",
+        workers: int = 4,
+        timeout_seconds: int = 30,
+    ) -> dict:
+        if not authorized_content:
+            raise ValueError("authorized_content=true is required for xiaoe hls ingestion")
+        metadata = self.xiaoe_hls_client.build_metadata(
+            m3u8_url=m3u8_url,
+            page_url=page_url,
+            title=title,
+            platform_video_id=platform_video_id,
+            author_name=author_name,
+            publish_time=publish_time,
+            duration_seconds=duration_seconds,
+            cover_url=cover_url,
+            description=description,
+        )
+        existing = self.video_repo.get_by_source(platform="xiaoe", platform_video_id=metadata["platform_video_id"])
+        if existing is not None and not force_reprocess:
+            detail = self.query_repo.get_video_detail(existing.id, summary_mode=summary_mode)
+            if detail and detail.get("summary"):
+                return {
+                    "task_id": None,
+                    "video_id": existing.id,
+                    "status": "success",
+                    "stage": "deduplicated",
+                    "deduplicated": True,
+                }
+        options = {
+            "m3u8_url": m3u8_url,
+            "page_url": page_url,
+            "title": title,
+            "platform_video_id": metadata["platform_video_id"],
+            "headers": headers or {},
+            "summary_mode": summary_mode,
+            "index_to_memory": index_to_memory,
+            "use_diarization": use_diarization,
+            "language_hint": language_hint,
+            "enable_visual_context": enable_visual_context,
+            "author_name": author_name,
+            "publish_time": publish_time,
+            "duration_seconds": duration_seconds,
+            "cover_url": cover_url,
+            "description": description,
+            "engine": engine,
+            "quality": quality,
+            "workers": workers,
+            "timeout_seconds": timeout_seconds,
+        }
+        source_ref = page_url or metadata["url"]
+        task = self.task_repo.create(source_type="xiaoe_hls", source_ref=source_ref, options=options, video_id=existing.id if existing else None)
+        return {"task_id": task.id, "video_id": task.video_id, "status": task.status, "stage": task.stage, "deduplicated": False}
+
     def process_task(self, task_id: int) -> dict:
         task = self.task_repo.get(task_id)
         if task is None:
             raise FileNotFoundError(task_id)
-        options = self.task_repo.serialize(task)["options"]
+        if task.source_type == "xiaoe_hls":
+            return self._process_xiaoe_hls_task(task_id)
+        options = self.task_repo.serialize(task, redact_sensitive=False)["options"]
         self.task_repo.update(task_id, status="processing", stage="fetch_meta", progress=5)
         video_id: int | None = task.video_id
         try:
@@ -166,6 +245,118 @@ class VideoIngestService:
             chunks = self.semantic_chunker.build(transcript=transcript, frame_insights=frame_insights)
             chunks = self._enrich_chunks(chunks)
             # Clear event rows first so repeated reprocessing can safely replace chunk rows.
+            self.event_repo.delete_for_video(asset.id)
+            self.chunk_repo.replace_for_video(asset.id, chunks)
+            video_type, events = self.event_extractor.extract(metadata=metadata, chunks=chunks)
+            events = self.conflict_resolver.resolve(events)
+            self.event_repo.replace_for_video(asset.id, events, chunks=chunks)
+            event_timeline = self.conflict_resolver.build_timeline(events)
+            self.task_repo.update(task_id, stage="summarize", progress=82)
+            summary_payload = self.summarizer.summarize(
+                metadata=metadata,
+                transcript=transcript,
+                mode=options.get("summary_mode", "investment"),
+                visual_context=visual_context,
+                chunks=chunks,
+                events=events,
+                video_type=video_type,
+            )
+            summary = self.summary_repo.upsert(asset.id, summary_payload)
+            export_path = self.summary_exporter.export(metadata=metadata, summary=summary_payload)
+            index_result = None
+            if options.get("index_to_memory", True):
+                self.task_repo.update(task_id, stage="index_memory", progress=92)
+                index_result = write_memory_and_enqueue(
+                    self._build_memory_payload(metadata=metadata, summary=summary_payload, markdown_path=export_path),
+                    target_collection="financial_knowledge",
+                    existing_memory_id=summary.memory_record_id,
+                )
+                self.summary_repo.set_memory_record(summary.id, index_result["memory_id"])
+                self._sync_viewpoint_memories(
+                    metadata=metadata,
+                    summary=summary_payload,
+                    events=events,
+                    target_collection="financial_knowledge",
+                )
+            self.task_repo.update(task_id, status="success", stage="success", progress=100, video_id=asset.id)
+            detail = self.query_repo.get_video_detail(asset.id, summary_mode=options.get("summary_mode", "investment")) or {}
+            return detail | {
+                "task": self.task_repo.serialize(self.task_repo.get(task_id)),
+                "index_result": index_result,
+                "summary_export_path": str(export_path),
+                "visual_context": visual_context,
+                "video_type": video_type,
+                "event_timeline": event_timeline,
+            }
+        except Exception as exc:
+            if video_id is not None:
+                self.video_repo.mark_transcript_failed(video_id)
+            self.task_repo.mark_failed(task_id, str(exc), stage=self.task_repo.get(task_id).stage if self.task_repo.get(task_id) else "failed")
+            raise
+
+    def _process_xiaoe_hls_task(self, task_id: int) -> dict:
+        task = self.task_repo.get(task_id)
+        if task is None:
+            raise FileNotFoundError(task_id)
+        options = self.task_repo.serialize(task, redact_sensitive=False)["options"]
+        self.task_repo.update(task_id, status="processing", stage="fetch_meta", progress=5)
+        video_id: int | None = task.video_id
+        try:
+            metadata = self.xiaoe_hls_client.build_metadata(
+                m3u8_url=options["m3u8_url"],
+                page_url=options.get("page_url"),
+                title=options.get("title"),
+                platform_video_id=options.get("platform_video_id"),
+                author_name=options.get("author_name"),
+                publish_time=options.get("publish_time"),
+                duration_seconds=options.get("duration_seconds"),
+                cover_url=options.get("cover_url"),
+                description=options.get("description"),
+            )
+            asset = self.video_repo.upsert_metadata(metadata)
+            video_id = asset.id
+            headers = options.get("headers") or {}
+            self.task_repo.update(task_id, video_id=asset.id, stage="download_audio", progress=15)
+            raw_video_path = self.xiaoe_hls_client.download_video(
+                self.raw_video_dir,
+                m3u8_url=options["m3u8_url"],
+                page_url=options.get("page_url"),
+                headers=headers,
+                output_stem=metadata["platform_video_id"],
+                engine=options.get("engine", "ffmpeg-direct"),
+                quality=options.get("quality", "best"),
+                workers=int(options.get("workers") or 4),
+                timeout_seconds=int(options.get("timeout_seconds") or 30),
+            )
+            standardized_audio_path = self.audio_pipeline.standardize_audio(raw_video_path, self.processed_audio_dir)
+            self._ensure_full_audio_download(metadata=metadata, audio_path=standardized_audio_path)
+            self.video_repo.update_audio(asset.id, str(standardized_audio_path))
+            self.task_repo.update(task_id, stage="asr", progress=45)
+            transcript = self.asr_service.transcribe(standardized_audio_path, language_hint=options.get("language_hint"))
+            if options.get("use_diarization"):
+                self.task_repo.update(task_id, stage="diarization", progress=60)
+                transcript = self.diarization_service.annotate(standardized_audio_path, transcript)
+            self.task_repo.update(task_id, stage="postprocess", progress=70)
+            transcript = self.transcript_postprocessor.normalize(transcript, metadata=metadata)
+            transcript["source_hash"] = hashlib.sha256((transcript.get("text") or "").encode("utf-8")).hexdigest()
+            self.video_repo.save_transcript(asset.id, transcript)
+            visual_context = None
+            frame_insights: list[dict] = []
+            if options.get("enable_visual_context", False):
+                self.task_repo.update(task_id, stage="visual_context", progress=72)
+                visual_bundle = self._build_xiaoe_visual_context(
+                    metadata=metadata,
+                    transcript=transcript,
+                    m3u8_url=options["m3u8_url"],
+                    headers=headers,
+                    video_id=asset.id,
+                )
+                if visual_bundle is not None:
+                    visual_context = visual_bundle.get("context")
+                    frame_insights = visual_bundle.get("frame_insights") or []
+            self.task_repo.update(task_id, stage="chunk_and_extract", progress=76)
+            chunks = self.semantic_chunker.build(transcript=transcript, frame_insights=frame_insights)
+            chunks = self._enrich_chunks(chunks)
             self.event_repo.delete_for_video(asset.id)
             self.chunk_repo.replace_for_video(asset.id, chunks)
             video_type, events = self.event_extractor.extract(metadata=metadata, chunks=chunks)
@@ -368,6 +559,39 @@ class VideoIngestService:
         except Exception:
             return None
 
+    def _build_xiaoe_visual_context(
+        self,
+        metadata: dict,
+        transcript: dict,
+        m3u8_url: str,
+        headers: dict[str, str],
+        video_id: int,
+    ) -> dict | None:
+        try:
+            video_path = self.xiaoe_hls_client.download_video(
+                self.raw_video_dir,
+                m3u8_url=m3u8_url,
+                page_url=str(metadata.get("url") or ""),
+                headers=headers,
+                output_stem=str(metadata.get("platform_video_id") or video_id),
+            )
+            frame_output_dir = self.frame_dir / str(metadata.get("platform_video_id") or video_id)
+            frames = self.frame_extractor.extract(
+                video_path=video_path,
+                output_dir=frame_output_dir,
+                transcript_segments=transcript.get("segments") or [],
+            )
+            frame_insights = self.vision_service.analyze_frames(metadata=metadata, transcript=transcript, frames=frames)
+            self.frame_repo.replace_for_video(video_id, frame_insights)
+            if not frame_insights:
+                return None
+            return {
+                "context": self.multimodal_context_builder.build(transcript=transcript, frame_insights=frame_insights),
+                "frame_insights": frame_insights,
+            }
+        except Exception:
+            return None
+
     def _enrich_chunks(self, chunks: list[dict]) -> list[dict]:
         enriched = []
         for chunk in chunks:
@@ -413,12 +637,18 @@ class VideoIngestService:
         minimum_ratio = 0.8
         if audio_duration >= expected_duration * minimum_ratio:
             return
+        platform = str(metadata.get("platform") or "video")
         auth_source = getattr(self.bilibili_client, "describe_auth_source", lambda: "anonymous")()
+        auth_hint = (
+            "For charged or member-only Bilibili videos, run scripts/login-bilibili.ps1 to generate a project cookie file."
+            if platform == "bilibili"
+            else "Verify that the supplied media URL and headers are still authorized and not expired."
+        )
         raise RuntimeError(
-            "Bilibili audio download looks incomplete. "
+            f"{platform} audio download looks incomplete. "
             f"Expected about {expected_duration:.0f}s but only fetched {audio_duration:.0f}s. "
             f"Current auth source: {auth_source}. "
-            "For charged or member-only videos, run scripts/login-bilibili.ps1 to generate a project cookie file."
+            f"{auth_hint}"
         )
 
     @staticmethod

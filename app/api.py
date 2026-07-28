@@ -141,6 +141,34 @@ class BilibiliSummarizeRequest(BaseModel):
     enable_visual_context: bool = True
 
 
+class XiaoeHlsIngestRequest(BaseModel):
+    m3u8_url: str
+    page_url: str | None = None
+    title: str | None = None
+    platform_video_id: str | None = None
+    headers: dict[str, str] | None = None
+    authorized_content: bool = False
+    force_reprocess: bool = False
+    summary_mode: str = "investment"
+    index_to_memory: bool = True
+    use_diarization: bool = False
+    language_hint: str | None = "zh"
+    enable_visual_context: bool = False
+    author_name: str | None = None
+    publish_time: str | None = None
+    duration_seconds: int | None = None
+    cover_url: str | None = None
+    description: str | None = None
+    engine: str = "ffmpeg-direct"
+    quality: str = "best"
+    workers: int = 4
+    timeout_seconds: int = 30
+
+
+class XiaoeHlsSummarizeRequest(XiaoeHlsIngestRequest):
+    persist: bool = False
+
+
 class FactorMineRequest(BaseModel):
     rounds: int | None = None
     candidates_per_round: int | None = None
@@ -405,6 +433,75 @@ def summarize_bilibili_video(request: BilibiliSummarizeRequest) -> dict:
         language_hint=request.language_hint,
         enable_visual_context=request.enable_visual_context,
     )
+    if queued.get("task_id") is None and queued.get("video_id") is not None:
+        detail = content_ingest_service.get_video_detail(queued["video_id"], summary_mode=request.summary_mode)
+        return {"task": queued, **(detail or {})}
+    detail = content_ingest_service.process_task(queued["task_id"])
+    return {"task": content_ingest_service.get_task(queued["task_id"]), **detail}
+
+
+@app.post("/api/v1/content/xiaoe/hls/ingest")
+def ingest_xiaoe_hls_video(request: XiaoeHlsIngestRequest) -> dict:
+    if not request.authorized_content:
+        raise HTTPException(status_code=400, detail="authorized_content=true is required")
+    try:
+        return content_ingest_service.enqueue_xiaoe_hls(
+            m3u8_url=request.m3u8_url,
+            page_url=request.page_url,
+            title=request.title,
+            platform_video_id=request.platform_video_id,
+            headers=request.headers,
+            authorized_content=request.authorized_content,
+            force_reprocess=request.force_reprocess,
+            summary_mode=request.summary_mode,
+            index_to_memory=request.index_to_memory,
+            use_diarization=request.use_diarization,
+            language_hint=request.language_hint,
+            enable_visual_context=request.enable_visual_context,
+            author_name=request.author_name,
+            publish_time=request.publish_time,
+            duration_seconds=request.duration_seconds,
+            cover_url=request.cover_url,
+            description=request.description,
+            engine=request.engine,
+            quality=request.quality,
+            workers=request.workers,
+            timeout_seconds=request.timeout_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/content/xiaoe/hls/summarize")
+def summarize_xiaoe_hls_video(request: XiaoeHlsSummarizeRequest) -> dict:
+    if not request.authorized_content:
+        raise HTTPException(status_code=400, detail="authorized_content=true is required")
+    try:
+        queued = content_ingest_service.enqueue_xiaoe_hls(
+            m3u8_url=request.m3u8_url,
+            page_url=request.page_url,
+            title=request.title,
+            platform_video_id=request.platform_video_id,
+            headers=request.headers,
+            authorized_content=request.authorized_content,
+            force_reprocess=request.persist,
+            summary_mode=request.summary_mode,
+            index_to_memory=request.index_to_memory,
+            use_diarization=request.use_diarization,
+            language_hint=request.language_hint,
+            enable_visual_context=request.enable_visual_context,
+            author_name=request.author_name,
+            publish_time=request.publish_time,
+            duration_seconds=request.duration_seconds,
+            cover_url=request.cover_url,
+            description=request.description,
+            engine=request.engine,
+            quality=request.quality,
+            workers=request.workers,
+            timeout_seconds=request.timeout_seconds,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if queued.get("task_id") is None and queued.get("video_id") is not None:
         detail = content_ingest_service.get_video_detail(queued["video_id"], summary_mode=request.summary_mode)
         return {"task": queued, **(detail or {})}

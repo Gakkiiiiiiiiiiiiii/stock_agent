@@ -515,9 +515,12 @@ class ContentTaskRepository:
             task.updated_at = datetime.now(UTC)
             session.add(task)
 
-    def serialize(self, task: ContentIngestTask | None) -> dict | None:
+    def serialize(self, task: ContentIngestTask | None, *, redact_sensitive: bool = True) -> dict | None:
         if task is None:
             return None
+        options = _loads(task.options_json, {})
+        if redact_sensitive:
+            options = self._redact_sensitive_options(options)
         return {
             "task_id": task.id,
             "video_id": task.video_id,
@@ -525,8 +528,36 @@ class ContentTaskRepository:
             "stage": task.stage,
             "progress": task.progress,
             "error_message": task.error_message,
-            "options": _loads(task.options_json, {}),
+            "options": options,
         }
+
+    @classmethod
+    def _redact_sensitive_options(cls, options: object) -> object:
+        if not isinstance(options, dict):
+            return options
+        redacted = dict(options)
+        if "m3u8_url" in redacted:
+            redacted["m3u8_url"] = cls._redact_url_query(str(redacted["m3u8_url"]))
+        headers = redacted.get("headers")
+        if isinstance(headers, dict):
+            cleaned_headers = {}
+            for key, value in headers.items():
+                header_name = str(key)
+                if cls._is_sensitive_header(header_name):
+                    cleaned_headers[header_name] = "<redacted>"
+                else:
+                    cleaned_headers[header_name] = value
+            redacted["headers"] = cleaned_headers
+        return redacted
+
+    @staticmethod
+    def _is_sensitive_header(name: str) -> bool:
+        normalized = name.lower()
+        return normalized in {"cookie", "authorization", "x-token", "x-xsrf-token"} or "token" in normalized
+
+    @staticmethod
+    def _redact_url_query(value: str) -> str:
+        return value.split("?", 1)[0] + "?<redacted>" if "?" in value else value
 
 
 class ContentQueryRepository:
@@ -583,7 +614,6 @@ class ContentQueryRepository:
                     and_(VideoSummary.video_id == VideoAsset.id, VideoSummary.summary_mode == summary_mode),
                     isouter=True,
                 )
-                .where(VideoAsset.platform == "bilibili")
                 .order_by(VideoAsset.publish_time_raw.desc(), VideoAsset.updated_at.desc())
                 .limit(limit)
             ).all()

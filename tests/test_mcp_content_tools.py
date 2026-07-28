@@ -8,6 +8,11 @@ class FakeContentService:
         assert kwargs["bv_id"] == "BVTEST123"
         return {"task_id": 5, "status": "pending"}
 
+    def enqueue_xiaoe_hls(self, **kwargs):
+        assert kwargs["m3u8_url"] == "https://media.example.com/v_abc/index.m3u8"
+        assert kwargs["authorized_content"] is True
+        return {"task_id": 6, "status": "pending"}
+
     def get_video_detail(self, video_id, summary_mode="investment"):
         assert video_id == 9
         assert summary_mode == "investment"
@@ -22,6 +27,15 @@ def test_ingest_bilibili_video_tool(monkeypatch):
     monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
     result = content_server.ingest_bilibili_video(bv_id="BVTEST123")
     assert result["task_id"] == 5
+
+
+def test_ingest_xiaoe_hls_video_tool(monkeypatch):
+    monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
+    result = content_server.ingest_xiaoe_hls_video(
+        m3u8_url="https://media.example.com/v_abc/index.m3u8",
+        authorized_content=True,
+    )
+    assert result["task_id"] == 6
 
 
 def test_get_video_summary_tool(monkeypatch):

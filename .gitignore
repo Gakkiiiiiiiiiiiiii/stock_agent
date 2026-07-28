@@ -29,4 +29,6 @@ htmlcov/
 storage/runtime/*.jsonl
 storage/runtime/*.log
 storage/runtime/factor_paper/
+storage/runtime/xiaoe_downloads/
+storage/runtime/xiaoe_hls_poc/
 storage/runtime/**/*.tmp

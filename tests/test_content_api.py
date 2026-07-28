@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.api import app
+from storage.repositories.content_repository import ContentTaskRepository
 
 
 class FakeAdminService:
@@ -20,11 +21,16 @@ class FakeContentService:
         assert kwargs["url"] == "https://www.bilibili.com/video/BVTEST123"
         return {"task_id": 1, "video_id": 2, "status": "pending", "stage": "queued", "deduplicated": False}
 
+    def enqueue_xiaoe_hls(self, **kwargs):
+        assert kwargs["m3u8_url"] == "https://media.example.com/v_abc/index.m3u8"
+        assert kwargs["authorized_content"] is True
+        return {"task_id": 3, "video_id": 4, "status": "pending", "stage": "queued", "deduplicated": False}
+
     def process_task(self, task_id):
-        assert task_id == 1
+        assert task_id in {1, 3}
         self.started_task_ids.append(task_id)
         return {
-            "video": {"id": 2, "title": "测试视频", "transcript_status": "success"},
+            "video": {"id": 2 if task_id == 1 else 4, "title": "测试视频", "transcript_status": "success"},
             "summary": {"core_summary": "摘要"},
             "segments": [],
             "chunks": [],
@@ -32,10 +38,10 @@ class FakeContentService:
         }
 
     def get_task(self, task_id):
-        assert task_id == 1
+        assert task_id in {1, 3}
         stage = "queued" if self.task_status == "pending" else "asr"
         progress = 0 if self.task_status == "pending" else 50
-        return {"task_id": 1, "video_id": 2, "status": self.task_status, "stage": stage, "progress": progress, "error_message": None}
+        return {"task_id": task_id, "video_id": 2 if task_id == 1 else 4, "status": self.task_status, "stage": stage, "progress": progress, "error_message": None}
 
     def get_video_detail(self, video_id, summary_mode="investment"):
         assert video_id == 2
@@ -138,6 +144,44 @@ def test_content_summarize_api(monkeypatch):
     response = client.post("/api/v1/content/bilibili/summarize", json={"url": "https://www.bilibili.com/video/BVTEST123"})
     assert response.status_code == 200
     assert response.json()["summary"]["core_summary"] == "摘要"
+
+
+def test_xiaoe_hls_ingest_requires_authorized_content(monkeypatch):
+    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    response = client.post("/api/v1/content/xiaoe/hls/ingest", json={"m3u8_url": "https://media.example.com/v_abc/index.m3u8"})
+    assert response.status_code == 400
+
+
+def test_xiaoe_hls_summarize_api(monkeypatch):
+    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    response = client.post(
+        "/api/v1/content/xiaoe/hls/summarize",
+        json={
+            "m3u8_url": "https://media.example.com/v_abc/index.m3u8",
+            "authorized_content": True,
+            "title": "小鹅通视频",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["video"]["id"] == 4
+    assert response.json()["summary"]["core_summary"] == "摘要"
+
+
+def test_content_task_options_redact_xiaoe_hls_secrets():
+    options = ContentTaskRepository._redact_sensitive_options(
+        {
+            "m3u8_url": "https://media.example.com/index.m3u8?token=secret",
+            "headers": {
+                "Cookie": "session=secret",
+                "Authorization": "Bearer secret",
+                "Referer": "https://appaoswidcd4711.h5.xiaoeknow.com/",
+            },
+        }
+    )
+    assert options["m3u8_url"] == "https://media.example.com/index.m3u8?<redacted>"
+    assert options["headers"]["Cookie"] == "<redacted>"
+    assert options["headers"]["Authorization"] == "<redacted>"
+    assert options["headers"]["Referer"].startswith("https://")
 
 
 def test_admin_delete_video_summary_doc_routes_to_content_service(monkeypatch):
