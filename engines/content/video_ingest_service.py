@@ -13,8 +13,16 @@ from engines.content.diarization_service import DiarizationService
 from engines.content.event_conflict_resolver import EventConflictResolver
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
 from engines.content.financial_event_extractor import FinancialEventExtractor
+from engines.content.chapter_segmenter import ChapterSegmenter
+from engines.content.knowledge_conflict_resolver import KnowledgeConflictResolver
+from engines.content.knowledge_deduplicator import KnowledgeDeduplicator
+from engines.content.knowledge_temporal_policy import KnowledgeTemporalPolicy
+from engines.content.knowledge_unit_extractor import KnowledgeUnitExtractor
+from engines.content.knowledge_unit_normalizer import KnowledgeUnitNormalizer
 from engines.content.multimodal_context_builder import MultimodalContextBuilder
 from engines.content.semantic_chunker import SemanticChunker
+from engines.content.temporal_window_builder import TemporalWindowBuilder
+from engines.content.video_analysis_document_generator import VideoAnalysisDocumentGenerator
 from engines.content.video_frame_extractor import VideoFrameExtractor
 from engines.content.video_ocr_service import VideoOcrService
 from engines.content.video_summary_exporter import VideoSummaryMarkdownExporter
@@ -26,6 +34,12 @@ from engines.memory.memory_writer import enqueue_memory_reindex, write_memory_an
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from financial_agent.utils import project_root
 from storage.repositories.content_repository import ContentQueryRepository, ContentTaskRepository, FinancialEventRepository, VideoAssetRepository, VideoChunkRepository, VideoFrameRepository, VideoSummaryRepository
+from storage.repositories.knowledge_repository import (
+    KnowledgeExtractionRunRepository,
+    KnowledgeRepository,
+    KnowledgeVectorTaskService,
+    VideoAnalysisDocumentRepository,
+)
 from storage.repositories.vector_repository import MemoryRepository, VectorMappingRepository
 
 
@@ -70,11 +84,23 @@ class VideoIngestService:
         self.frame_extractor = frame_extractor or VideoFrameExtractor()
         self.vision_service = vision_service or VideoVisionService(ocr_service=VideoOcrService())
         self.multimodal_context_builder = multimodal_context_builder or MultimodalContextBuilder()
+        self.temporal_window_builder = TemporalWindowBuilder()
+        self.chapter_segmenter = ChapterSegmenter()
+        self.knowledge_extractor = KnowledgeUnitExtractor()
+        self.knowledge_normalizer = KnowledgeUnitNormalizer(entity_normalizer=self.entity_normalizer)
+        self.knowledge_temporal_policy = KnowledgeTemporalPolicy()
+        self.knowledge_deduplicator = KnowledgeDeduplicator()
+        self.knowledge_conflict_resolver = KnowledgeConflictResolver()
+        self.analysis_document_generator = VideoAnalysisDocumentGenerator()
         self.video_repo = video_repo or VideoAssetRepository()
         self.chunk_repo = chunk_repo or VideoChunkRepository()
         self.event_repo = event_repo or FinancialEventRepository()
         self.frame_repo = frame_repo or VideoFrameRepository()
         self.summary_repo = summary_repo or VideoSummaryRepository()
+        self.knowledge_repo = KnowledgeRepository()
+        self.analysis_document_repo = VideoAnalysisDocumentRepository()
+        self.extraction_run_repo = KnowledgeExtractionRunRepository()
+        self.knowledge_vector_task_service = KnowledgeVectorTaskService()
         self.task_repo = task_repo or ContentTaskRepository()
         self.query_repo = query_repo or ContentQueryRepository()
         self.memory_repo = MemoryRepository()
@@ -106,7 +132,7 @@ class VideoIngestService:
         existing = self.video_repo.get_by_source(platform="bilibili", bvid=parsed_bv, platform_video_id=parsed_bv)
         if existing is not None and not force_reprocess:
             detail = self.query_repo.get_video_detail(existing.id, summary_mode=summary_mode)
-            if detail and detail.get("summary"):
+            if detail and (detail.get("analysis_document") or detail.get("summary")):
                 return {
                     "task_id": None,
                     "video_id": existing.id,
@@ -167,7 +193,7 @@ class VideoIngestService:
         existing = self.video_repo.get_by_source(platform="xiaoe", platform_video_id=metadata["platform_video_id"])
         if existing is not None and not force_reprocess:
             detail = self.query_repo.get_video_detail(existing.id, summary_mode=summary_mode)
-            if detail and detail.get("summary"):
+            if detail and (detail.get("analysis_document") or detail.get("summary")):
                 return {
                     "task_id": None,
                     "video_id": existing.id,
@@ -241,52 +267,21 @@ class VideoIngestService:
                 if visual_bundle is not None:
                     visual_context = visual_bundle.get("context")
                     frame_insights = visual_bundle.get("frame_insights") or []
-            self.task_repo.update(task_id, stage="chunk_and_extract", progress=76)
-            chunks = self.semantic_chunker.build(transcript=transcript, frame_insights=frame_insights)
-            chunks = self._enrich_chunks(chunks)
-            # Clear event rows first so repeated reprocessing can safely replace chunk rows.
-            self.event_repo.delete_for_video(asset.id)
-            self.chunk_repo.replace_for_video(asset.id, chunks)
-            video_type, events = self.event_extractor.extract(metadata=metadata, chunks=chunks)
-            events = self.conflict_resolver.resolve(events)
-            self.event_repo.replace_for_video(asset.id, events, chunks=chunks)
-            event_timeline = self.conflict_resolver.build_timeline(events)
-            self.task_repo.update(task_id, stage="summarize", progress=82)
-            summary_payload = self.summarizer.summarize(
+            knowledge_result = self._build_video_knowledge(
+                task_id=task_id,
                 metadata=metadata,
+                video_id=asset.id,
                 transcript=transcript,
-                mode=options.get("summary_mode", "investment"),
-                visual_context=visual_context,
-                chunks=chunks,
-                events=events,
-                video_type=video_type,
+                frame_insights=frame_insights,
+                index_knowledge=bool(options.get("index_to_memory", True)),
             )
-            summary = self.summary_repo.upsert(asset.id, summary_payload)
-            export_path = self.summary_exporter.export(metadata=metadata, summary=summary_payload)
-            index_result = None
-            if options.get("index_to_memory", True):
-                self.task_repo.update(task_id, stage="index_memory", progress=92)
-                index_result = write_memory_and_enqueue(
-                    self._build_memory_payload(metadata=metadata, summary=summary_payload, markdown_path=export_path),
-                    target_collection="financial_knowledge",
-                    existing_memory_id=summary.memory_record_id,
-                )
-                self.summary_repo.set_memory_record(summary.id, index_result["memory_id"])
-                self._sync_viewpoint_memories(
-                    metadata=metadata,
-                    summary=summary_payload,
-                    events=events,
-                    target_collection="financial_knowledge",
-                )
             self.task_repo.update(task_id, status="success", stage="success", progress=100, video_id=asset.id)
             detail = self.query_repo.get_video_detail(asset.id, summary_mode=options.get("summary_mode", "investment")) or {}
             return detail | {
                 "task": self.task_repo.serialize(self.task_repo.get(task_id)),
-                "index_result": index_result,
-                "summary_export_path": str(export_path),
                 "visual_context": visual_context,
-                "video_type": video_type,
-                "event_timeline": event_timeline,
+                "video_type": knowledge_result["analysis_document"].get("video_type"),
+                "knowledge_result": knowledge_result,
             }
         except Exception as exc:
             if video_id is not None:
@@ -354,56 +349,103 @@ class VideoIngestService:
                 if visual_bundle is not None:
                     visual_context = visual_bundle.get("context")
                     frame_insights = visual_bundle.get("frame_insights") or []
-            self.task_repo.update(task_id, stage="chunk_and_extract", progress=76)
-            chunks = self.semantic_chunker.build(transcript=transcript, frame_insights=frame_insights)
-            chunks = self._enrich_chunks(chunks)
-            self.event_repo.delete_for_video(asset.id)
-            self.chunk_repo.replace_for_video(asset.id, chunks)
-            video_type, events = self.event_extractor.extract(metadata=metadata, chunks=chunks)
-            events = self.conflict_resolver.resolve(events)
-            self.event_repo.replace_for_video(asset.id, events, chunks=chunks)
-            event_timeline = self.conflict_resolver.build_timeline(events)
-            self.task_repo.update(task_id, stage="summarize", progress=82)
-            summary_payload = self.summarizer.summarize(
+            knowledge_result = self._build_video_knowledge(
+                task_id=task_id,
                 metadata=metadata,
+                video_id=asset.id,
                 transcript=transcript,
-                mode=options.get("summary_mode", "investment"),
-                visual_context=visual_context,
-                chunks=chunks,
-                events=events,
-                video_type=video_type,
+                frame_insights=frame_insights,
+                index_knowledge=bool(options.get("index_to_memory", True)),
             )
-            summary = self.summary_repo.upsert(asset.id, summary_payload)
-            export_path = self.summary_exporter.export(metadata=metadata, summary=summary_payload)
-            index_result = None
-            if options.get("index_to_memory", True):
-                self.task_repo.update(task_id, stage="index_memory", progress=92)
-                index_result = write_memory_and_enqueue(
-                    self._build_memory_payload(metadata=metadata, summary=summary_payload, markdown_path=export_path),
-                    target_collection="financial_knowledge",
-                    existing_memory_id=summary.memory_record_id,
-                )
-                self.summary_repo.set_memory_record(summary.id, index_result["memory_id"])
-                self._sync_viewpoint_memories(
-                    metadata=metadata,
-                    summary=summary_payload,
-                    events=events,
-                    target_collection="financial_knowledge",
-                )
             self.task_repo.update(task_id, status="success", stage="success", progress=100, video_id=asset.id)
             detail = self.query_repo.get_video_detail(asset.id, summary_mode=options.get("summary_mode", "investment")) or {}
             return detail | {
                 "task": self.task_repo.serialize(self.task_repo.get(task_id)),
-                "index_result": index_result,
-                "summary_export_path": str(export_path),
                 "visual_context": visual_context,
-                "video_type": video_type,
-                "event_timeline": event_timeline,
+                "video_type": knowledge_result["analysis_document"].get("video_type"),
+                "knowledge_result": knowledge_result,
             }
         except Exception as exc:
             if video_id is not None:
                 self.video_repo.mark_transcript_failed(video_id)
             self.task_repo.mark_failed(task_id, str(exc), stage=self.task_repo.get(task_id).stage if self.task_repo.get(task_id) else "failed")
+            raise
+
+    def _build_video_knowledge(
+        self,
+        *,
+        task_id: int,
+        metadata: dict,
+        video_id: int,
+        transcript: dict,
+        frame_insights: list[dict],
+        index_knowledge: bool,
+    ) -> dict:
+        source_hash = transcript.get("source_hash") or hashlib.sha256((transcript.get("text") or "").encode("utf-8")).hexdigest()
+        run = self.extraction_run_repo.start(
+            video_id=video_id,
+            source_hash=source_hash,
+            parser_version="v3.0-rule",
+            extractor_version="v3.0-rule",
+            schema_version="v1",
+        )
+        try:
+            self.task_repo.update(task_id, stage="build_temporal_windows", progress=72)
+            windows = self.temporal_window_builder.build(transcript=transcript, frame_insights=frame_insights)
+            self.task_repo.update(task_id, stage="chapter_segment", progress=76)
+            chapters = self.chapter_segmenter.segment(windows)
+            self.task_repo.update(task_id, stage="knowledge_extract", progress=82)
+            units = self.knowledge_extractor.extract(metadata=metadata, chapters=chapters)
+            self.task_repo.update(task_id, stage="knowledge_normalize", progress=86)
+            units = self.knowledge_normalizer.normalize(units, metadata=metadata)
+            source_date = self.knowledge_normalizer.parse_source_datetime(metadata.get("publish_time"))
+            self.task_repo.update(task_id, stage="temporal_policy", progress=89)
+            units = self.knowledge_temporal_policy.apply(units, source_date=source_date)
+            self.task_repo.update(task_id, stage="deduplicate_conflict", progress=92)
+            units = self.knowledge_deduplicator.deduplicate(units)
+            units, relations = self.knowledge_conflict_resolver.resolve(units)
+            self.task_repo.update(task_id, stage="persist_knowledge", progress=95)
+            persisted = self.knowledge_repo.replace_video_knowledge(
+                video_id=video_id,
+                chapters=chapters,
+                units=units,
+                relations=relations,
+            )
+            persisted_units = self.knowledge_repo.list_units_for_video(video_id)
+            self.task_repo.update(task_id, stage="generate_document", progress=97)
+            analysis_payload = self.analysis_document_generator.generate(metadata=metadata, chapters=chapters, units=units)
+            self.analysis_document_repo.upsert(video_id, analysis_payload)
+            vector_tasks = []
+            if index_knowledge:
+                self.task_repo.update(task_id, stage="index_knowledge", progress=99)
+                vector_tasks = self.knowledge_vector_task_service.enqueue_units(persisted_units)
+            self.extraction_run_repo.finish(
+                run.id,
+                status="success",
+                stage="completed",
+                chapter_count=len(chapters),
+                knowledge_unit_count=len(units),
+                degraded=False,
+            )
+            return {
+                "run_id": run.id,
+                "chapters": self.knowledge_repo.list_chapters(video_id),
+                "knowledge_units": persisted_units,
+                "relations": relations,
+                "persisted": persisted,
+                "analysis_document": self.analysis_document_repo.get_for_video(video_id) or analysis_payload,
+                "vector_tasks": vector_tasks,
+            }
+        except Exception as exc:
+            self.extraction_run_repo.finish(
+                run.id,
+                status="failed",
+                stage="failed",
+                chapter_count=0,
+                knowledge_unit_count=0,
+                degraded=True,
+                error_message=str(exc),
+            )
             raise
 
     def get_task(self, task_id: int) -> dict | None:
@@ -638,6 +680,7 @@ class VideoIngestService:
         if audio_duration >= expected_duration * minimum_ratio:
             return
         platform = str(metadata.get("platform") or "video")
+        platform_label = "Bilibili" if platform == "bilibili" else platform
         auth_source = getattr(self.bilibili_client, "describe_auth_source", lambda: "anonymous")()
         auth_hint = (
             "For charged or member-only Bilibili videos, run scripts/login-bilibili.ps1 to generate a project cookie file."
@@ -645,7 +688,7 @@ class VideoIngestService:
             else "Verify that the supplied media URL and headers are still authorized and not expired."
         )
         raise RuntimeError(
-            f"{platform} audio download looks incomplete. "
+            f"{platform_label} audio download looks incomplete. "
             f"Expected about {expected_duration:.0f}s but only fetched {audio_duration:.0f}s. "
             f"Current auth source: {auth_source}. "
             f"{auth_hint}"

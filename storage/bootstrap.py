@@ -6,6 +6,7 @@ from sqlalchemy import text
 
 from storage.models import chat  # noqa: F401
 from storage.models import content  # noqa: F401
+from storage.models import knowledge  # noqa: F401
 from storage.db import Base, get_engine
 from storage.models import vector  # noqa: F401
 from financial_agent.utils import project_root

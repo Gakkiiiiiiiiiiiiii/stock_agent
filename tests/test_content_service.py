@@ -229,25 +229,23 @@ def test_video_ingest_service_processes_task(monkeypatch):
         assert task is not None
         assert task.status == "success"
         assert detail["video"]["transcript_status"] == "success"
-        assert detail["summary"]["themes"] == ["黄金"]
-        assert detail["summary"]["memory_record_id"] == 77
+        assert detail["summary"] is None
+        assert detail["analysis_document"]["knowledge_unit_count"] >= 1
+        assert detail["analysis_document"]["chapter_count"] >= 1
         assert detail["segments"][0]["text"] == "黄金主题仍有催化，关注龙头股和风险控制。"
         assert detail["visual_frames"][0]["ocr_text"] == "上证指数 日线 缺口"
-        assert detail["chunks"][0]["topic"] in {"黄金", "支撑", "风险", "上证指数", "未分类片段"} or detail["chunks"][0]["topic"]
-        assert len(detail["events"]) >= 1
-        assert summarizer.last_visual_context is not None
-        assert summarizer.last_chunks is not None
-        assert summarizer.last_events is not None
-        assert "画面展示指数缺口与均线压力" in summarizer.last_visual_context["outline"]
-        assert any(call["payload"]["memory_type"] == "media_viewpoint" for call in memory_calls)
-        assert any(call["payload"]["source_type"] == "bilibili_video_viewpoint" for call in memory_calls)
-        assert any(call["payload"]["memory_type"] == "media_event" for call in memory_calls)
+        assert detail["chunks"] == []
+        assert detail["events"] == []
+        assert len(detail["chapters"]) >= 1
+        assert len(detail["knowledge_units"]) >= 1
+        assert all(unit["evidence"] for unit in detail["knowledge_units"])
+        assert memory_calls == []
 
         rerun = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVTEST123", force_reprocess=True)
         rerun_detail = service.process_task(rerun["task_id"])
         assert rerun_detail["video"]["id"] == detail["video"]["id"]
         assert rerun_detail["task"]["status"] == "success"
-        assert len(rerun_detail["events"]) >= 1
+        assert len(rerun_detail["knowledge_units"]) >= 1
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 

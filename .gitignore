@@ -26,6 +26,7 @@ coverage.xml
 htmlcov/
 
 # Runtime audit/state
+storage/runtime/
 storage/runtime/*.jsonl
 storage/runtime/*.log
 storage/runtime/factor_paper/

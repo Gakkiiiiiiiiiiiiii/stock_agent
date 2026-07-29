@@ -11,9 +11,26 @@ qdrant:
     financial_decision_trace_v2_bge_m3:
       vector_size: 1024
       distance: Cosine
+    financial_video_durable_v1_bge_m3:
+      vector_size: 1024
+      distance: Cosine
+    financial_video_timed_v1_bge_m3:
+      vector_size: 1024
+      distance: Cosine
+    financial_video_action_v1_bge_m3:
+      vector_size: 1024
+      distance: Cosine
   payload_indexes:
     - postgres_table
     - postgres_id
+    - primary_domain
+    - knowledge_kind
+    - temporal_class
+    - lifecycle_status
+    - verification_status
+    - subject_key
+    - predicate_key
+    - conflict_key
     - memory_type
     - related_regime
     - related_strategy

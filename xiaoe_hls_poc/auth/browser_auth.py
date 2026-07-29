@@ -60,11 +60,15 @@ def _launch(profile_name: str):
         args: list[str] = []
         if cdp_port := os.environ.get("XIAOE_CDP_PORT"):
             args.append(f"--remote-debugging-port={cdp_port}")
+        launch_kwargs = {}
+        if executable_path := os.environ.get("XIAOE_BROWSER_EXECUTABLE"):
+            launch_kwargs["executable_path"] = executable_path
         context = p.chromium.launch_persistent_context(
             user_data_dir=str(profile_store.profile_dir(profile_name)),
             headless=False,  # 10.1:强制可见
             viewport={"width": 1440, "height": 900},
             args=args,
+            **launch_kwargs,
         )
     except Exception as exc:  # noqa: BLE001
         p.stop()

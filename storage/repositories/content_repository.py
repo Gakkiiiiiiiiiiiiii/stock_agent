@@ -10,6 +10,7 @@ from sqlalchemy import and_, delete, select
 
 from storage.db import session_scope
 from storage.models.content import ContentIngestTask, EventEvidence, FinancialEvent, VideoAsset, VideoChunk, VideoFrame, VideoSegment, VideoSummary
+from storage.repositories.knowledge_repository import KnowledgeRepository, VideoAnalysisDocumentRepository
 
 
 def _dumps(value: object) -> str:
@@ -567,6 +568,8 @@ class ContentQueryRepository:
         self.event_repo = FinancialEventRepository()
         self.summary_repo = VideoSummaryRepository()
         self.frame_repo = VideoFrameRepository()
+        self.knowledge_repo = KnowledgeRepository()
+        self.analysis_document_repo = VideoAnalysisDocumentRepository()
         self.summary_exporter = VideoSummaryMarkdownExporter()
 
     def get_video_detail(self, video_id: int, summary_mode: str = "investment") -> dict | None:
@@ -598,9 +601,12 @@ class ContentQueryRepository:
         return {
             "video": video_payload,
             "summary": self.summary_repo.serialize(summary),
+            "analysis_document": self.analysis_document_repo.get_for_video(video_id),
             "segments": self.video_repo.list_segments(video_id),
             "chunks": self.chunk_repo.list_for_video(video_id),
             "events": self.event_repo.list_for_video(video_id),
+            "chapters": self.knowledge_repo.list_chapters(video_id),
+            "knowledge_units": self.knowledge_repo.list_units_for_video(video_id),
             "visual_frames": self.frame_repo.list_for_video(video_id),
             "summary_export_path": str(export_path) if export_path else None,
         }
