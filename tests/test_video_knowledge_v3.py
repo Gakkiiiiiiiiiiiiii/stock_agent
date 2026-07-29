@@ -13,6 +13,7 @@ from engines.content.chapter_classifier import ChapterClassifier
 from engines.content.video_ingest_service import VideoIngestService
 from storage.db import Base, SessionLocal
 from storage.models.content import FinancialEvent, VideoChunk, VideoSummary
+from storage.models.knowledge import KnowledgeExtractionRun
 from storage.models.vector import MemoryRecord, VectorIndexTask
 from tests.test_content_service import FakeAsrService, FakeAudioPipeline, FakeBilibiliClient, FakeFrameExtractor, FakeVisionService
 
@@ -48,6 +49,7 @@ def test_video_ingest_writes_v3_knowledge_without_video_memory():
 
         assert detail["task"]["status"] == "success"
         assert detail["analysis_document"]["knowledge_unit_count"] >= 1
+        assert detail["knowledge_result"]["quality_metrics"]["extraction_validation"]["accepted_count"] >= 1
         assert len(detail["chapters"]) >= 1
         assert len(detail["knowledge_units"]) >= 1
         assert all(unit["evidence"] for unit in detail["knowledge_units"])
@@ -60,6 +62,8 @@ def test_video_ingest_writes_v3_knowledge_without_video_memory():
             assert session.execute(select(MemoryRecord).where(MemoryRecord.source_type.in_(["bilibili_video_summary", "bilibili_video_viewpoint", "bilibili_financial_event"]))).scalars().all() == []
             tasks = session.execute(select(VectorIndexTask).where(VectorIndexTask.postgres_table == "knowledge_unit")).scalars().all()
             assert len(tasks) == len(detail["knowledge_units"])
+            run = session.execute(select(KnowledgeExtractionRun).where(KnowledgeExtractionRun.video_id == detail["video"]["id"])).scalars().one()
+            assert "accepted_count" in run.metrics_json
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
 

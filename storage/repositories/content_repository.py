@@ -10,6 +10,7 @@ from sqlalchemy import and_, delete, select
 
 from storage.db import session_scope
 from storage.models.content import ContentIngestTask, EventEvidence, FinancialEvent, VideoAsset, VideoChunk, VideoFrame, VideoSegment, VideoSummary
+from storage.models.knowledge import VideoAnalysisDocument
 from storage.repositories.knowledge_repository import KnowledgeRepository, VideoAnalysisDocumentRepository
 
 
@@ -614,21 +615,20 @@ class ContentQueryRepository:
     def list_videos(self, summary_mode: str = "investment", limit: int = 50) -> list[dict]:
         with session_scope() as session:
             rows = session.execute(
-                select(VideoAsset, VideoSummary)
+                select(VideoAsset, VideoSummary, VideoAnalysisDocument)
                 .join(
                     VideoSummary,
                     and_(VideoSummary.video_id == VideoAsset.id, VideoSummary.summary_mode == summary_mode),
                     isouter=True,
                 )
+                .join(VideoAnalysisDocument, VideoAnalysisDocument.video_id == VideoAsset.id, isouter=True)
                 .order_by(VideoAsset.publish_time_raw.desc(), VideoAsset.updated_at.desc())
                 .limit(limit)
             ).all()
 
         items: list[dict] = []
         seen_paths: set[str] = set()
-        for asset, summary in rows:
-            if summary is None:
-                continue
+        for asset, summary, analysis_document in rows:
             video_payload = {
                 "id": asset.id,
                 "platform": asset.platform,
@@ -658,6 +658,10 @@ class ContentQueryRepository:
                     "transcript_status": asset.transcript_status,
                     "asr_model": asset.asr_model,
                     "summary_ready": summary is not None,
+                    "analysis_document_ready": analysis_document is not None,
+                    "knowledge_ready": analysis_document is not None and int(analysis_document.knowledge_unit_count or 0) > 0,
+                    "knowledge_unit_count": int(analysis_document.knowledge_unit_count or 0) if analysis_document else 0,
+                    "chapter_count": int(analysis_document.chapter_count or 0) if analysis_document else 0,
                     "summary_mode": summary_mode,
                     "summary_model": summary.llm_model if summary else None,
                     "summary_confidence": summary.confidence_score if summary else None,

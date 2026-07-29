@@ -16,6 +16,7 @@ from engines.content.financial_event_extractor import FinancialEventExtractor
 from engines.content.chapter_segmenter import ChapterSegmenter
 from engines.content.knowledge_conflict_resolver import KnowledgeConflictResolver
 from engines.content.knowledge_deduplicator import KnowledgeDeduplicator
+from engines.content.knowledge_lifecycle_service import KnowledgeLifecycleService
 from engines.content.knowledge_temporal_policy import KnowledgeTemporalPolicy
 from engines.content.knowledge_unit_extractor import KnowledgeUnitExtractor
 from engines.content.knowledge_unit_normalizer import KnowledgeUnitNormalizer
@@ -44,6 +45,8 @@ from storage.repositories.vector_repository import MemoryRepository, VectorMappi
 
 
 class VideoIngestService:
+    MAX_KNOWLEDGE_LIMIT = 200
+
     def __init__(
         self,
         bilibili_client: BilibiliClient | None = None,
@@ -69,6 +72,7 @@ class VideoIngestService:
         storage_root: Path | None = None,
         summary_exporter: VideoSummaryMarkdownExporter | None = None,
         xiaoe_hls_client: XiaoeHlsAdapter | None = None,
+        lifecycle_service: KnowledgeLifecycleService | None = None,
     ) -> None:
         self.bilibili_client = bilibili_client or BilibiliClient()
         self.xiaoe_hls_client = xiaoe_hls_client or XiaoeHlsAdapter()
@@ -101,6 +105,10 @@ class VideoIngestService:
         self.analysis_document_repo = VideoAnalysisDocumentRepository()
         self.extraction_run_repo = KnowledgeExtractionRunRepository()
         self.knowledge_vector_task_service = KnowledgeVectorTaskService()
+        self.lifecycle_service = lifecycle_service or KnowledgeLifecycleService(
+            repository=self.knowledge_repo,
+            vector_task_service=self.knowledge_vector_task_service,
+        )
         self.task_repo = task_repo or ContentTaskRepository()
         self.query_repo = query_repo or ContentQueryRepository()
         self.memory_repo = MemoryRepository()
@@ -389,6 +397,7 @@ class VideoIngestService:
             extractor_version="v3.0-rule",
             schema_version="v1",
         )
+        extraction_validation: dict = {}
         try:
             self.task_repo.update(task_id, stage="build_temporal_windows", progress=72)
             windows = self.temporal_window_builder.build(transcript=transcript, frame_insights=frame_insights)
@@ -396,6 +405,7 @@ class VideoIngestService:
             chapters = self.chapter_segmenter.segment(windows)
             self.task_repo.update(task_id, stage="knowledge_extract", progress=82)
             units = self.knowledge_extractor.extract(metadata=metadata, chapters=chapters)
+            extraction_validation = getattr(self.knowledge_extractor, "last_validation_report", {})
             self.task_repo.update(task_id, stage="knowledge_normalize", progress=86)
             units = self.knowledge_normalizer.normalize(units, metadata=metadata)
             source_date = self.knowledge_normalizer.parse_source_datetime(metadata.get("publish_time"))
@@ -412,6 +422,7 @@ class VideoIngestService:
                 relations=relations,
             )
             persisted_units = self.knowledge_repo.list_units_for_video(video_id)
+            quality_metrics = self._knowledge_quality_metrics(extraction_validation, persisted_units)
             self.task_repo.update(task_id, stage="generate_document", progress=97)
             analysis_payload = self.analysis_document_generator.generate(metadata=metadata, chapters=chapters, units=units)
             self.analysis_document_repo.upsert(video_id, analysis_payload)
@@ -426,6 +437,7 @@ class VideoIngestService:
                 chapter_count=len(chapters),
                 knowledge_unit_count=len(units),
                 degraded=False,
+                metrics=quality_metrics,
             )
             return {
                 "run_id": run.id,
@@ -435,6 +447,7 @@ class VideoIngestService:
                 "persisted": persisted,
                 "analysis_document": self.analysis_document_repo.get_for_video(video_id) or analysis_payload,
                 "vector_tasks": vector_tasks,
+                "quality_metrics": quality_metrics,
             }
         except Exception as exc:
             self.extraction_run_repo.finish(
@@ -445,6 +458,7 @@ class VideoIngestService:
                 knowledge_unit_count=0,
                 degraded=True,
                 error_message=str(exc),
+                metrics={"extraction_validation": extraction_validation},
             )
             raise
 
@@ -458,7 +472,28 @@ class VideoIngestService:
         events = detail.get("events") or []
         detail["event_timeline"] = self.conflict_resolver.build_timeline(events)
         detail["video_type"] = self._infer_video_type_from_events(events)
+        latest_run = self.extraction_run_repo.latest_for_video(video_id)
+        if latest_run:
+            detail["latest_extraction_run"] = latest_run
+            detail["quality_metrics"] = latest_run.get("metrics") or {}
         return detail
+
+    @staticmethod
+    def _knowledge_quality_metrics(extraction_validation: dict, persisted_units: list[dict]) -> dict:
+        ocr_evidence_count = 0
+        low_evidence_count = 0
+        for unit in persisted_units:
+            evidence = unit.get("evidence") or []
+            if any(str(item.get("source_type") or "").upper() in {"OCR", "VISION", "FRAME"} for item in evidence):
+                ocr_evidence_count += 1
+            if unit.get("verification_status") == "NEEDS_REVIEW":
+                low_evidence_count += 1
+        return {
+            "extraction_validation": extraction_validation or {},
+            "ocr_evidence_unit_count": ocr_evidence_count,
+            "low_evidence_unit_count": low_evidence_count,
+            "knowledge_unit_count": len(persisted_units),
+        }
 
     def list_videos(self, summary_mode: str = "investment", limit: int = 50) -> list[dict]:
         return self.query_repo.list_videos(summary_mode=summary_mode, limit=limit)
@@ -548,6 +583,153 @@ class VideoIngestService:
             "events": detail.get("events") or [],
             "timeline": timeline,
         }
+
+    def get_video_chapters(self, video_id: int) -> dict | None:
+        detail = self.query_repo.get_video_detail(video_id)
+        if detail is None:
+            return None
+        return {"video_id": video_id, "chapters": detail.get("chapters") or []}
+
+    def get_video_chapter(self, video_id: int, chapter_id: int) -> dict | None:
+        detail = self.query_repo.get_video_detail(video_id)
+        if detail is None:
+            return None
+        return self.knowledge_repo.get_chapter(video_id, chapter_id)
+
+    def list_video_knowledge_units(self, video_id: int, filters: dict | None = None, limit: int | None = None) -> dict | None:
+        detail = self.query_repo.get_video_detail(video_id)
+        if detail is None:
+            return None
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=100)
+        return {
+            "video_id": video_id,
+            "items": self.knowledge_repo.list_units_for_video(video_id, filters=filters, limit=safe_limit),
+            "limit": safe_limit,
+            "next_cursor": None,
+            "filters": filters or {},
+            "warnings": warnings,
+        }
+
+    def get_knowledge_unit(self, unit_id: int) -> dict | None:
+        return self.knowledge_repo.get_unit(unit_id)
+
+    def search_video_knowledge(self, query: str, filters: dict | None = None, limit: int = 20) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=20)
+        return {
+            "query": query,
+            "items": self.knowledge_repo.search_units(query, filters=filters, limit=safe_limit),
+            "limit": safe_limit,
+            "next_cursor": None,
+            "filters": filters or {},
+            "warnings": warnings,
+        }
+
+    def update_knowledge_unit_lifecycle(
+        self,
+        unit_id: int,
+        *,
+        lifecycle_status: str | None = None,
+        verification_status: str | None = None,
+        valid_to: datetime | None = None,
+        note: str | None = None,
+        operator: str | None = None,
+    ) -> dict | None:
+        return self.lifecycle_service.transition_unit(
+            unit_id,
+            lifecycle_status=lifecycle_status,
+            verification_status=verification_status,
+            valid_to=valid_to,
+            reason=note,
+            operator=operator,
+        )
+
+    def list_knowledge_conflicts(self, subject_key: str | None = None, limit: int = 50) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=50)
+        payload = self.lifecycle_service.list_conflicts(subject_key=subject_key, limit=safe_limit)
+        return payload | {"limit": safe_limit, "next_cursor": None, "filters": {"subject_key": subject_key} if subject_key else {}, "warnings": warnings}
+
+    def expire_due_knowledge_units(self, now: datetime | None = None, limit: int = 500) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=500, maximum=1000)
+        payload = self.lifecycle_service.expire_due_units(now=now, limit=safe_limit)
+        return payload | {"limit": safe_limit, "warnings": [*(payload.get("warnings") or []), *warnings]}
+
+    def list_knowledge_unit_lifecycle_audits(self, unit_id: int, limit: int = 50) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=50)
+        payload = self.lifecycle_service.list_unit_audits(unit_id, limit=safe_limit)
+        return payload | {"limit": safe_limit, "next_cursor": None, "warnings": warnings}
+
+    def get_current_subject_state(self, subject_key: str, domain: str | None = None, limit: int = 20) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=20)
+        payload = self.knowledge_repo.get_current_subject_state(subject_key=subject_key, domain=domain, limit=safe_limit)
+        return payload | {"limit": safe_limit, "next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": warnings}
+
+    def get_subject_history(self, subject_key: str, domain: str | None = None, limit: int = 50) -> dict:
+        safe_limit, warnings = self._safe_knowledge_limit(limit, default=50)
+        payload = self.knowledge_repo.get_subject_history(subject_key=subject_key, domain=domain, limit=safe_limit)
+        return payload | {"limit": safe_limit, "next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": warnings}
+
+    @classmethod
+    def _safe_knowledge_limit(cls, value: int | None, *, default: int, maximum: int | None = None) -> tuple[int, list[str]]:
+        warnings = []
+        max_value = maximum or cls.MAX_KNOWLEDGE_LIMIT
+        try:
+            limit = int(value if value is not None else default)
+        except (TypeError, ValueError):
+            limit = default
+            warnings.append("invalid_limit_defaulted")
+        if limit <= 0:
+            limit = default
+            warnings.append("non_positive_limit_defaulted")
+        if limit > max_value:
+            limit = max_value
+            warnings.append(f"limit_clamped_to_{max_value}")
+        return limit, warnings
+
+    def reparse_video_knowledge(self, video_id: int, index_knowledge: bool = True) -> dict | None:
+        detail = self.query_repo.get_video_detail(video_id)
+        if detail is None:
+            return None
+        video = detail["video"]
+        segments = detail.get("segments") or []
+        transcript = {
+            "text": "\n".join(segment.get("text") or "" for segment in segments).strip() or video.get("transcript_text") or "",
+            "segments": segments,
+            "language": video.get("transcript_language"),
+            "provider": video.get("asr_provider"),
+            "model": video.get("asr_model"),
+        }
+        if not transcript["text"]:
+            raise RuntimeError("video has no transcript to reparse")
+        transcript["source_hash"] = hashlib.sha256(transcript["text"].encode("utf-8")).hexdigest()
+        metadata = {
+            "platform": video.get("platform"),
+            "platform_video_id": video.get("platform_video_id") or video.get("bvid"),
+            "bvid": video.get("bvid"),
+            "url": video.get("url") or "",
+            "title": video.get("title") or "video",
+            "author_name": video.get("author_name"),
+            "author_id": video.get("author_id"),
+            "publish_time": video.get("publish_time"),
+            "duration_seconds": video.get("duration_seconds"),
+            "cover_url": video.get("cover_url"),
+            "description": video.get("description"),
+        }
+        task = self.task_repo.create(
+            source_type="video_knowledge_reparse",
+            source_ref=metadata["url"],
+            options={"video_id": video_id, "parser": "v3.0-rule", "index_knowledge": index_knowledge},
+            video_id=video_id,
+        )
+        result = self._build_video_knowledge(
+            task_id=task.id,
+            metadata=metadata,
+            video_id=video_id,
+            transcript=transcript,
+            frame_insights=[],
+            index_knowledge=index_knowledge,
+        )
+        self.task_repo.update(task.id, status="success", stage="success", progress=100, video_id=video_id)
+        return {"task": self.task_repo.serialize(self.task_repo.get(task.id)), "knowledge_result": result}
 
     def get_video_frame_image_path(self, video_id: int, frame_index: int) -> str | None:
         payload = self.frame_repo.get_for_video_frame(video_id, frame_index)

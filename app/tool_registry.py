@@ -419,7 +419,7 @@ class ClaudeToolRegistry:
             "search_video_insights": (
                 {
                     "name": "search_video_insights",
-                    "description": "Search indexed Bilibili video insights from the knowledge memory store.",
+                    "description": "Deprecated: search indexed video insights through the v3 video knowledge store.",
                     "input_schema": {
                         "type": "object",
                         "properties": {
@@ -431,6 +431,110 @@ class ClaudeToolRegistry:
                     },
                 },
                 lambda payload: content_server.search_video_insights(**payload),
+            ),
+            "search_video_knowledge": (
+                {
+                    "name": "search_video_knowledge",
+                    "description": "Search atomic video KnowledgeUnit records with evidence, lifecycle, verification, and subject filters.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "query": {"type": "string"},
+                            "intent": {"type": "string"},
+                            "filters": {"type": "object"},
+                            "top_k": {"type": "integer"},
+                            "primary_domain": {"type": "string"},
+                            "knowledge_kind": {"type": "string"},
+                            "temporal_class": {"type": "string"},
+                            "lifecycle_status": {"type": "string"},
+                            "verification_status": {"type": "string"},
+                            "subject_key": {"type": "string"},
+                            "predicate_key": {"type": "string"},
+                            "valid_only": {"type": "boolean"},
+                        },
+                        "required": ["query"],
+                    },
+                },
+                lambda payload: content_server.search_video_knowledge(**payload),
+            ),
+            "get_current_subject_state": (
+                {
+                    "name": "get_current_subject_state",
+                    "description": "Get current non-expired video knowledge state for a subject.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "subject_key": {"type": "string"},
+                            "domains": {"type": "array", "items": {"type": "string"}},
+                            "domain": {"type": "string"},
+                            "top_k": {"type": "integer"},
+                        },
+                        "required": ["subject_key"],
+                    },
+                },
+                lambda payload: content_server.get_current_subject_state(**payload),
+            ),
+            "get_subject_history": (
+                {
+                    "name": "get_subject_history",
+                    "description": "Get historical video knowledge for a subject, optionally including expired units.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "subject_key": {"type": "string"},
+                            "date_from": {"type": "string"},
+                            "date_to": {"type": "string"},
+                            "include_expired": {"type": "boolean"},
+                            "domain": {"type": "string"},
+                            "top_k": {"type": "integer"},
+                        },
+                        "required": ["subject_key"],
+                    },
+                },
+                lambda payload: content_server.get_subject_history(**payload),
+            ),
+            "get_video_knowledge_units": (
+                {
+                    "name": "get_video_knowledge_units",
+                    "description": "List KnowledgeUnit records for a processed video.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "video_id": {"type": "integer"},
+                            "filters": {"type": "object"},
+                            "top_k": {"type": "integer"},
+                        },
+                        "required": ["video_id"],
+                    },
+                },
+                lambda payload: content_server.get_video_knowledge_units(**payload),
+            ),
+            "get_knowledge_unit": (
+                {
+                    "name": "get_knowledge_unit",
+                    "description": "Get a KnowledgeUnit by id with evidence, entity relations, lifecycle, verification, and vector status.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {"unit_id": {"type": "integer"}},
+                        "required": ["unit_id"],
+                    },
+                },
+                lambda payload: content_server.get_knowledge_unit(**payload),
+            ),
+            "list_knowledge_conflicts": (
+                {
+                    "name": "list_knowledge_conflicts",
+                    "description": "List conflict groups among video KnowledgeUnit records.",
+                    "input_schema": {
+                        "type": "object",
+                        "properties": {
+                            "subject_key": {"type": "string"},
+                            "status": {"type": "string"},
+                            "top_k": {"type": "integer"},
+                        },
+                    },
+                },
+                lambda payload: content_server.list_knowledge_conflicts(**payload),
             ),
             "mine_factors": (
                 {
@@ -598,7 +702,9 @@ class ClaudeToolRegistry:
             "detect_pattern_signal", "scan_stock_signals", "search_theme_logic", "retrieve_relevant_context",
             "get_theme_related_stocks", "evaluate_theme_trigger", "rank_themes_by_score", "get_market_regime",
             "route_strategy", "adjust_signal", "evaluate_portfolio_risk", "ask_research_model",
-            "get_video_summary", "search_video_insights", "list_factor_library", "list_recent_alpha_candidates",
+            "get_video_summary", "search_video_insights", "search_video_knowledge", "get_current_subject_state",
+            "get_subject_history", "get_video_knowledge_units", "get_knowledge_unit", "list_knowledge_conflicts",
+            "list_factor_library", "list_recent_alpha_candidates",
         )}
         policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
         policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})

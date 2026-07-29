@@ -22,6 +22,24 @@ class FakeContentService:
         assert video_id == 9
         return {"video_id": 9, "segments": [{"text": "片段"}]}
 
+    def search_video_knowledge(self, query, filters=None, limit=5):
+        return {"query": query, "filters": filters or {}, "limit": limit, "items": [{"statement": "黄金观点"}]}
+
+    def list_video_knowledge_units(self, video_id, filters=None, limit=None):
+        return {"video_id": video_id, "items": [{"id": 99, "lifecycle_status": "ACTIVE"}], "filters": filters or {}, "limit": limit}
+
+    def get_knowledge_unit(self, unit_id):
+        return {"id": unit_id, "canonical_statement": "知识", "evidence": [{"evidence_text": "证据"}]}
+
+    def list_knowledge_conflicts(self, subject_key=None, limit=50):
+        return {"items": [{"conflict_group_id": "cg1", "units": [{"id": 99, "lifecycle_status": "ACTIVE"}]}], "limit": limit, "subject_key": subject_key}
+
+    def get_current_subject_state(self, subject_key, domain=None, limit=20):
+        return {"subject_key": subject_key, "domain": domain, "items": [{"subject_key": subject_key, "primary_domain": domain}]}
+
+    def get_subject_history(self, subject_key, domain=None, limit=50):
+        return {"subject_key": subject_key, "domain": domain, "items": [{"as_of_time": "2026-07-28T09:30:00", "lifecycle_status": "EXPIRED"}]}
+
 
 def test_ingest_bilibili_video_tool(monkeypatch):
     monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
@@ -45,11 +63,47 @@ def test_get_video_summary_tool(monkeypatch):
     assert result["summary"]["core_summary"] == "视频摘要"
 
 
-def test_search_video_insights_uses_bilibili_source_filter(monkeypatch):
-    monkeypatch.setattr(
-        "mcp_servers.content_server.retrieve_memory",
-        lambda query, filters, top_k: {"query": query, "filters": filters, "top_k": top_k},
-    )
+def test_search_video_insights_uses_video_knowledge(monkeypatch):
+    monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
     result = content_server.search_video_insights("黄金", top_k=3, themes=["黄金"])
-    assert result["filters"]["source_type"] == "bilibili_video_summary"
-    assert result["filters"]["related_theme"] == ["黄金"]
+    assert result["deprecated"] is True
+    assert result["filters"]["subject_key"] == ["黄金"]
+    assert result["limit"] == 3
+
+
+def test_video_knowledge_tools(monkeypatch):
+    monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
+    search = content_server.search_video_knowledge("券商", intent="current_state", top_k=2, subject_key="券商", predicate_key="估值")
+    current = content_server.get_current_subject_state("券商", domains=["COMPANY"])
+    history = content_server.get_subject_history("券商", date_from="2026-07-29", include_expired=False)
+    units = content_server.get_video_knowledge_units(9, filters={"subject_key": "券商"}, top_k=3)
+    unit = content_server.get_knowledge_unit(99)
+    conflicts = content_server.list_knowledge_conflicts("券商", status="ACTIVE")
+    assert search["filters"]["subject_key"] == "券商"
+    assert search["filters"]["predicate_key"] == "估值"
+    assert search["intent"] == "current_state"
+    assert search["limit"] == 2
+    assert current["domains"] == ["COMPANY"]
+    assert history["subject_key"] == "券商"
+    assert history["items"] == []
+    assert units["found"] is True
+    assert units["limit"] == 3
+    assert unit["found"] is True
+    assert unit["evidence"][0]["evidence_text"] == "证据"
+    assert conflicts["items"][0]["conflict_group_id"] == "cg1"
+
+
+def test_video_knowledge_mcp_contract_validation(monkeypatch):
+    monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
+    empty = content_server.search_video_knowledge("", top_k=999)
+    invalid = content_server.search_video_knowledge("券商", knowledge_kind="mystery", top_k=999)
+    invalid_units = content_server.get_video_knowledge_units(9, filters={"lifecycle_status": "bad"}, top_k=999)
+    invalid_conflicts = content_server.list_knowledge_conflicts(status="bad", top_k=999)
+
+    assert empty["error"]["code"] == "EMPTY_QUERY"
+    assert empty["items"] == []
+    assert invalid["limit"] == 100
+    assert invalid["error"]["code"] == "INVALID_FILTER"
+    assert "top_k_clamped_to_100" in invalid["warnings"]
+    assert invalid_units["error"]["code"] == "INVALID_FILTER"
+    assert invalid_conflicts["error"]["code"] == "INVALID_FILTER"

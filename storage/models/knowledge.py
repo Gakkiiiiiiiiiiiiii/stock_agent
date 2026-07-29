@@ -82,6 +82,23 @@ class KnowledgeUnit(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
+class KnowledgeLifecycleAudit(Base):
+    __tablename__ = "knowledge_lifecycle_audit"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    knowledge_unit_id: Mapped[int] = mapped_column(ForeignKey("knowledge_unit.id"), index=True)
+    from_lifecycle_status: Mapped[str | None] = mapped_column(String(32))
+    to_lifecycle_status: Mapped[str | None] = mapped_column(String(32), index=True)
+    from_verification_status: Mapped[str | None] = mapped_column(String(32))
+    to_verification_status: Mapped[str | None] = mapped_column(String(32), index=True)
+    valid_to_before: Mapped[datetime | None] = mapped_column(DateTime)
+    valid_to_after: Mapped[datetime | None] = mapped_column(DateTime)
+    reason: Mapped[str | None] = mapped_column(Text)
+    operator: Mapped[str | None] = mapped_column(String(128))
+    vector_task_ids_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), index=True)
+
+
 class KnowledgeEvidence(Base):
     __tablename__ = "knowledge_evidence"
 
@@ -167,6 +184,7 @@ class KnowledgeExtractionRun(Base):
     chapter_count: Mapped[int] = mapped_column(Integer, default=0)
     knowledge_unit_count: Mapped[int] = mapped_column(Integer, default=0)
     degraded: Mapped[bool] = mapped_column(Boolean, default=False)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[datetime] = mapped_column(DateTime)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime)

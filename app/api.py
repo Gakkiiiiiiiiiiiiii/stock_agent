@@ -44,6 +44,38 @@ admin_service = AdminContentService()
 chat_history_service = ChatHistoryService()
 content_ingest_service = VideoIngestService()
 
+MAX_API_LIST_LIMIT = 200
+VALID_KNOWLEDGE_KINDS = {
+    "METHOD",
+    "CONCEPT",
+    "CAUSAL_THESIS",
+    "FACT",
+    "STATE",
+    "FORECAST",
+    "TECHNICAL_SIGNAL",
+    "ACTION",
+    "RISK_CONDITION",
+    "MODEL_INFERENCE",
+}
+VALID_TEMPORAL_CLASSES = {"DURABLE", "CYCLICAL", "SNAPSHOT", "EVENT_BOUND"}
+VALID_LIFECYCLE_STATUSES = {
+    "EXTRACTED",
+    "ACTIVE",
+    "VALIDATED",
+    "SUPERSEDED",
+    "EXPIRED",
+    "REJECTED",
+    "RETIRED",
+}
+VALID_VERIFICATION_STATUSES = {
+    "UNVERIFIED",
+    "SOURCE_CONFIRMED",
+    "VERIFIED",
+    "VALIDATED",
+    "REJECTED",
+    "NEEDS_REVIEW",
+}
+
 
 class StockAnalyzeRequest(BaseModel):
     symbol: str
@@ -101,6 +133,30 @@ class MarketRegimeRequest(BaseModel):
 class KnowledgeDocUpdateRequest(BaseModel):
     path: str
     content: str
+
+
+class KnowledgeSearchRequest(BaseModel):
+    query: str
+    filters: dict | None = None
+    limit: int = 20
+
+
+class KnowledgeLifecycleUpdateRequest(BaseModel):
+    lifecycle_status: str | None = None
+    verification_status: str | None = None
+    valid_to: datetime | None = None
+    note: str | None = None
+    operator: str | None = None
+
+
+class KnowledgeLifecycleSweepRequest(BaseModel):
+    now: datetime | None = None
+    limit: int = 500
+    idempotency_key: str | None = None
+
+
+class VideoReparseRequest(BaseModel):
+    index_knowledge: bool = True
 
 
 class ToolProposalRequest(BaseModel):
@@ -530,7 +586,14 @@ def process_content_task(task_id: int, background_tasks: BackgroundTasks) -> dic
 
 @app.get("/api/v1/content/videos")
 def list_content_videos(summary_mode: str = "investment", limit: int = 50) -> dict:
-    return {"items": content_ingest_service.list_videos(summary_mode=summary_mode, limit=limit)}
+    safe_limit, warnings = _safe_api_limit(limit, default=50)
+    return {
+        "items": content_ingest_service.list_videos(summary_mode=summary_mode, limit=safe_limit),
+        "limit": safe_limit,
+        "next_cursor": None,
+        "filters": {"summary_mode": summary_mode},
+        "warnings": warnings,
+    }
 
 
 @app.get("/api/v1/content/videos/{video_id}")
@@ -571,6 +634,226 @@ def get_content_video_events(video_id: int, summary_mode: str = "investment") ->
     if payload is None:
         raise HTTPException(status_code=404, detail="video not found")
     return payload
+
+
+@app.get("/api/v1/content/videos/{video_id}/chapters")
+def get_content_video_chapters(video_id: int, limit: int = 200) -> dict:
+    payload = content_ingest_service.get_video_chapters(video_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    safe_limit, warnings = _safe_api_limit(limit, default=200)
+    items = (payload.get("chapters") or [])[:safe_limit]
+    return payload | {"chapters": items, "items": items, "limit": safe_limit, "next_cursor": None, "filters": {}, "warnings": warnings}
+
+
+@app.get("/api/v1/content/videos/{video_id}/chapters/{chapter_id}")
+def get_content_video_chapter(video_id: int, chapter_id: int) -> dict:
+    payload = content_ingest_service.get_video_chapter(video_id, chapter_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="chapter not found")
+    return payload
+
+
+@app.get("/api/v1/content/videos/{video_id}/knowledge")
+def list_content_video_knowledge(
+    video_id: int,
+    primary_domain: str | None = None,
+    knowledge_kind: str | None = None,
+    temporal_class: str | None = None,
+    lifecycle_status: str | None = None,
+    verification_status: str | None = None,
+    subject_key: str | None = None,
+    valid_only: bool = False,
+    limit: int = 200,
+) -> dict:
+    knowledge_kind = _normalize_enum_param(knowledge_kind, VALID_KNOWLEDGE_KINDS, "knowledge_kind")
+    temporal_class = _normalize_enum_param(temporal_class, VALID_TEMPORAL_CLASSES, "temporal_class")
+    lifecycle_status = _normalize_enum_param(lifecycle_status, VALID_LIFECYCLE_STATUSES, "lifecycle_status")
+    verification_status = _normalize_enum_param(verification_status, VALID_VERIFICATION_STATUSES, "verification_status")
+    filters = {
+        key: value
+        for key, value in {
+            "primary_domain": primary_domain,
+            "knowledge_kind": knowledge_kind,
+            "temporal_class": temporal_class,
+            "lifecycle_status": lifecycle_status,
+            "verification_status": verification_status,
+            "subject_key": subject_key,
+            "valid_only": valid_only,
+        }.items()
+        if value not in (None, "", False)
+    }
+    payload = content_ingest_service.list_video_knowledge_units(video_id, filters=filters, limit=limit)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    return payload
+
+
+@app.get("/api/v1/content/videos/{video_id}/knowledge-units")
+def list_content_video_knowledge_alias(
+    video_id: int,
+    primary_domain: str | None = None,
+    knowledge_kind: str | None = None,
+    temporal_class: str | None = None,
+    lifecycle_status: str | None = None,
+    verification_status: str | None = None,
+    subject_key: str | None = None,
+    valid_only: bool = False,
+    limit: int = 200,
+) -> dict:
+    return list_content_video_knowledge(
+        video_id,
+        primary_domain=primary_domain,
+        knowledge_kind=knowledge_kind,
+        temporal_class=temporal_class,
+        lifecycle_status=lifecycle_status,
+        verification_status=verification_status,
+        subject_key=subject_key,
+        valid_only=valid_only,
+        limit=limit,
+    )
+
+
+@app.post("/api/v1/content/knowledge/search")
+def search_content_video_knowledge(request: KnowledgeSearchRequest) -> dict:
+    filters = _validate_knowledge_filters(request.filters or {})
+    return content_ingest_service.search_video_knowledge(request.query, filters=filters, limit=request.limit)
+
+
+@app.get("/api/v1/content/knowledge/conflicts")
+def list_content_knowledge_conflicts(subject_key: str | None = None, limit: int = 50) -> dict:
+    return content_ingest_service.list_knowledge_conflicts(subject_key=subject_key, limit=limit)
+
+
+@app.get("/api/v1/content/knowledge/subjects/{subject_key}/current")
+def get_content_subject_current_state(subject_key: str, domain: str | None = None, limit: int = 20) -> dict:
+    payload = content_ingest_service.get_current_subject_state(subject_key=subject_key, domain=domain, limit=limit)
+    return payload | {"next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": payload.get("warnings") or []}
+
+
+@app.get("/api/v1/content/knowledge/subjects/{subject_key}/history")
+def get_content_subject_history(subject_key: str, domain: str | None = None, limit: int = 50) -> dict:
+    payload = content_ingest_service.get_subject_history(subject_key=subject_key, domain=domain, limit=limit)
+    return payload | {"next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": payload.get("warnings") or []}
+
+
+@app.post("/api/v1/content/knowledge/lifecycle/sweep")
+def sweep_content_knowledge_lifecycle(request: KnowledgeLifecycleSweepRequest) -> dict:
+    return content_ingest_service.expire_due_knowledge_units(now=request.now, limit=request.limit)
+
+
+@app.post("/api/v1/content/knowledge/lifecycle/sweep-task")
+def create_content_knowledge_lifecycle_sweep_task(request: KnowledgeLifecycleSweepRequest) -> dict:
+    payload = {"limit": request.limit}
+    if request.now:
+        payload["now"] = request.now.isoformat()
+    return JobTaskRepository().create(
+        "knowledge_lifecycle_sweep",
+        payload,
+        idempotency_key=request.idempotency_key,
+    )
+
+
+@app.get("/api/v1/content/knowledge/{unit_id}")
+def get_content_knowledge_unit(unit_id: int) -> dict:
+    payload = content_ingest_service.get_knowledge_unit(unit_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="knowledge unit not found")
+    return payload
+
+
+@app.get("/api/v1/content/knowledge-units/{unit_id}")
+def get_content_knowledge_unit_alias(unit_id: int) -> dict:
+    return get_content_knowledge_unit(unit_id)
+
+
+@app.post("/api/v1/content/videos/{video_id}/reparse")
+def reparse_content_video_knowledge(video_id: int, request: VideoReparseRequest) -> dict:
+    try:
+        payload = content_ingest_service.reparse_video_knowledge(video_id, index_knowledge=request.index_knowledge)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if payload is None:
+        raise HTTPException(status_code=404, detail="video not found")
+    return payload
+
+
+@app.patch("/api/v1/content/knowledge/{unit_id}/lifecycle")
+def update_content_knowledge_lifecycle(unit_id: int, request: KnowledgeLifecycleUpdateRequest) -> dict:
+    payload = _update_content_knowledge_lifecycle(unit_id, request)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="knowledge unit not found")
+    return payload
+
+
+@app.patch("/api/v1/content/knowledge-units/{unit_id}/lifecycle")
+def update_content_knowledge_lifecycle_alias(unit_id: int, request: KnowledgeLifecycleUpdateRequest) -> dict:
+    return update_content_knowledge_lifecycle(unit_id, request)
+
+
+@app.get("/api/v1/content/knowledge-units/{unit_id}/lifecycle-audits")
+def list_content_knowledge_lifecycle_audits(unit_id: int, limit: int = 50) -> dict:
+    return content_ingest_service.list_knowledge_unit_lifecycle_audits(unit_id, limit=limit)
+
+
+def _update_content_knowledge_lifecycle(unit_id: int, request: KnowledgeLifecycleUpdateRequest) -> dict | None:
+    try:
+        return content_ingest_service.update_knowledge_unit_lifecycle(
+            unit_id,
+            lifecycle_status=request.lifecycle_status,
+            verification_status=request.verification_status,
+            valid_to=request.valid_to,
+            note=request.note,
+            operator=request.operator,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def _safe_api_limit(value: int | None, *, default: int, maximum: int = MAX_API_LIST_LIMIT) -> tuple[int, list[str]]:
+    warnings: list[str] = []
+    try:
+        limit = int(value if value is not None else default)
+    except (TypeError, ValueError):
+        limit = default
+        warnings.append("invalid_limit_defaulted")
+    if limit <= 0:
+        limit = default
+        warnings.append("non_positive_limit_defaulted")
+    if limit > maximum:
+        limit = maximum
+        warnings.append(f"limit_clamped_to_{maximum}")
+    return limit, warnings
+
+
+def _normalize_enum_param(value: str | None, allowed: set[str], field: str) -> str | None:
+    if value in (None, ""):
+        return None
+    normalized = str(value).upper()
+    if normalized not in allowed:
+        raise HTTPException(status_code=400, detail=f"invalid {field}: {value}")
+    return normalized
+
+
+def _validate_knowledge_filters(filters: dict) -> dict:
+    validated = dict(filters or {})
+    enum_fields = {
+        "knowledge_kind": VALID_KNOWLEDGE_KINDS,
+        "temporal_class": VALID_TEMPORAL_CLASSES,
+        "lifecycle_status": VALID_LIFECYCLE_STATUSES,
+        "verification_status": VALID_VERIFICATION_STATUSES,
+    }
+    for field, allowed in enum_fields.items():
+        value = validated.get(field)
+        if isinstance(value, list):
+            validated[field] = [_normalize_enum_param(item, allowed, field) for item in value if item not in (None, "")]
+        else:
+            normalized = _normalize_enum_param(value, allowed, field)
+            if normalized is None:
+                validated.pop(field, None)
+            else:
+                validated[field] = normalized
+    return validated
 
 
 @app.get("/api/v1/content/videos/{video_id}/frames/{frame_index}/image")

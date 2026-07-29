@@ -44,8 +44,12 @@ class PostgresHydrator:
                     "temporal_class": unit.get("temporal_class"),
                     "verification_status": unit.get("verification_status"),
                     "subject_key": unit.get("subject_key"),
+                    "conflict_key": unit.get("conflict_key"),
+                    "conflict_group_id": unit.get("conflict_group_id"),
+                    "as_of_time": unit.get("as_of_time"),
                     "valid_from": unit.get("valid_from"),
                     "valid_to": unit.get("valid_to"),
+                    "decay_half_life_days": unit.get("decay_half_life_days"),
                     "evidence": unit.get("evidence") or [],
                     "entities": unit.get("entities") or [],
                 }

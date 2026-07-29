@@ -50,7 +50,7 @@ class FakeContentService:
 
     def list_videos(self, summary_mode="investment", limit=50):
         assert summary_mode == "investment"
-        assert limit == 50
+        assert limit in {50, 200}
         return [{"video_id": 2, "title": "测试视频", "bvid": "BVTEST123", "summary_ready": True}]
 
     def get_video_summary_document(self, video_id, summary_mode="investment"):
@@ -79,6 +79,58 @@ class FakeContentService:
         assert video_id == 2
         assert summary_mode == "investment"
         return {"video_id": 2, "chunks": [{"chunk_index": 0}], "events": [{"event_type": "OPINION"}], "timeline": [{"statement": "测试"}]}
+
+    def get_video_chapters(self, video_id):
+        assert video_id == 2
+        return {"video_id": 2, "chapters": [{"id": 10, "title": "章节"}]}
+
+    def get_video_chapter(self, video_id, chapter_id):
+        assert video_id == 2
+        assert chapter_id == 10
+        return {"id": 10, "title": "章节", "knowledge_units": []}
+
+    def list_video_knowledge_units(self, video_id, filters=None, limit=None):
+        assert video_id == 2
+        return {"video_id": 2, "items": [{"id": 99, "subject_key": filters.get("subject_key") if filters else None}], "limit": limit, "next_cursor": None, "filters": filters or {}, "warnings": []}
+
+    def get_knowledge_unit(self, unit_id):
+        assert unit_id == 99
+        return {"id": 99, "canonical_statement": "知识"}
+
+    def search_video_knowledge(self, query, filters=None, limit=20):
+        return {"query": query, "filters": filters or {}, "items": [{"id": 99}], "limit": limit, "next_cursor": None, "warnings": []}
+
+    def reparse_video_knowledge(self, video_id, index_knowledge=True):
+        assert video_id == 2
+        return {"task": {"task_id": 8}, "knowledge_result": {"vector_tasks": [] if not index_knowledge else [1]}}
+
+    def update_knowledge_unit_lifecycle(self, unit_id, lifecycle_status=None, verification_status=None, valid_to=None, note=None, operator=None):
+        assert unit_id == 99
+        return {
+            "id": 99,
+            "lifecycle_status": lifecycle_status,
+            "verification_status": verification_status,
+            "valid_to": valid_to.isoformat() if valid_to else None,
+            "note": note,
+            "operator": operator,
+            "vector_tasks": [{"task_id": 11}],
+        }
+
+    def list_knowledge_conflicts(self, subject_key=None, limit=50):
+        return {"items": [{"conflict_group_id": "cg1", "subject_key": subject_key}], "limit": limit, "next_cursor": None, "filters": {"subject_key": subject_key} if subject_key else {}, "warnings": []}
+
+    def expire_due_knowledge_units(self, now=None, limit=500):
+        return {"expired_count": 1, "limit": limit, "as_of": now.isoformat() if now else None, "items": [{"id": 99}], "vector_tasks": [{"task_id": 12}]}
+
+    def list_knowledge_unit_lifecycle_audits(self, unit_id, limit=50):
+        assert unit_id == 99
+        return {"knowledge_unit_id": unit_id, "items": [{"id": 1, "to_lifecycle_status": "RETIRED"}], "limit": limit, "next_cursor": None, "warnings": []}
+
+    def get_current_subject_state(self, subject_key, domain=None, limit=20):
+        return {"subject_key": subject_key, "domain": domain, "items": [], "limit": limit, "next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": []}
+
+    def get_subject_history(self, subject_key, domain=None, limit=50):
+        return {"subject_key": subject_key, "domain": domain, "items": [], "limit": limit, "next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": []}
 
     def get_video_frame_image_path(self, video_id, frame_index):
         assert video_id == 2
@@ -119,6 +171,21 @@ def test_content_task_and_video_api(monkeypatch):
     deleted = client.delete("/api/v1/content/videos/2/summary")
     segments = client.get("/api/v1/content/videos/2/segments")
     events = client.get("/api/v1/content/videos/2/events")
+    chapters = client.get("/api/v1/content/videos/2/chapters")
+    chapter = client.get("/api/v1/content/videos/2/chapters/10")
+    knowledge = client.get("/api/v1/content/videos/2/knowledge", params={"subject_key": "券商"})
+    knowledge_alias = client.get("/api/v1/content/videos/2/knowledge-units", params={"subject_key": "券商"})
+    unit = client.get("/api/v1/content/knowledge/99")
+    unit_alias = client.get("/api/v1/content/knowledge-units/99")
+    search = client.post("/api/v1/content/knowledge/search", json={"query": "券商", "limit": 3})
+    reparse = client.post("/api/v1/content/videos/2/reparse", json={"index_knowledge": False})
+    lifecycle = client.patch("/api/v1/content/knowledge/99/lifecycle", json={"lifecycle_status": "RETIRED", "verification_status": "REJECTED", "note": "人工下线", "operator": "admin"})
+    lifecycle_alias = client.patch("/api/v1/content/knowledge-units/99/lifecycle", json={"lifecycle_status": "ACTIVE", "verification_status": "VERIFIED"})
+    lifecycle_audits = client.get("/api/v1/content/knowledge-units/99/lifecycle-audits")
+    lifecycle_sweep = client.post("/api/v1/content/knowledge/lifecycle/sweep", json={"limit": 10})
+    conflicts = client.get("/api/v1/content/knowledge/conflicts", params={"subject_key": "券商"})
+    current = client.get("/api/v1/content/knowledge/subjects/券商/current", params={"domain": "COMPANY"})
+    history = client.get("/api/v1/content/knowledge/subjects/券商/history")
     frame = client.get("/api/v1/content/videos/2/frames/1/image")
     frame_by_filename = client.get("/api/v1/content/video-frames/BVTEST123/BVTEST123_000001.jpg")
     assert task.status_code == 200
@@ -128,15 +195,66 @@ def test_content_task_and_video_api(monkeypatch):
     assert deleted.status_code == 200
     assert segments.status_code == 200
     assert events.status_code == 200
+    assert chapters.status_code == 200
+    assert chapter.status_code == 200
+    assert knowledge.status_code == 200
+    assert knowledge_alias.status_code == 200
+    assert unit.status_code == 200
+    assert unit_alias.status_code == 200
+    assert search.status_code == 200
+    assert reparse.status_code == 200
+    assert lifecycle.status_code == 200
+    assert lifecycle_alias.status_code == 200
+    assert lifecycle_audits.status_code == 200
+    assert lifecycle_sweep.status_code == 200
+    assert conflicts.status_code == 200
+    assert current.status_code == 200
+    assert history.status_code == 200
     assert frame.status_code == 200
     assert frame_by_filename.status_code == 200
     assert task.json()["stage"] == "asr"
     assert videos.json()["items"][0]["bvid"] == "BVTEST123"
+    assert videos.json()["limit"] == 50
+    assert videos.json()["next_cursor"] is None
     assert video.json()["video"]["title"] == "测试视频"
     assert document.json()["content"].startswith("# 测试视频")
     assert deleted.json()["deleted"] is True
     assert segments.json()["segments"][0]["text"] == "测试"
     assert events.json()["events"][0]["event_type"] == "OPINION"
+    assert chapters.json()["chapters"][0]["title"] == "章节"
+    assert chapters.json()["items"][0]["title"] == "章节"
+    assert chapters.json()["limit"] == 200
+    assert knowledge.json()["items"][0]["subject_key"] == "券商"
+    assert knowledge.json()["next_cursor"] is None
+    assert knowledge.json()["filters"]["subject_key"] == "券商"
+    assert unit.json()["canonical_statement"] == "知识"
+    assert unit_alias.json()["canonical_statement"] == "知识"
+    assert search.json()["limit"] == 3
+    assert reparse.json()["task"]["task_id"] == 8
+    assert lifecycle.json()["lifecycle_status"] == "RETIRED"
+    assert lifecycle.json()["operator"] == "admin"
+    assert lifecycle_alias.json()["lifecycle_status"] == "ACTIVE"
+    assert lifecycle_audits.json()["items"][0]["to_lifecycle_status"] == "RETIRED"
+    assert lifecycle_sweep.json()["expired_count"] == 1
+    assert conflicts.json()["items"][0]["conflict_group_id"] == "cg1"
+    assert current.json()["domain"] == "COMPANY"
+    assert current.json()["filters"]["subject_key"] == "券商"
+    assert history.json()["subject_key"] == "券商"
+
+
+def test_content_video_knowledge_contract_validation(monkeypatch):
+    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    oversized = client.get("/api/v1/content/videos", params={"limit": 999})
+    invalid_kind = client.get("/api/v1/content/videos/2/knowledge", params={"knowledge_kind": "unknown"})
+    invalid_search = client.post("/api/v1/content/knowledge/search", json={"query": "券商", "filters": {"lifecycle_status": "bad"}})
+
+    assert oversized.status_code == 200
+    assert oversized.json()["limit"] == 200
+    assert "limit_clamped_to_200" in oversized.json()["warnings"]
+    assert invalid_kind.status_code == 400
+    assert invalid_kind.json()["detail"] == "invalid knowledge_kind: unknown"
+    assert invalid_search.status_code == 400
+    assert invalid_search.json()["detail"] == "invalid lifecycle_status: bad"
 
 
 def test_content_summarize_api(monkeypatch):

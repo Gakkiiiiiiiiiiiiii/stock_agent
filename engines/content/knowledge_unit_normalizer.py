@@ -21,6 +21,8 @@ class KnowledgeUnitNormalizer:
             canonical = self._canonicalize(statement)
             entities = self._normalize_entities(unit, metadata)
             subject = self._infer_subject(unit, entities)
+            if not subject.get("subject_key"):
+                continue
             content_basis = "|".join(
                 [
                     str(unit.get("chapter_index") or 0),
@@ -36,6 +38,9 @@ class KnowledgeUnitNormalizer:
             semantic_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             uid_prefix = str(metadata.get("bvid") or metadata.get("platform_video_id") or metadata.get("platform") or "video")
             item = dict(unit)
+            verification_status = unit.get("verification_status") or "SOURCE_CONFIRMED"
+            if self._low_evidence_quality(unit.get("evidence") or []):
+                verification_status = "NEEDS_REVIEW"
             item.update(
                 {
                     "knowledge_uid": f"ku_{uid_prefix}_{index:04d}_{content_hash[:10]}",
@@ -51,7 +56,7 @@ class KnowledgeUnitNormalizer:
                     "conflict_key": self._conflict_key(unit, subject),
                     "scope_type": unit.get("scope_type") or subject.get("subject_type"),
                     "scope_key": unit.get("scope_key") or subject.get("subject_key"),
-                    "verification_status": "SOURCE_CONFIRMED",
+                    "verification_status": verification_status,
                     "extractor_version": unit.get("extractor_version") or "v3.0-rule",
                     "schema_version": "v1",
                     "as_of_time": unit.get("as_of_time") or source_date,
@@ -59,6 +64,19 @@ class KnowledgeUnitNormalizer:
             )
             normalized.append(item)
         return normalized
+
+    @staticmethod
+    def _low_evidence_quality(evidence: list[dict]) -> bool:
+        if not evidence:
+            return True
+        primary = evidence[0]
+        has_time_range = primary.get("start_ms") is not None and primary.get("end_ms") is not None
+        confidence = primary.get("confidence_score")
+        try:
+            low_confidence = confidence is not None and float(confidence) < 0.45
+        except (TypeError, ValueError):
+            low_confidence = False
+        return (not has_time_range) or low_confidence
 
     def _normalize_entities(self, unit: dict, metadata: dict) -> list[dict]:
         text = f"{unit.get('statement') or ''} {unit.get('evidence_text') or ''}"
@@ -122,8 +140,7 @@ class KnowledgeUnitNormalizer:
                     "subject_key": entity.get("entity_key") or entity.get("ticker") or entity.get("entity_name"),
                     "subject_name": entity.get("entity_name"),
                 }
-        domain = str(unit.get("primary_domain") or "GENERAL")
-        return {"subject_type": domain, "subject_key": domain, "subject_name": domain}
+        return {}
 
     @staticmethod
     def _predicate_key(unit: dict) -> str:

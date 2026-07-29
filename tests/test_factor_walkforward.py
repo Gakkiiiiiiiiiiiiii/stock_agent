@@ -41,6 +41,8 @@ def _neutralize_seed_library(monkeypatch, tmp_path):
     monkeypatch.setenv("FACTOR_RESEARCH_MAX_WARMUP_DAYS", "20")
     monkeypatch.setenv("FACTOR_RESEARCH_DISCOVERY_DAYS", "30")
     monkeypatch.setenv("FACTOR_RESEARCH_FINAL_OOS_DAYS", "5")
+    monkeypatch.setenv("FACTOR_MINING_HORIZON_DAYS", "5")
+    monkeypatch.setenv("FACTOR_RECENT_ALPHA_ENABLED", "false")
     monkeypatch.setenv("FACTOR_PAPER_MINING_PANEL_DAYS", "60")
     monkeypatch.setenv("FACTOR_OOS_AUDIT_ROOT", str(tmp_path / "audit"))
     from financial_agent.research_config import get_research_config

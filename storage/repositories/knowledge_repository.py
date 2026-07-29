@@ -4,19 +4,21 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 
 from storage.db import session_scope
 from storage.models.knowledge import (
     KnowledgeEntityRelation,
     KnowledgeEvidence,
     KnowledgeExtractionRun,
+    KnowledgeLifecycleAudit,
     KnowledgeUnit,
     KnowledgeUnitRelation,
     VideoAnalysisDocument,
     VideoChapter,
 )
 from storage.repositories.vector_repository import VectorTaskRepository
+from storage.models.vector import VectorIndexMapping, VectorIndexTask
 
 
 def _dumps(value: object) -> str:
@@ -27,6 +29,18 @@ def _loads(value: str | None, default: object) -> object:
     if not value:
         return default
     return json.loads(value)
+
+
+def _parse_dt(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 class KnowledgeRepository:
@@ -167,6 +181,11 @@ class KnowledgeRepository:
                         attributes_json=_dumps(relation.get("attributes") or {}),
                     )
                 )
+                if str(relation.get("relation_type") or "").upper() == "SUPERSEDES":
+                    target = session.get(KnowledgeUnit, target_id)
+                    if target is not None:
+                        target.superseded_by_unit_id = source_id
+                        session.add(target)
 
             return {
                 "video_id": video_id,
@@ -180,9 +199,26 @@ class KnowledgeRepository:
             rows = session.execute(select(VideoChapter).where(VideoChapter.video_id == video_id).order_by(VideoChapter.chapter_index.asc())).scalars()
             return [self._serialize_chapter(row) for row in rows]
 
-    def list_units_for_video(self, video_id: int) -> list[dict]:
+    def get_chapter(self, video_id: int, chapter_id: int) -> dict | None:
         with session_scope() as session:
-            rows = list(session.execute(select(KnowledgeUnit).where(KnowledgeUnit.source_video_id == video_id).order_by(KnowledgeUnit.id.asc())).scalars())
+            row = session.get(VideoChapter, chapter_id)
+            if row is None or row.video_id != video_id:
+                return None
+            payload = self._serialize_chapter(row)
+            payload["knowledge_units"] = self.list_units_for_video(
+                video_id,
+                filters={"source_chapter_id": chapter_id},
+            )
+            return payload
+
+    def list_units_for_video(self, video_id: int, filters: dict | None = None, limit: int | None = None) -> list[dict]:
+        with session_scope() as session:
+            statement = select(KnowledgeUnit).where(KnowledgeUnit.source_video_id == video_id)
+            statement = self._apply_unit_filters(statement, filters)
+            statement = statement.order_by(KnowledgeUnit.id.asc())
+            if limit is not None:
+                statement = statement.limit(int(limit))
+            rows = list(session.execute(statement).scalars())
             if not rows:
                 return []
             unit_ids = [row.id for row in rows]
@@ -214,7 +250,34 @@ class KnowledgeRepository:
                         "confidence_score": entity.confidence_score,
                     }
                 )
-            return [self._serialize_unit(row, evidence_by_unit.get(row.id, []), entity_by_unit.get(row.id, [])) for row in rows]
+            vector_status = self._vector_status_for_units(session, unit_ids)
+            return [
+                self._serialize_unit(
+                    row,
+                    evidence_by_unit.get(row.id, []),
+                    entity_by_unit.get(row.id, []),
+                    vector_status.get(row.id, {}),
+                )
+                for row in rows
+            ]
+
+    def search_units(self, query: str, filters: dict | None = None, limit: int = 20) -> list[dict]:
+        query = str(query or "").strip()
+        with session_scope() as session:
+            statement = select(KnowledgeUnit)
+            statement = self._apply_unit_filters(statement, filters)
+            if query:
+                like_query = f"%{query.lower()}%"
+                statement = statement.where(
+                    or_(
+                        func.lower(KnowledgeUnit.canonical_statement).like(like_query),
+                        func.lower(KnowledgeUnit.statement).like(like_query),
+                        func.lower(KnowledgeUnit.subject_name).like(like_query),
+                        func.lower(KnowledgeUnit.subject_key).like(like_query),
+                    )
+                )
+            rows = list(session.execute(statement.order_by(KnowledgeUnit.as_of_time.desc(), KnowledgeUnit.id.desc()).limit(limit)).scalars())
+            return self._serialize_units_with_children(session, rows)
 
     def get_unit(self, unit_id: int) -> dict | None:
         with session_scope() as session:
@@ -247,7 +310,315 @@ class KnowledgeRepository:
                 }
                 for entity in entity_rows
             ]
-            return self._serialize_unit(row, evidence, entities)
+            vector_status = self._vector_status_for_units(session, [unit_id]).get(unit_id, {})
+            payload = self._serialize_unit(row, evidence, entities, vector_status)
+            payload["relations"] = self._relations_for_unit(session, unit_id)
+            return payload
+
+    def update_unit_lifecycle(
+        self,
+        unit_id: int,
+        *,
+        lifecycle_status: str | None = None,
+        verification_status: str | None = None,
+        valid_to: datetime | None = None,
+        attributes_patch: dict | None = None,
+        reason: str | None = None,
+        operator: str | None = None,
+    ) -> dict | None:
+        with session_scope() as session:
+            row = session.get(KnowledgeUnit, unit_id)
+            if row is None:
+                return None
+            before_lifecycle = row.lifecycle_status
+            before_verification = row.verification_status
+            before_valid_to = row.valid_to
+            if lifecycle_status:
+                row.lifecycle_status = lifecycle_status
+            if verification_status:
+                row.verification_status = verification_status
+            if valid_to is not None:
+                row.valid_to = valid_to
+            if attributes_patch:
+                attrs = _loads(row.attributes_json, {})
+                attrs.update(attributes_patch)
+                row.attributes_json = _dumps(attrs)
+            row.updated_at = datetime.now(UTC)
+            session.add(row)
+            session.flush()
+            audit = KnowledgeLifecycleAudit(
+                knowledge_unit_id=row.id,
+                from_lifecycle_status=before_lifecycle,
+                to_lifecycle_status=row.lifecycle_status,
+                from_verification_status=before_verification,
+                to_verification_status=row.verification_status,
+                valid_to_before=before_valid_to,
+                valid_to_after=row.valid_to,
+                reason=reason,
+                operator=operator,
+            )
+            session.add(audit)
+            session.flush()
+            payload = self._serialize_units_with_children(session, [row])[0]
+            payload["lifecycle_audit"] = self._serialize_lifecycle_audit(audit)
+            return payload
+
+    def record_lifecycle_vector_tasks(self, audit_id: int, vector_tasks: list[dict]) -> None:
+        with session_scope() as session:
+            row = session.get(KnowledgeLifecycleAudit, audit_id)
+            if row is None:
+                return
+            row.vector_task_ids_json = _dumps([task.get("task_id") for task in vector_tasks if task.get("task_id")])
+            session.add(row)
+
+    def expire_due_units(self, now: datetime | None = None, limit: int = 500, *, reason: str = "valid_to elapsed", operator: str = "system") -> list[dict]:
+        now = now or datetime.now(UTC)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        terminal_statuses = {"EXPIRED", "REJECTED", "RETIRED"}
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(KnowledgeUnit)
+                    .where(
+                        KnowledgeUnit.valid_to.is_not(None),
+                        KnowledgeUnit.valid_to < now,
+                        KnowledgeUnit.lifecycle_status.not_in(terminal_statuses),
+                    )
+                    .order_by(KnowledgeUnit.valid_to.asc(), KnowledgeUnit.id.asc())
+                    .limit(limit)
+                ).scalars()
+            )
+            audits_by_unit: dict[int, KnowledgeLifecycleAudit] = {}
+            for row in rows:
+                audit = KnowledgeLifecycleAudit(
+                    knowledge_unit_id=row.id,
+                    from_lifecycle_status=row.lifecycle_status,
+                    to_lifecycle_status="EXPIRED",
+                    from_verification_status=row.verification_status,
+                    to_verification_status=row.verification_status,
+                    valid_to_before=row.valid_to,
+                    valid_to_after=row.valid_to,
+                    reason=reason,
+                    operator=operator,
+                )
+                row.lifecycle_status = "EXPIRED"
+                row.updated_at = datetime.now(UTC)
+                session.add(row)
+                session.add(audit)
+                session.flush()
+                audits_by_unit[row.id] = audit
+            payloads = self._serialize_units_with_children(session, rows)
+            for payload in payloads:
+                audit = audits_by_unit.get(int(payload["id"]))
+                if audit is not None:
+                    payload["lifecycle_audit"] = self._serialize_lifecycle_audit(audit)
+            return payloads
+
+    def list_unit_lifecycle_audits(self, unit_id: int, limit: int = 50) -> list[dict]:
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(KnowledgeLifecycleAudit)
+                    .where(KnowledgeLifecycleAudit.knowledge_unit_id == unit_id)
+                    .order_by(KnowledgeLifecycleAudit.created_at.desc(), KnowledgeLifecycleAudit.id.desc())
+                    .limit(limit)
+                ).scalars()
+            )
+            return [self._serialize_lifecycle_audit(row) for row in rows]
+
+    def list_conflicts(self, subject_key: str | None = None, limit: int = 50) -> list[dict]:
+        with session_scope() as session:
+            statement = (
+                select(KnowledgeUnit.conflict_group_id)
+                .where(KnowledgeUnit.conflict_group_id.is_not(None))
+                .group_by(KnowledgeUnit.conflict_group_id)
+                .having(func.count(KnowledgeUnit.id) > 1)
+                .order_by(func.max(KnowledgeUnit.as_of_time).desc())
+                .limit(limit)
+            )
+            if subject_key:
+                statement = statement.where(KnowledgeUnit.subject_key == subject_key)
+            group_ids = [row[0] for row in session.execute(statement).all()]
+            if not group_ids:
+                return []
+            rows = list(
+                session.execute(
+                    select(KnowledgeUnit)
+                    .where(KnowledgeUnit.conflict_group_id.in_(group_ids))
+                    .order_by(KnowledgeUnit.conflict_group_id.asc(), KnowledgeUnit.as_of_time.desc(), KnowledgeUnit.id.desc())
+                ).scalars()
+            )
+            units = self._serialize_units_with_children(session, rows)
+        by_group: dict[str, list[dict]] = {}
+        for unit in units:
+            by_group.setdefault(str(unit.get("conflict_group_id") or ""), []).append(unit)
+        return [
+            {
+                "conflict_group_id": group_id,
+                "conflict_key": values[0].get("conflict_key") if values else None,
+                "subject_key": values[0].get("subject_key") if values else None,
+                "recommended_action": self._recommended_conflict_action(values),
+                "units": values,
+            }
+            for group_id, values in by_group.items()
+        ]
+
+    @staticmethod
+    def _recommended_conflict_action(units: list[dict]) -> str:
+        kinds = {str(unit.get("knowledge_kind") or "") for unit in units}
+        if "ACTION" in kinds:
+            return "review_or_retire_stale_action"
+        if "FORECAST" in kinds:
+            return "keep_forecast_history"
+        if kinds & {"METHOD", "CONCEPT"}:
+            return "manual_review_before_supersede"
+        if "FACT" in kinds:
+            return "require_evidence_verification"
+        return "keep_latest_as_current"
+
+    def get_current_subject_state(self, subject_key: str, domain: str | None = None, limit: int = 20) -> dict:
+        filters = {
+            "subject_key": subject_key,
+            "lifecycle_status": ["ACTIVE", "VALIDATED"],
+        }
+        if domain:
+            filters["primary_domain"] = domain
+        units = self.search_units("", filters=filters, limit=limit)
+        current = [
+            unit
+            for unit in units
+            if unit.get("valid_to") is None or _parse_dt(unit.get("valid_to")) is None or _parse_dt(unit.get("valid_to")) >= datetime.now(UTC)
+        ]
+        return {"subject_key": subject_key, "domain": domain, "items": current[:limit]}
+
+    def get_subject_history(self, subject_key: str, domain: str | None = None, limit: int = 50) -> dict:
+        filters = {"subject_key": subject_key}
+        if domain:
+            filters["primary_domain"] = domain
+        return {"subject_key": subject_key, "domain": domain, "items": self.search_units("", filters=filters, limit=limit)}
+
+    @classmethod
+    def _apply_unit_filters(cls, statement, filters: dict | None):
+        allowed = {
+            "source_chapter_id": KnowledgeUnit.source_chapter_id,
+            "primary_domain": KnowledgeUnit.primary_domain,
+            "knowledge_kind": KnowledgeUnit.knowledge_kind,
+            "temporal_class": KnowledgeUnit.temporal_class,
+            "lifecycle_status": KnowledgeUnit.lifecycle_status,
+            "verification_status": KnowledgeUnit.verification_status,
+            "subject_key": KnowledgeUnit.subject_key,
+            "subject_type": KnowledgeUnit.subject_type,
+            "predicate_key": KnowledgeUnit.predicate_key,
+            "scope_key": KnowledgeUnit.scope_key,
+            "conflict_group_id": KnowledgeUnit.conflict_group_id,
+        }
+        for key, value in (filters or {}).items():
+            column = allowed.get(key)
+            if column is None or value in (None, ""):
+                continue
+            if isinstance(value, list):
+                if value:
+                    statement = statement.where(column.in_(value))
+            else:
+                statement = statement.where(column == value)
+        if (filters or {}).get("valid_only"):
+            now = datetime.now(UTC)
+            statement = statement.where(or_(KnowledgeUnit.valid_to.is_(None), KnowledgeUnit.valid_to >= now))
+        return statement
+
+    def _serialize_units_with_children(self, session, rows: list[KnowledgeUnit]) -> list[dict]:
+        if not rows:
+            return []
+        unit_ids = [row.id for row in rows]
+        evidence_rows = list(session.execute(select(KnowledgeEvidence).where(KnowledgeEvidence.knowledge_unit_id.in_(unit_ids))).scalars())
+        entity_rows = list(session.execute(select(KnowledgeEntityRelation).where(KnowledgeEntityRelation.knowledge_unit_id.in_(unit_ids))).scalars())
+        evidence_by_unit: dict[int, list[dict]] = {}
+        entity_by_unit: dict[int, list[dict]] = {}
+        for evidence in evidence_rows:
+            evidence_by_unit.setdefault(evidence.knowledge_unit_id, []).append(self._serialize_evidence(evidence))
+        for entity in entity_rows:
+            entity_by_unit.setdefault(entity.knowledge_unit_id, []).append(self._serialize_entity(entity))
+        vector_status = self._vector_status_for_units(session, unit_ids)
+        return [self._serialize_unit(row, evidence_by_unit.get(row.id, []), entity_by_unit.get(row.id, []), vector_status.get(row.id, {})) for row in rows]
+
+    @staticmethod
+    def _serialize_evidence(evidence: KnowledgeEvidence) -> dict:
+        return {
+            "source_type": evidence.source_type,
+            "source_ref": evidence.source_ref,
+            "evidence_text": evidence.evidence_text,
+            "start_ms": evidence.start_ms,
+            "end_ms": evidence.end_ms,
+            "frame_id": evidence.frame_id,
+            "confidence_score": evidence.confidence_score,
+            "is_primary": evidence.is_primary,
+        }
+
+    @staticmethod
+    def _serialize_entity(entity: KnowledgeEntityRelation) -> dict:
+        return {
+            "entity_type": entity.entity_type,
+            "entity_key": entity.entity_key,
+            "entity_name": entity.entity_name,
+            "ticker": entity.ticker,
+            "relation_role": entity.relation_role,
+            "confidence_score": entity.confidence_score,
+        }
+
+    @staticmethod
+    def _vector_status_for_units(session, unit_ids: list[int]) -> dict[int, dict]:
+        if not unit_ids:
+            return {}
+        mappings = list(
+            session.execute(
+                select(VectorIndexMapping).where(
+                    VectorIndexMapping.postgres_table == "knowledge_unit",
+                    VectorIndexMapping.postgres_id.in_(unit_ids),
+                )
+            ).scalars()
+        )
+        tasks = list(
+            session.execute(
+                select(VectorIndexTask).where(
+                    VectorIndexTask.postgres_table == "knowledge_unit",
+                    VectorIndexTask.postgres_id.in_(unit_ids),
+                )
+            ).scalars()
+        )
+        result: dict[int, dict] = {unit_id: {"indexed_collections": [], "pending_tasks": [], "last_indexed_at": None} for unit_id in unit_ids}
+        for mapping in mappings:
+            payload = result.setdefault(mapping.postgres_id, {"indexed_collections": [], "pending_tasks": [], "last_indexed_at": None})
+            payload["indexed_collections"].append(mapping.qdrant_collection)
+            if mapping.last_indexed_at:
+                payload["last_indexed_at"] = mapping.last_indexed_at.isoformat()
+        for task in tasks:
+            if task.status in {"success"}:
+                continue
+            payload = result.setdefault(task.postgres_id, {"indexed_collections": [], "pending_tasks": [], "last_indexed_at": None})
+            payload["pending_tasks"].append({"task_id": task.id, "status": task.status, "target_collection": task.target_collection})
+        return result
+
+    @staticmethod
+    def _relations_for_unit(session, unit_id: int) -> list[dict]:
+        rows = list(
+            session.execute(
+                select(KnowledgeUnitRelation).where(
+                    or_(KnowledgeUnitRelation.source_unit_id == unit_id, KnowledgeUnitRelation.target_unit_id == unit_id)
+                )
+            ).scalars()
+        )
+        return [
+            {
+                "id": row.id,
+                "source_unit_id": row.source_unit_id,
+                "target_unit_id": row.target_unit_id,
+                "relation_type": row.relation_type,
+                "confidence_score": row.confidence_score,
+                "attributes": _loads(row.attributes_json, {}),
+            }
+            for row in rows
+        ]
 
     @staticmethod
     def _serialize_chapter(row: VideoChapter) -> dict:
@@ -269,7 +640,24 @@ class KnowledgeRepository:
         }
 
     @staticmethod
-    def _serialize_unit(row: KnowledgeUnit, evidence: list[dict], entities: list[dict]) -> dict:
+    def _serialize_lifecycle_audit(row: KnowledgeLifecycleAudit) -> dict:
+        return {
+            "id": row.id,
+            "knowledge_unit_id": row.knowledge_unit_id,
+            "from_lifecycle_status": row.from_lifecycle_status,
+            "to_lifecycle_status": row.to_lifecycle_status,
+            "from_verification_status": row.from_verification_status,
+            "to_verification_status": row.to_verification_status,
+            "valid_to_before": row.valid_to_before.isoformat() if row.valid_to_before else None,
+            "valid_to_after": row.valid_to_after.isoformat() if row.valid_to_after else None,
+            "reason": row.reason,
+            "operator": row.operator,
+            "vector_task_ids": _loads(row.vector_task_ids_json, []),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    @staticmethod
+    def _serialize_unit(row: KnowledgeUnit, evidence: list[dict], entities: list[dict], vector_status: dict | None = None) -> dict:
         return {
             "id": row.id,
             "knowledge_uid": row.knowledge_uid,
@@ -304,11 +692,13 @@ class KnowledgeRepository:
             "scope_key": row.scope_key,
             "conflict_key": row.conflict_key,
             "conflict_group_id": row.conflict_group_id,
+            "superseded_by_unit_id": row.superseded_by_unit_id,
             "content_hash": row.content_hash,
             "semantic_hash": row.semantic_hash,
             "attributes": _loads(row.attributes_json, {}),
             "evidence": evidence,
             "entities": entities,
+            "vector_status": vector_status or {},
         }
 
 
@@ -378,7 +768,18 @@ class KnowledgeExtractionRunRepository:
             session.refresh(row)
             return row
 
-    def finish(self, run_id: int, *, status: str, stage: str, chapter_count: int, knowledge_unit_count: int, degraded: bool = False, error_message: str | None = None) -> None:
+    def finish(
+        self,
+        run_id: int,
+        *,
+        status: str,
+        stage: str,
+        chapter_count: int,
+        knowledge_unit_count: int,
+        degraded: bool = False,
+        error_message: str | None = None,
+        metrics: dict | None = None,
+    ) -> None:
         with session_scope() as session:
             row = session.get(KnowledgeExtractionRun, run_id)
             if row is None:
@@ -388,9 +789,37 @@ class KnowledgeExtractionRunRepository:
             row.chapter_count = chapter_count
             row.knowledge_unit_count = knowledge_unit_count
             row.degraded = degraded
+            row.metrics_json = _dumps(metrics or {})
             row.error_message = error_message
             row.completed_at = datetime.now(UTC)
             session.add(row)
+
+    def latest_for_video(self, video_id: int) -> dict | None:
+        with session_scope() as session:
+            row = session.execute(
+                select(KnowledgeExtractionRun)
+                .where(KnowledgeExtractionRun.video_id == video_id)
+                .order_by(KnowledgeExtractionRun.started_at.desc(), KnowledgeExtractionRun.id.desc())
+                .limit(1)
+            ).scalars().first()
+            return self._serialize(row) if row else None
+
+    @staticmethod
+    def _serialize(row: KnowledgeExtractionRun) -> dict:
+        return {
+            "id": row.id,
+            "run_uid": row.run_uid,
+            "video_id": row.video_id,
+            "status": row.status,
+            "stage": row.stage,
+            "chapter_count": row.chapter_count,
+            "knowledge_unit_count": row.knowledge_unit_count,
+            "degraded": row.degraded,
+            "metrics": _loads(row.metrics_json, {}),
+            "error_message": row.error_message,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "completed_at": row.completed_at.isoformat() if row.completed_at else None,
+        }
 
 
 class KnowledgeVectorTaskService:
@@ -410,6 +839,33 @@ class KnowledgeVectorTaskService:
             collection = self.route_collection(unit)
             task = repo.enqueue("knowledge_unit", int(unit_id), collection)
             tasks.append({"knowledge_unit_id": unit_id, "task_id": task.id, "target_collection": collection})
+        return tasks
+
+    def enqueue_unit_sync(self, unit: dict, *, delete: bool = False) -> list[dict]:
+        unit_id = unit.get("id")
+        if not unit_id:
+            return []
+        vector_status = unit.get("vector_status") or {}
+        indexed_collections = vector_status.get("indexed_collections") or []
+        routed_collection = self.route_collection(unit)
+        if delete or unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            collections = list(dict.fromkeys([*indexed_collections, routed_collection]))
+            task_type = "delete"
+        else:
+            collections = [routed_collection]
+            task_type = "upsert"
+        repo = VectorTaskRepository()
+        tasks = []
+        for collection in collections:
+            task = repo.enqueue("knowledge_unit", int(unit_id), collection, task_type=task_type)
+            tasks.append(
+                {
+                    "knowledge_unit_id": unit_id,
+                    "task_id": task.id,
+                    "task_type": task_type,
+                    "target_collection": collection,
+                }
+            )
         return tasks
 
     @classmethod

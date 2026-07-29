@@ -174,14 +174,37 @@ def test_hybrid_retriever_prefers_recent_video_sources_for_market_opportunity_qu
     result = retriever.retrieve("最近有什么值得关注的板块方向", top_k=2)
     assert result["contexts"][0]["title"] == "最近视频观点"
     assert result["plan"]["task_type"] == "market_opportunity_scan"
-    assert result["plan"]["preferred_source_types"][0] == "bilibili_video_viewpoint"
+    assert result["plan"]["preferred_source_types"][0] == "video_knowledge_unit"
+    assert result["plan"]["collections"][0] == "financial_video_action_v1_bge_m3"
 
 
 def test_build_retrieval_plan_marks_recent_market_opportunity_queries():
     plan = build_retrieval_plan("最近有什么比较好的板块或者赛道可以进行投资", top_k=3)
     assert plan["task_type"] == "market_opportunity_scan"
+    assert "video_knowledge_unit" in plan["preferred_source_types"]
     assert "bilibili_video_summary" in plan["preferred_source_types"]
     assert plan["top_n_retrieve"] >= 18
+
+
+def test_build_retrieval_plan_routes_video_knowledge_by_intent():
+    assert build_retrieval_plan("这个方法框架怎么判断")["collections"][0] == "financial_video_durable_v1_bge_m3"
+    assert build_retrieval_plan("券商当前怎么看")["collections"][0] == "financial_video_timed_v1_bge_m3"
+    assert build_retrieval_plan("券商仓位怎么操作")["collections"][0] == "financial_video_action_v1_bge_m3"
+
+
+def test_hybrid_retriever_filters_expired_video_knowledge_for_current_query():
+    contexts = [
+        {"title": "过期状态", "source_type": "video_knowledge_unit", "valid_to": "2026-01-01T00:00:00"},
+        {"title": "有效状态", "source_type": "video_knowledge_unit", "valid_to": None},
+    ]
+    filtered = HybridRetriever._filter_expired_contexts(contexts, {"task_type": "current_state"})
+    assert [item["title"] for item in filtered] == ["有效状态"]
+
+
+def test_hybrid_retriever_keeps_expired_video_knowledge_for_history_query():
+    contexts = [{"title": "过期状态", "source_type": "video_knowledge_unit", "valid_to": "2026-01-01T00:00:00"}]
+    filtered = HybridRetriever._filter_expired_contexts(contexts, {"task_type": "historical_review"})
+    assert filtered == contexts
 
 
 def test_reranker_candidate_fields_preserved():

@@ -6,6 +6,7 @@ import re
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
+from engines.content.knowledge_schema import KnowledgeUnitSchemaValidator
 
 
 logger = logging.getLogger(__name__)
@@ -15,9 +16,12 @@ class KnowledgeUnitExtractor:
     def __init__(self, model_client: AnalysisModelClient | None = None, max_llm_chapters: int = 30) -> None:
         self.model_client = model_client or AnalysisModelClient()
         self.max_llm_chapters = max_llm_chapters
+        self.schema_validator = KnowledgeUnitSchemaValidator()
+        self.last_validation_report: dict = {"accepted_count": 0, "rejected_count": 0, "repaired_count": 0, "rejection_reasons": []}
 
     def extract(self, metadata: dict, chapters: list[dict]) -> list[dict]:
         units: list[dict] = []
+        reports: list[dict] = []
         for index, chapter in enumerate(chapters):
             if chapter.get("chapter_type") == "ADVERTISEMENT":
                 continue
@@ -29,7 +33,10 @@ class KnowledgeUnitExtractor:
                     logger.warning("LLM 原子知识抽取失败，降级为规则抽取 chapter=%s", chapter.get("chapter_index"), exc_info=True)
             if not chapter_units:
                 chapter_units = self._extract_with_rules(chapter)
-            units.extend(chapter_units)
+            validation = self.schema_validator.validate_many(chapter_units, chapter=chapter)
+            reports.append({"chapter_index": chapter.get("chapter_index"), **validation.metrics})
+            units.extend(validation.valid_units)
+        self.last_validation_report = self._merge_validation_reports(reports)
         return units
 
     def _extract_with_llm(self, metadata: dict, chapter: dict) -> list[dict]:
@@ -97,6 +104,7 @@ class KnowledgeUnitExtractor:
             "knowledge_kind": kind,
             "temporal_class": None,
             "expression_type": "AUTHOR_EXPLICIT",
+            "predicate_key": self._predicate_for_rule(sentence, kind),
             "statement": sentence,
             "canonical_statement": re.sub(r"\s+", "", sentence),
             "claim_type": claim_type,
@@ -124,6 +132,22 @@ class KnowledgeUnitExtractor:
         return chapter_domain
 
     @staticmethod
+    def _predicate_for_rule(sentence: str, kind: str) -> str:
+        if "支撑" in sentence:
+            return "support_level"
+        if "压力" in sentence or "阻力" in sentence:
+            return "resistance_level"
+        if "加仓" in sentence:
+            return "increase_position"
+        if "减仓" in sentence:
+            return "reduce_position"
+        if "风险" in sentence or "证伪" in sentence:
+            return "risk_condition"
+        if "催化" in sentence or "驱动" in sentence:
+            return "catalyst"
+        return str(kind or "STATE").lower()
+
+    @staticmethod
     def _chapter_text(chapter: dict) -> str:
         return " ".join(str(window.get("transcript_text") or "") for window in chapter.get("windows") or [])
 
@@ -133,9 +157,10 @@ class KnowledgeUnitExtractor:
 
     @staticmethod
     def _evidence_for_sentence(sentence: str, chapter: dict) -> list[dict]:
+        evidence: list[dict] = []
         for window in chapter.get("windows") or []:
             if sentence in str(window.get("transcript_text") or ""):
-                return [
+                evidence.append(
                     {
                         "source_type": "ASR",
                         "source_ref": f"window_{window.get('window_index')}",
@@ -145,8 +170,23 @@ class KnowledgeUnitExtractor:
                         "confidence_score": window.get("confidence_score"),
                         "is_primary": True,
                     }
-                ]
-        return [
+                )
+                ocr_text = str(window.get("ocr_text") or "").strip()
+                if ocr_text and KnowledgeUnitExtractor._needs_visual_evidence(sentence):
+                    evidence.append(
+                        {
+                            "source_type": "OCR",
+                            "source_ref": f"window_{window.get('window_index')}",
+                            "evidence_text": ocr_text[:800],
+                            "start_ms": window.get("start_ms"),
+                            "end_ms": window.get("end_ms"),
+                            "frame_id": window.get("frame_id"),
+                            "confidence_score": window.get("ocr_confidence_score") or window.get("confidence_score"),
+                            "is_primary": False,
+                        }
+                    )
+                return evidence
+        evidence.append(
             {
                 "source_type": "ASR",
                 "source_ref": f"chapter_{chapter.get('chapter_index')}",
@@ -156,7 +196,21 @@ class KnowledgeUnitExtractor:
                 "confidence_score": chapter.get("confidence_score"),
                 "is_primary": True,
             }
-        ]
+        )
+        visual_text = KnowledgeUnitExtractor._chapter_visual_text(chapter).strip()
+        if visual_text and KnowledgeUnitExtractor._needs_visual_evidence(sentence):
+            evidence.append(
+                {
+                    "source_type": "OCR",
+                    "source_ref": f"chapter_{chapter.get('chapter_index')}",
+                    "evidence_text": visual_text[:800],
+                    "start_ms": chapter.get("start_ms"),
+                    "end_ms": chapter.get("end_ms"),
+                    "confidence_score": chapter.get("confidence_score"),
+                    "is_primary": False,
+                }
+            )
+        return evidence
 
     @staticmethod
     def _entities_from_chapter(chapter: dict, sentence: str) -> list[dict]:
@@ -241,6 +295,10 @@ class KnowledgeUnitExtractor:
         return unit
 
     @staticmethod
+    def _needs_visual_evidence(sentence: str) -> bool:
+        return any(token in sentence for token in ("图", "图表", "价格", "指标", "形态", "均线", "MACD", "支撑", "压力", "成交额", "K线"))
+
+    @staticmethod
     def _parse_json_array(content: str) -> list[dict]:
         text = content.strip()
         if text.startswith("```"):
@@ -253,3 +311,13 @@ class KnowledgeUnitExtractor:
             return []
         payload = json.loads(text[start : end + 1])
         return payload if isinstance(payload, list) else []
+
+    @staticmethod
+    def _merge_validation_reports(reports: list[dict]) -> dict:
+        merged = {"accepted_count": 0, "rejected_count": 0, "repaired_count": 0, "rejection_reasons": [], "chapters": reports}
+        for report in reports:
+            merged["accepted_count"] += int(report.get("accepted_count") or 0)
+            merged["rejected_count"] += int(report.get("rejected_count") or 0)
+            merged["repaired_count"] += int(report.get("repaired_count") or 0)
+            merged["rejection_reasons"].extend(report.get("rejection_reasons") or [])
+        return merged

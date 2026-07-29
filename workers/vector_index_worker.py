@@ -33,13 +33,18 @@ def process_one_task() -> bool:
                 task.target_collection,
                 {"postgres_table": "knowledge_unit", "postgres_id": unit["id"]},
             )
-            VectorMappingRepository().delete_for_record("knowledge_unit", unit["id"])
-            if unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            if task.task_type == "delete" or unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+                VectorMappingRepository().delete_for_record("knowledge_unit", unit["id"])
                 task_repo.mark_success(task.id)
                 return True
+            VectorMappingRepository().delete_for_record("knowledge_unit", unit["id"])
             text = "\n".join(
                 part
                 for part in [
+                    f"领域：{unit.get('primary_domain')} 类型：{unit.get('knowledge_kind')} 时间属性：{unit.get('temporal_class')}",
+                    f"主体：{unit.get('subject_name') or unit.get('subject_key')} 谓词：{unit.get('predicate_key')}" if unit.get("subject_name") or unit.get("subject_key") or unit.get("predicate_key") else "",
+                    f"时点：{unit.get('as_of_time')} 有效期：{unit.get('valid_from')} 至 {unit.get('valid_to')}",
+                    f"生命周期：{unit.get('lifecycle_status')} 验证：{unit.get('verification_status')}",
                     unit.get("canonical_statement") or unit.get("statement"),
                     f"条件：{unit.get('condition_text')}" if unit.get("condition_text") else "",
                     f"证伪：{unit.get('invalidation_text')}" if unit.get("invalidation_text") else "",
@@ -70,6 +75,7 @@ def process_one_task() -> bool:
                 "valid_to": unit.get("valid_to"),
                 "time_horizon": unit.get("time_horizon"),
                 "timeframe": unit.get("timeframe"),
+                "decay_half_life_days": unit.get("decay_half_life_days"),
                 "conflict_key": unit.get("conflict_key"),
                 "conflict_group_id": unit.get("conflict_group_id"),
                 "confidence": unit.get("extraction_confidence"),

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from datetime import UTC, datetime
+
 from qdrant_client.http import models
 
 from engines.retrieval.embedder import LocalChineseNgramEmbedder, build_embedder
@@ -57,7 +60,9 @@ class HybridRetriever:
         reranked = self._merge_candidate_fields(candidates, reranked)
         reranked = self._apply_hybrid_score(reranked)
         hydrated = self.hydrator.hydrate(reranked)
-        contexts = self._resolve_viewpoint_conflicts(hydrated)
+        contexts = self._filter_expired_contexts(hydrated, plan)
+        contexts = self._resolve_viewpoint_conflicts(contexts)
+        contexts = self._resolve_knowledge_conflicts(contexts)
         contexts = self._apply_source_priority(contexts, plan.get("preferred_source_types") or [])
         metadata = getattr(self.embedder, "metadata", None)
         if metadata is None:
@@ -126,6 +131,9 @@ class HybridRetriever:
             source_quality = float(payload.get("source_quality") or 0.5)
             freshness = float(payload.get("freshness_score") or cls._freshness_score(payload))
             status = cls._status_score(payload.get("status"))
+            if cls._is_expired(payload):
+                status = 0.0
+                freshness = 0.0
             item["final_score"] = round(
                 0.35 * dense
                 + 0.20 * bm25
@@ -182,9 +190,63 @@ class HybridRetriever:
 
     @staticmethod
     def _freshness_score(payload: dict) -> float:
+        if payload.get("source_type") == "video_knowledge_unit":
+            as_of = HybridRetriever._parse_datetime(payload.get("source_date") or payload.get("as_of_time"))
+            half_life = float(payload.get("decay_half_life_days") or 0.0)
+            if as_of and half_life > 0:
+                age_days = max((datetime.now(UTC) - as_of).total_seconds() / 86400, 0.0)
+                return max(min(math.pow(0.5, age_days / half_life), 1.0), 0.0)
+            return 0.8 if not payload.get("valid_to") else 0.6
         if payload.get("valid_to"):
             return 0.2
         return 0.7
+
+    @classmethod
+    def _filter_expired_contexts(cls, contexts: list[dict], plan: dict) -> list[dict]:
+        task_type = plan.get("task_type")
+        if task_type not in {"current_state", "trading_decision", "market_opportunity_scan", "strategy_question"}:
+            return contexts
+        return [item for item in contexts if not cls._is_expired(item.get("record") or item)]
+
+    @classmethod
+    def _resolve_knowledge_conflicts(cls, contexts: list[dict]) -> list[dict]:
+        best_by_group: dict[str, dict] = {}
+        passthrough: list[dict] = []
+        for item in contexts:
+            record = item.get("record") or {}
+            group_id = record.get("conflict_group_id") or (item.get("payload") or {}).get("conflict_group_id")
+            if item.get("source_type") != "video_knowledge_unit" or not group_id:
+                passthrough.append(item)
+                continue
+            current = best_by_group.get(str(group_id))
+            if current is None or cls._knowledge_conflict_rank(item) > cls._knowledge_conflict_rank(current):
+                best_by_group[str(group_id)] = item
+        return passthrough + list(best_by_group.values())
+
+    @staticmethod
+    def _knowledge_conflict_rank(item: dict) -> tuple[float, int]:
+        record = item.get("record") or {}
+        status = HybridRetriever._status_score(record.get("status"))
+        final_score = float(item.get("final_score") or 0.0)
+        source_ts = int(item.get("source_timestamp") or 0)
+        return (status + final_score, source_ts)
+
+    @classmethod
+    def _is_expired(cls, payload: dict) -> bool:
+        valid_to = cls._parse_datetime(payload.get("valid_to"))
+        return valid_to is not None and valid_to < datetime.now(UTC)
+
+    @staticmethod
+    def _parse_datetime(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)
 
     @staticmethod
     def _source_priority_bonus(source_type: str | None, priority_map: dict[str, int]) -> float:

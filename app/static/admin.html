@@ -848,6 +848,10 @@
       display: grid;
       gap: 6px;
     }
+    .analysis-item.high-risk {
+      border-color: rgba(255, 176, 32, 0.65);
+      background: rgba(255, 176, 32, 0.07);
+    }
     .analysis-item-title {
       font-size: 12px;
       font-weight: 600;
@@ -1038,6 +1042,55 @@
             </div>
             <div class="analysis-grid">
               <div class="analysis-card">
+                <h4>Knowledge Units</h4>
+                <div class="actions" style="margin-bottom:8px;">
+                  <input id="knowledgeSubjectFilter" placeholder="主体" style="max-width:120px;" />
+                  <select id="knowledgeDomainFilter">
+                    <option value="">领域</option>
+                    <option value="MARKET">MARKET</option>
+                    <option value="INDUSTRY">INDUSTRY</option>
+                    <option value="COMPANY">COMPANY</option>
+                    <option value="MACRO">MACRO</option>
+                    <option value="TRADING">TRADING</option>
+                    <option value="RISK">RISK</option>
+                  </select>
+                  <select id="knowledgeKindFilter">
+                    <option value="">类型</option>
+                    <option value="METHOD">METHOD</option>
+                    <option value="CONCEPT">CONCEPT</option>
+                    <option value="CAUSAL_THESIS">THESIS</option>
+                    <option value="STATE">STATE</option>
+                    <option value="FACT">FACT</option>
+                    <option value="FORECAST">FORECAST</option>
+                    <option value="ACTION">ACTION</option>
+                    <option value="RISK_CONDITION">RISK</option>
+                  </select>
+                  <select id="knowledgeTemporalFilter">
+                    <option value="">时间类型</option>
+                    <option value="DURABLE">DURABLE</option>
+                    <option value="CYCLICAL">CYCLICAL</option>
+                    <option value="SNAPSHOT">SNAPSHOT</option>
+                    <option value="EVENT_BOUND">EVENT_BOUND</option>
+                  </select>
+                  <select id="knowledgeLifecycleFilter">
+                    <option value="">生命周期</option>
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="EXPIRED">EXPIRED</option>
+                    <option value="SUPERSEDED">SUPERSEDED</option>
+                    <option value="REJECTED">REJECTED</option>
+                    <option value="RETIRED">RETIRED</option>
+                  </select>
+                  <select id="knowledgeVerificationFilter">
+                    <option value="">验证</option>
+                    <option value="SOURCE_CONFIRMED">SOURCE_CONFIRMED</option>
+                    <option value="NEEDS_REVIEW">NEEDS_REVIEW</option>
+                    <option value="VERIFIED">VERIFIED</option>
+                    <option value="REJECTED">REJECTED</option>
+                  </select>
+                </div>
+                <div id="videoKnowledgeList" class="analysis-list"></div>
+              </div>
+              <div class="analysis-card">
                 <h4>Chapter Chunks</h4>
                 <div id="videoChunkList" class="analysis-list"></div>
               </div>
@@ -1212,6 +1265,7 @@
       activeVideoItem: null,
       activeVideoDetail: null,
       activeVideoDocument: null,
+      knowledgeFilters: { subject: "", domain: "", kind: "", temporal: "", lifecycle: "", verification: "" },
       videoSummaryView: "preview",
       videoList: [],
       activeSkill: null,
@@ -1244,6 +1298,10 @@
     $("deleteVideoSummaryButton").addEventListener("click", deleteActiveVideoSummary);
     $("videoSummaryPreviewTab").addEventListener("click", () => setVideoSummaryView("preview"));
     $("videoSummarySourceTab").addEventListener("click", () => setVideoSummaryView("source"));
+    ["knowledgeSubjectFilter", "knowledgeDomainFilter", "knowledgeKindFilter", "knowledgeTemporalFilter", "knowledgeLifecycleFilter", "knowledgeVerificationFilter"].forEach((id) => {
+      $(id)?.addEventListener("input", updateKnowledgeFilters);
+      $(id)?.addEventListener("change", updateKnowledgeFilters);
+    });
     $("agentSendButton").addEventListener("click", sendAgentQuery);
     $("agentClearButton").addEventListener("click", clearAgentWindow);
     $("newSessionButton").addEventListener("click", createAgentSession);
@@ -1495,6 +1553,7 @@
         $("videoSummaryPreview").classList.add("empty");
         setVideoSummaryView(state.videoSummaryView || "preview");
         $("videoFrameGallery").innerHTML = "";
+        $("videoKnowledgeList").innerHTML = "";
         $("videoChunkList").innerHTML = "";
         $("videoEventTimeline").innerHTML = "";
         $("videoEventList").innerHTML = "";
@@ -1505,21 +1564,25 @@
 
       const video = detail.video || {};
       const summary = detail.summary || {};
+      const quality = detail.quality_metrics || {};
+      const validation = quality.extraction_validation || {};
       metaGrid.innerHTML = `
         <div class="meta-card"><div class="meta-label">标题</div><div class="meta-value">${escapeHtml(video.title || "-")}</div></div>
         <div class="meta-card"><div class="meta-label">BV / 发布</div><div class="meta-value mono">${escapeHtml(video.bvid || "-")} · ${escapeHtml(video.publish_time || "-")}</div></div>
         <div class="meta-card"><div class="meta-label">作者 / 时长</div><div class="meta-value">${escapeHtml(video.author_name || "-")} · ${escapeHtml(formatDuration(video.duration_seconds))}</div></div>
         <div class="meta-card"><div class="meta-label">转写 / 总结模型</div><div class="meta-value">${escapeHtml(video.asr_model || "-")} · ${escapeHtml(summary.llm_model || "-")}</div></div>
-        <div class="meta-card"><div class="meta-label">视频类型 / 事件数</div><div class="meta-value">${escapeHtml(detail.video_type || summary.video_type || "-")} · ${escapeHtml(String((detail.events || []).length || 0))}</div></div>
+        <div class="meta-card"><div class="meta-label">视频类型 / 知识单元</div><div class="meta-value">${escapeHtml(detail.video_type || summary.video_type || detail.analysis_document?.video_type || "-")} · ${escapeHtml(String((detail.knowledge_units || []).length || 0))}</div></div>
         <div class="meta-card"><div class="meta-label">主题</div><div class="meta-value">${escapeHtml((summary.themes || []).join("、") || "未提取")}</div></div>
         <div class="meta-card"><div class="meta-label">标的</div><div class="meta-value">${escapeHtml((summary.symbols || []).join("、") || "未提取")}</div></div>
         <div class="meta-card"><div class="meta-label">置信度 / 文档来源</div><div class="meta-value">${escapeHtml(String(summary.confidence_score ?? "-"))} · ${escapeHtml(documentPayload?.source || "summary_payload")}</div></div>
+        <div class="meta-card"><div class="meta-label">抽取质量</div><div class="meta-value">accept ${escapeHtml(String(validation.accepted_count ?? "-"))} · reject ${escapeHtml(String(validation.rejected_count ?? "-"))} · repair ${escapeHtml(String(validation.repaired_count ?? "-"))} · review ${escapeHtml(String(quality.low_evidence_unit_count ?? "-"))}</div></div>
         <div class="meta-card"><div class="meta-label">摘要状态</div><div class="meta-value">${escapeHtml(summary.core_summary || "暂无核心摘要")}</div></div>
       `;
       $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || "";
       $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || "";
       renderVideoSummaryMarkdownPreview(detail, documentPayload);
       setVideoSummaryView(state.videoSummaryView || "preview");
+      renderVideoKnowledgeUnits(detail.knowledge_units || []);
       renderVideoChunks(detail.chunks || []);
       renderVideoTimeline(detail.event_timeline || []);
       renderVideoEvents(detail.events || []);
@@ -1997,6 +2060,135 @@
         `;
         container.appendChild(card);
       });
+    }
+
+    function renderVideoKnowledgeUnits(units) {
+      const container = $("videoKnowledgeList");
+      container.innerHTML = "";
+      const filteredUnits = filterVideoKnowledgeUnits(units);
+      if (!filteredUnits.length) {
+        const empty = document.createElement("div");
+        empty.className = "trace-empty";
+        empty.textContent = units.length ? "当前筛选条件下没有知识单元。" : "当前视频还没有生成 v3 知识单元。";
+        container.appendChild(empty);
+        return;
+      }
+      filteredUnits.slice(0, 80).forEach((unit) => {
+        const card = document.createElement("div");
+        const risks = knowledgeUnitRiskFlags(unit);
+        card.className = risks.length ? "analysis-item high-risk" : "analysis-item";
+        const evidence = (unit.evidence || []).slice(0, 2).map((item) => {
+          const time = item.start_ms != null ? formatTimestampMs(item.start_ms) : "-";
+          return `${time} ${item.evidence_text || ""}`.trim();
+        }).join("\n");
+        const entities = (unit.entities || []).map((item) => item.entity_name || item.entity_key || item.ticker).filter(Boolean).join("、");
+        const vector = unit.vector_status || {};
+        const indexed = (vector.indexed_collections || []).join("、") || "未索引";
+        const pending = (vector.pending_tasks || []).length;
+        card.innerHTML = `
+          <div class="analysis-item-title">${escapeHtml(unit.canonical_statement || unit.statement || unit.knowledge_uid || "未命名知识")}</div>
+          <div class="analysis-item-meta mono">${escapeHtml(unit.primary_domain || "-")} / ${escapeHtml(unit.knowledge_kind || "-")} / ${escapeHtml(unit.temporal_class || "-")}</div>
+          <div class="analysis-item-meta">主体: ${escapeHtml(unit.subject_name || unit.subject_key || "未识别")} · 生命周期: ${escapeHtml(unit.lifecycle_status || "-")} · 验证: ${escapeHtml(unit.verification_status || "-")}</div>
+          ${risks.length ? `<div class="analysis-item-meta">风险标记: ${escapeHtml(risks.join("、"))}</div>` : ""}
+          <div class="analysis-item-meta">有效期: ${escapeHtml(unit.valid_from || "-")} → ${escapeHtml(unit.valid_to || "长期/未设定")} · 冲突组: ${escapeHtml(unit.conflict_group_id || "无")}</div>
+          <div class="analysis-item-meta">实体: ${escapeHtml(entities || "未识别")} · 向量: ${escapeHtml(indexed)}${pending ? ` · pending ${pending}` : ""}</div>
+          <div class="frame-text"><strong>条件</strong>\n${escapeHtml(unit.condition_text || "无")}</div>
+          <div class="frame-text"><strong>证伪</strong>\n${escapeHtml(unit.invalidation_text || "无")}</div>
+          <div class="frame-text"><strong>证据</strong>\n${escapeHtml(evidence || "无")}</div>
+          <div class="inline-actions" style="margin-top:8px;">
+            <button type="button" data-lifecycle-action="active">标记有效</button>
+            <button type="button" data-lifecycle-action="expired">标记过期</button>
+            <button type="button" data-lifecycle-action="retired">下线</button>
+            <button type="button" data-lifecycle-action="restore">恢复</button>
+            <button type="button" data-audit-action="show">审计</button>
+          </div>
+        `;
+        card.querySelectorAll("[data-lifecycle-action]").forEach((button) => {
+          button.addEventListener("click", () => updateKnowledgeUnitLifecycle(unit.id, button.dataset.lifecycleAction));
+        });
+        card.querySelector("[data-audit-action]")?.addEventListener("click", () => showKnowledgeLifecycleAudits(unit.id));
+        container.appendChild(card);
+      });
+    }
+
+    function updateKnowledgeFilters() {
+      state.knowledgeFilters = {
+        subject: $("knowledgeSubjectFilter")?.value.trim() || "",
+        domain: $("knowledgeDomainFilter")?.value || "",
+        kind: $("knowledgeKindFilter")?.value || "",
+        temporal: $("knowledgeTemporalFilter")?.value || "",
+        lifecycle: $("knowledgeLifecycleFilter")?.value || "",
+        verification: $("knowledgeVerificationFilter")?.value || "",
+      };
+      renderVideoKnowledgeUnits(state.activeVideoDetail?.knowledge_units || []);
+    }
+
+    function filterVideoKnowledgeUnits(units) {
+      const filters = state.knowledgeFilters || {};
+      return (units || []).filter((unit) => {
+        const subject = `${unit.subject_key || ""} ${unit.subject_name || ""}`;
+        if (filters.subject && !subject.includes(filters.subject)) return false;
+        if (filters.domain && unit.primary_domain !== filters.domain) return false;
+        if (filters.kind && unit.knowledge_kind !== filters.kind) return false;
+        if (filters.temporal && unit.temporal_class !== filters.temporal) return false;
+        if (filters.lifecycle && unit.lifecycle_status !== filters.lifecycle) return false;
+        if (filters.verification && unit.verification_status !== filters.verification) return false;
+        return true;
+      });
+    }
+
+    function knowledgeUnitRiskFlags(unit) {
+      const flags = [];
+      const evidence = unit.evidence || [];
+      const hasOcr = evidence.some((item) => ["OCR", "VISION", "FRAME"].includes(String(item.source_type || "").toUpperCase()));
+      const statement = `${unit.statement || ""} ${unit.canonical_statement || ""} ${unit.condition_text || ""}`;
+      if (unit.verification_status === "NEEDS_REVIEW") flags.push("待审");
+      if (unit.conflict_group_id) flags.push("冲突");
+      if (!evidence.length) flags.push("缺证据");
+      if (evidence.length === 1 && unit.verification_status === "NEEDS_REVIEW") flags.push("低证据");
+      if (/(图表|图|价格|指标|形态|均线|MACD|支撑|压力|成交额|K线)/.test(statement) && !hasOcr) flags.push("缺OCR");
+      return flags;
+    }
+
+    async function updateKnowledgeUnitLifecycle(unitId, action) {
+      if (!unitId) return;
+      const payloadByAction = {
+        active: { lifecycle_status: "ACTIVE", verification_status: "VERIFIED", note: "管理台标记有效", operator: "admin_console" },
+        expired: { lifecycle_status: "EXPIRED", note: "管理台标记过期", operator: "admin_console" },
+        retired: { lifecycle_status: "RETIRED", verification_status: "REJECTED", note: "管理台下线", operator: "admin_console" },
+        restore: { lifecycle_status: "ACTIVE", verification_status: "UNVERIFIED", note: "管理台恢复", operator: "admin_console" },
+      };
+      const payload = payloadByAction[action];
+      if (!payload) return;
+      try {
+        const res = await fetch(`/api/v1/content/knowledge-units/${encodeURIComponent(unitId)}/lifecycle`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        await ensureOk(res);
+        if (state.activeVideoItem) {
+          await loadVideoDetail(state.activeVideoItem);
+        }
+        setStatus("知识生命周期已更新，向量同步任务已入队", true);
+      } catch (error) {
+        setStatus(error.message || "生命周期更新失败", false, true);
+      }
+    }
+
+    async function showKnowledgeLifecycleAudits(unitId) {
+      if (!unitId) return;
+      try {
+        const res = await fetch(`/api/v1/content/knowledge-units/${encodeURIComponent(unitId)}/lifecycle-audits?limit=20`);
+        await ensureOk(res);
+        const payload = await res.json();
+        const lines = (payload.items || []).map((item) => {
+          return `${item.created_at || "-"}: ${item.from_lifecycle_status || "-"} -> ${item.to_lifecycle_status || "-"} / ${item.from_verification_status || "-"} -> ${item.to_verification_status || "-"}\n${item.reason || "无备注"} · tasks ${JSON.stringify(item.vector_task_ids || [])}`;
+        });
+        window.alert(lines.length ? lines.join("\n\n") : "暂无生命周期审计记录");
+      } catch (error) {
+        setStatus(error.message || "审计记录加载失败", false, true);
+      }
     }
 
     function renderVideoTimeline(items) {

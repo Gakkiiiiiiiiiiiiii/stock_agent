@@ -18,7 +18,7 @@ class LeaseLostError(RuntimeError):
 def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> bool:
     repo = JobTaskRepository()
     worker = worker_id or f"job-worker-{socket.gethostname()}"
-    task = repo.claim(job_id, worker) if job_id else repo.claim_next(worker, ["factor_mine"], lease_seconds=300)
+    task = repo.claim(job_id, worker) if job_id else repo.claim_next(worker, ["factor_mine", "knowledge_lifecycle_sweep"], lease_seconds=300)
     if task is None:
         return False
     lease_token = task.get("lease_token")
@@ -30,6 +30,27 @@ def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> 
             payload = task.get("payload") or {}
             with heartbeat_loop(repo, task["id"], worker, lease_token=lease_token, lease_version=lease_version) as ensure_lease:
                 result = mine_factors(**payload, lease_guard=ensure_lease)
+                ensure_lease()
+            repo.mark_finished(
+                task["id"],
+                "SUCCEEDED",
+                result_ref=json.dumps(result, ensure_ascii=False),
+                error=None,
+                worker_id=worker,
+                lease_token=lease_token,
+                lease_version=lease_version,
+            )
+            return True
+        if task["task_type"] == "knowledge_lifecycle_sweep":
+            from datetime import datetime
+
+            from engines.content.knowledge_lifecycle_service import KnowledgeLifecycleService
+
+            payload = task.get("payload") or {}
+            now = datetime.fromisoformat(payload["now"]) if payload.get("now") else None
+            limit = int(payload.get("limit") or 500)
+            with heartbeat_loop(repo, task["id"], worker, lease_token=lease_token, lease_version=lease_version) as ensure_lease:
+                result = KnowledgeLifecycleService().expire_due_units(now=now, limit=limit)
                 ensure_lease()
             repo.mark_finished(
                 task["id"],
