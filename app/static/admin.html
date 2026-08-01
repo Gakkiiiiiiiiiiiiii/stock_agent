@@ -145,6 +145,38 @@
       margin-top: 4px;
       line-height: 1.4;
     }
+    .item-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid rgba(255,255,255,0.12);
+      background: rgba(255,255,255,0.05);
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.25;
+      white-space: nowrap;
+    }
+    .pill.good {
+      border-color: rgba(68, 217, 139, 0.35);
+      background: rgba(68, 217, 139, 0.12);
+      color: #b9f5d4;
+    }
+    .pill.warn {
+      border-color: rgba(255, 176, 32, 0.35);
+      background: rgba(255, 176, 32, 0.12);
+      color: #ffe0a8;
+    }
+    .pill.muted {
+      color: var(--muted);
+    }
     .form-grid {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -834,6 +866,12 @@
       margin: 0;
       font-size: 13px;
     }
+    .analysis-card.knowledge-card {
+      grid-column: 1 / -1;
+    }
+    .analysis-card.knowledge-card .analysis-list {
+      max-height: 520px;
+    }
     .analysis-list {
       display: grid;
       gap: 8px;
@@ -861,6 +899,12 @@
       font-size: 11px;
       color: var(--muted);
       line-height: 1.45;
+    }
+    details.frame-text summary {
+      cursor: pointer;
+      color: #d9e6ff;
+      font-weight: 600;
+      margin-bottom: 4px;
     }
     .trace-empty {
       padding: 12px;
@@ -1010,23 +1054,23 @@
 
       <div id="videosView" class="workspace hidden">
         <section class="panel">
-          <div class="panel-header">Video Summaries</div>
+          <div class="panel-header">Video Knowledge</div>
           <div class="panel-body">
             <div class="toolbar">
               <button id="deleteVideoSummaryButton" disabled>删除总结</button>
             </div>
-            <div class="hint" style="margin-top:10px;">这里展示已经完成解析的视频及其总结文档。</div>
+            <div class="hint" style="margin-top:10px;">这里展示视频解析结果；新链路视频会优先显示知识单元、章节和证据。</div>
             <div class="item-list" id="videoList" style="margin-top:12px;"></div>
           </div>
         </section>
         <section class="panel">
-          <div class="panel-header">Summary Document</div>
+          <div class="panel-header">Video Analysis</div>
           <div class="panel-body">
             <div class="meta-grid" id="videoMetaGrid"></div>
             <div class="form-grid" style="margin-top:12px;">
-              <div class="field full"><label>Markdown 路径</label><input id="videoSummaryPath" readonly /></div>
+              <div class="field full"><label>文档位置</label><input id="videoSummaryPath" readonly /></div>
               <div class="field full">
-                <label>总结文档</label>
+                <label>分析文档</label>
                 <div class="markdown-shell">
                   <div class="toolbar">
                     <div class="segmented">
@@ -1041,7 +1085,7 @@
               </div>
             </div>
             <div class="analysis-grid">
-              <div class="analysis-card">
+              <div class="analysis-card knowledge-card">
                 <h4>Knowledge Units</h4>
                 <div class="actions" style="margin-bottom:8px;">
                   <input id="knowledgeSubjectFilter" placeholder="主体" style="max-width:120px;" />
@@ -1091,7 +1135,7 @@
                 <div id="videoKnowledgeList" class="analysis-list"></div>
               </div>
               <div class="analysis-card">
-                <h4>Chapter Chunks</h4>
+                <h4>Chapters & Transcript</h4>
                 <div id="videoChunkList" class="analysis-list"></div>
               </div>
               <div class="analysis-card">
@@ -1530,11 +1574,21 @@
       state.videoList.forEach((item) => {
         const card = document.createElement("div");
         card.className = "item" + (getVideoItemKey(item) === state.activeVideoKey ? " active" : "");
+        const identity = item.bvid || item.platform_video_id || (item.video_id != null ? `video #${item.video_id}` : "");
+        const knowledgeReady = Boolean(item.knowledge_ready);
+        const analysisReady = Boolean(item.analysis_document_ready);
+        const sourceLabel = item.summary_source === "markdown_only" ? "旧 Markdown" : "数据库";
         card.innerHTML = `
           <div class="item-title">${escapeHtml(item.title || "未命名视频")}</div>
           <div class="item-meta">${escapeHtml(item.publish_time || "未知时间")} · ${escapeHtml(item.author_name || "未知作者")}</div>
-          <div class="item-meta mono">${escapeHtml(item.bvid || "")}</div>
-          <div class="item-meta">ASR: ${escapeHtml(item.asr_model || "unknown")} · Summary: ${escapeHtml(item.summary_model || "pending")} · ${escapeHtml(item.summary_source || "database")}</div>
+          <div class="item-meta mono">${escapeHtml(identity)}</div>
+          <div class="item-badges">
+            <span class="pill ${knowledgeReady ? "good" : "muted"}">${knowledgeReady ? `${escapeHtml(String(item.knowledge_unit_count || 0))} 知识单元` : "无知识单元"}</span>
+            <span class="pill ${analysisReady ? "good" : "muted"}">${analysisReady ? `${escapeHtml(String(item.chapter_count || 0))} 章节` : "无分析文档"}</span>
+            <span class="pill ${item.summary_ready ? "good" : "muted"}">${item.summary_ready ? "旧总结 ready" : "无旧总结"}</span>
+            <span class="pill muted">${escapeHtml(sourceLabel)}</span>
+          </div>
+          <div class="item-meta">ASR: ${escapeHtml(item.asr_model || "unknown")}</div>
         `;
         card.onclick = () => loadVideoDetail(item);
         list.appendChild(card);
@@ -1564,26 +1618,32 @@
 
       const video = detail.video || {};
       const summary = detail.summary || {};
+      const analysisDocument = detail.analysis_document || {};
       const quality = detail.quality_metrics || {};
       const validation = quality.extraction_validation || {};
+      const videoIdentity = video.bvid || video.platform_video_id || (video.id != null ? `#${video.id}` : "-");
+      const summaryModel = summary.llm_model || analysisDocument.generator_model || "-";
+      const coreSummary = summary.core_summary || analysisDocument.core_summary || "暂无核心摘要";
+      const summaryConfidence = summary.confidence_score ?? analysisDocument.confidence_score ?? "-";
+      const documentSource = documentPayload?.source || (analysisDocument.document_markdown ? "analysis_document" : "summary_payload");
       metaGrid.innerHTML = `
         <div class="meta-card"><div class="meta-label">标题</div><div class="meta-value">${escapeHtml(video.title || "-")}</div></div>
-        <div class="meta-card"><div class="meta-label">BV / 发布</div><div class="meta-value mono">${escapeHtml(video.bvid || "-")} · ${escapeHtml(video.publish_time || "-")}</div></div>
+        <div class="meta-card"><div class="meta-label">视频ID / 发布</div><div class="meta-value mono">${escapeHtml(videoIdentity)} · ${escapeHtml(video.publish_time || "-")}</div></div>
         <div class="meta-card"><div class="meta-label">作者 / 时长</div><div class="meta-value">${escapeHtml(video.author_name || "-")} · ${escapeHtml(formatDuration(video.duration_seconds))}</div></div>
-        <div class="meta-card"><div class="meta-label">转写 / 总结模型</div><div class="meta-value">${escapeHtml(video.asr_model || "-")} · ${escapeHtml(summary.llm_model || "-")}</div></div>
-        <div class="meta-card"><div class="meta-label">视频类型 / 知识单元</div><div class="meta-value">${escapeHtml(detail.video_type || summary.video_type || detail.analysis_document?.video_type || "-")} · ${escapeHtml(String((detail.knowledge_units || []).length || 0))}</div></div>
+        <div class="meta-card"><div class="meta-label">转写 / 解析模型</div><div class="meta-value">${escapeHtml(video.asr_model || "-")} · ${escapeHtml(summaryModel)}</div></div>
+        <div class="meta-card"><div class="meta-label">视频类型 / 知识单元</div><div class="meta-value">${escapeHtml(detail.video_type || summary.video_type || analysisDocument.video_type || "-")} · ${escapeHtml(String((detail.knowledge_units || []).length || 0))}</div></div>
         <div class="meta-card"><div class="meta-label">主题</div><div class="meta-value">${escapeHtml((summary.themes || []).join("、") || "未提取")}</div></div>
         <div class="meta-card"><div class="meta-label">标的</div><div class="meta-value">${escapeHtml((summary.symbols || []).join("、") || "未提取")}</div></div>
-        <div class="meta-card"><div class="meta-label">置信度 / 文档来源</div><div class="meta-value">${escapeHtml(String(summary.confidence_score ?? "-"))} · ${escapeHtml(documentPayload?.source || "summary_payload")}</div></div>
+        <div class="meta-card"><div class="meta-label">置信度 / 文档来源</div><div class="meta-value">${escapeHtml(String(summaryConfidence))} · ${escapeHtml(documentSource)}</div></div>
         <div class="meta-card"><div class="meta-label">抽取质量</div><div class="meta-value">accept ${escapeHtml(String(validation.accepted_count ?? "-"))} · reject ${escapeHtml(String(validation.rejected_count ?? "-"))} · repair ${escapeHtml(String(validation.repaired_count ?? "-"))} · review ${escapeHtml(String(quality.low_evidence_unit_count ?? "-"))}</div></div>
-        <div class="meta-card"><div class="meta-label">摘要状态</div><div class="meta-value">${escapeHtml(summary.core_summary || "暂无核心摘要")}</div></div>
+        <div class="meta-card"><div class="meta-label">核心摘要</div><div class="meta-value">${escapeHtml(coreSummary)}</div></div>
       `;
-      $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || "";
-      $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || "";
+      $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || (analysisDocument.document_markdown ? "数据库 video_analysis_document" : "");
+      $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || analysisDocument.document_markdown || "";
       renderVideoSummaryMarkdownPreview(detail, documentPayload);
       setVideoSummaryView(state.videoSummaryView || "preview");
       renderVideoKnowledgeUnits(detail.knowledge_units || []);
-      renderVideoChunks(detail.chunks || []);
+      renderVideoChapters(detail.chapters || [], detail.segments || [], detail.chunks || []);
       renderVideoTimeline(detail.event_timeline || []);
       renderVideoEvents(detail.events || []);
       renderVideoFrames(detail.visual_frames || [], video.id);
@@ -1660,9 +1720,21 @@
     function renderVideoSummaryMarkdownPreview(detail, documentPayload) {
       const preview = $("videoSummaryPreview");
       const summary = detail?.summary || {};
-      const rawMarkdown = documentPayload?.content || summary.summary_markdown || "";
+      const analysisDocument = detail?.analysis_document || {};
+      const rawMarkdown = documentPayload?.content || summary.summary_markdown || analysisDocument.document_markdown || "";
+      if (analysisDocument.document_markdown && !summary.summary_markdown && documentPayload?.source === "analysis_document") {
+        preview.innerHTML = renderCompactAnalysisDocument(detail);
+        preview.classList.remove("empty");
+        return;
+      }
       if (!rawMarkdown.trim()) {
-        preview.innerHTML = "当前没有可展示的 Markdown 总结。";
+        const coreSummary = summary.core_summary || analysisDocument.core_summary || "";
+        if (coreSummary) {
+          preview.innerHTML = `<h2>核心摘要</h2><p>${escapeHtml(coreSummary)}</p>`;
+          preview.classList.remove("empty");
+          return;
+        }
+        preview.innerHTML = "当前没有可展示的分析文档。";
         preview.classList.add("empty");
         return;
       }
@@ -1673,6 +1745,47 @@
       window.requestAnimationFrame(() => {
         dedupeRenderedMarkdownImages(preview);
       });
+    }
+
+    function renderCompactAnalysisDocument(detail) {
+      const analysisDocument = detail?.analysis_document || {};
+      const chapters = detail?.chapters || [];
+      const units = detail?.knowledge_units || [];
+      const coreSummary = analysisDocument.core_summary || "暂无核心摘要";
+      const keyPoints = extractAnalysisKeyPoints(analysisDocument.document_markdown || "");
+      const chapterHtml = chapters.map((chapter) => {
+        const chapterUnits = units.filter((unit) => unit.source_chapter_id === chapter.id).slice(0, 8);
+        const unitLines = chapterUnits.map((unit) => {
+          return `<li>${escapeHtml(unit.knowledge_kind || "-")} / ${escapeHtml(unit.lifecycle_status || "-")}：${escapeHtml(truncateText(unit.canonical_statement || unit.statement || "", 180))}</li>`;
+        }).join("");
+        return `
+          <h3>${escapeHtml(chapter.title || `章节 ${Number(chapter.chapter_index || 0) + 1}`)}</h3>
+          <ul>
+            <li>时间：${escapeHtml(formatTimestampMs(chapter.start_ms))} - ${escapeHtml(formatTimestampMs(chapter.end_ms))}</li>
+            <li>领域：${escapeHtml(chapter.primary_domain || "-")} / ${escapeHtml(chapter.chapter_type || "-")}</li>
+            <li>摘要：${escapeHtml(truncateText(chapter.summary || "暂无章节摘要", 360))}</li>
+          </ul>
+          ${unitLines ? `<p>知识单元预览：</p><ul>${unitLines}</ul>` : ""}
+        `;
+      }).join("");
+      return `
+        <h1>${escapeHtml(detail?.video?.title || "视频分析")}</h1>
+        <h2>核心摘要</h2>
+        <p>${escapeHtml(coreSummary)}</p>
+        ${keyPoints.length ? `<h2>重点结论</h2><ul>${keyPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}
+        <h2>章节</h2>
+        ${chapterHtml || "<p>暂无章节。</p>"}
+      `;
+    }
+
+    function extractAnalysisKeyPoints(markdown) {
+      const text = String(markdown || "");
+      const section = text.match(/##\s*重点结论\s*\n([\s\S]*?)(?:\n##\s|$)/);
+      if (!section) return [];
+      return section[1].split("\n")
+        .map((line) => line.replace(/^\s*[-*]\s+/, "").trim())
+        .filter(Boolean)
+        .slice(0, 6);
     }
 
     function buildVideoFrameContext(detail) {
@@ -2039,6 +2152,60 @@
       return count;
     }
 
+    function renderVideoChapters(chapters, segments, chunks) {
+      const container = $("videoChunkList");
+      container.innerHTML = "";
+      const chapterItems = chapters || [];
+      if (chapterItems.length) {
+        chapterItems.forEach((chapter) => {
+          const card = document.createElement("div");
+          card.className = "analysis-item";
+          const transcript = chapterTranscriptPreview(chapter, segments || []);
+          const domains = [chapter.primary_domain, ...(chapter.secondary_domains || [])].filter(Boolean).join("、");
+          card.innerHTML = `
+            <div class="analysis-item-title">${escapeHtml(chapter.title || `章节 ${Number(chapter.chapter_index || 0) + 1}`)}</div>
+            <div class="analysis-item-meta mono">${escapeHtml(formatTimestampMs(chapter.start_ms))} - ${escapeHtml(formatTimestampMs(chapter.end_ms))} · ${escapeHtml(chapter.chapter_type || "-")} · ${escapeHtml(domains || "-")}</div>
+            <div class="frame-text">${escapeHtml(chapter.summary || "暂无章节摘要")}</div>
+            <div class="frame-text"><strong>转写预览</strong>\n${escapeHtml(transcript || "暂无转写片段")}</div>
+          `;
+          container.appendChild(card);
+        });
+        return;
+      }
+      if (chunks?.length) {
+        renderVideoChunks(chunks);
+        return;
+      }
+      if (segments?.length) {
+        const card = document.createElement("div");
+        card.className = "analysis-item";
+        card.innerHTML = `
+          <div class="analysis-item-title">转写片段</div>
+          <div class="analysis-item-meta">${escapeHtml(String(segments.length))} 段口播</div>
+          <div class="frame-text">${escapeHtml(segments.slice(0, 12).map((segment) => `${formatTimestampMs(segment.start_ms)} ${segment.text || ""}`).join("\n"))}</div>
+        `;
+        container.appendChild(card);
+        return;
+      }
+      const empty = document.createElement("div");
+      empty.className = "trace-empty";
+      empty.textContent = "当前视频还没有章节或转写片段。";
+      container.appendChild(empty);
+    }
+
+    function chapterTranscriptPreview(chapter, segments) {
+      const start = Number(chapter.start_ms || 0);
+      const end = Number(chapter.end_ms || 0);
+      return (segments || [])
+        .filter((segment) => {
+          const segmentStart = Number(segment.start_ms || 0);
+          return !end || (segmentStart >= start && segmentStart <= end);
+        })
+        .slice(0, 8)
+        .map((segment) => `${formatTimestampMs(segment.start_ms)} ${segment.text || ""}`)
+        .join("\n");
+    }
+
     function renderVideoChunks(chunks) {
       const container = $("videoChunkList");
       container.innerHTML = "";
@@ -2077,24 +2244,28 @@
         const card = document.createElement("div");
         const risks = knowledgeUnitRiskFlags(unit);
         card.className = risks.length ? "analysis-item high-risk" : "analysis-item";
+        const statement = unit.canonical_statement || unit.statement || unit.knowledge_uid || "未命名知识";
+        const shortStatement = truncateText(statement, 220);
+        const showFullStatement = String(statement).length > shortStatement.length;
         const evidence = (unit.evidence || []).slice(0, 2).map((item) => {
           const time = item.start_ms != null ? formatTimestampMs(item.start_ms) : "-";
-          return `${time} ${item.evidence_text || ""}`.trim();
+          return truncateText(`${time} ${item.evidence_text || ""}`.trim(), 260);
         }).join("\n");
         const entities = (unit.entities || []).map((item) => item.entity_name || item.entity_key || item.ticker).filter(Boolean).join("、");
         const vector = unit.vector_status || {};
         const indexed = (vector.indexed_collections || []).join("、") || "未索引";
         const pending = (vector.pending_tasks || []).length;
         card.innerHTML = `
-          <div class="analysis-item-title">${escapeHtml(unit.canonical_statement || unit.statement || unit.knowledge_uid || "未命名知识")}</div>
+          <div class="analysis-item-title">${escapeHtml(shortStatement)}</div>
           <div class="analysis-item-meta mono">${escapeHtml(unit.primary_domain || "-")} / ${escapeHtml(unit.knowledge_kind || "-")} / ${escapeHtml(unit.temporal_class || "-")}</div>
           <div class="analysis-item-meta">主体: ${escapeHtml(unit.subject_name || unit.subject_key || "未识别")} · 生命周期: ${escapeHtml(unit.lifecycle_status || "-")} · 验证: ${escapeHtml(unit.verification_status || "-")}</div>
           ${risks.length ? `<div class="analysis-item-meta">风险标记: ${escapeHtml(risks.join("、"))}</div>` : ""}
           <div class="analysis-item-meta">有效期: ${escapeHtml(unit.valid_from || "-")} → ${escapeHtml(unit.valid_to || "长期/未设定")} · 冲突组: ${escapeHtml(unit.conflict_group_id || "无")}</div>
           <div class="analysis-item-meta">实体: ${escapeHtml(entities || "未识别")} · 向量: ${escapeHtml(indexed)}${pending ? ` · pending ${pending}` : ""}</div>
-          <div class="frame-text"><strong>条件</strong>\n${escapeHtml(unit.condition_text || "无")}</div>
-          <div class="frame-text"><strong>证伪</strong>\n${escapeHtml(unit.invalidation_text || "无")}</div>
-          <div class="frame-text"><strong>证据</strong>\n${escapeHtml(evidence || "无")}</div>
+          ${showFullStatement ? `<details class="frame-text"><summary>完整结论</summary>${escapeHtml(statement)}</details>` : ""}
+          <div class="frame-text"><strong>条件</strong>\n${escapeHtml(truncateText(unit.condition_text || "无", 220))}</div>
+          <div class="frame-text"><strong>风险／证伪</strong>\n${escapeHtml(truncateText(unit.invalidation_text || "无", 220))}</div>
+          <div class="frame-text"><strong>原始语音证据</strong>\n${escapeHtml(evidence || "无")}</div>
           <div class="inline-actions" style="margin-top:8px;">
             <button type="button" data-lifecycle-action="active">标记有效</button>
             <button type="button" data-lifecycle-action="expired">标记过期</button>
@@ -3266,6 +3437,12 @@
 
     function escapeHtml(value) {
       return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+    }
+
+    function truncateText(value, limit = 240) {
+      const text = String(value || "").replace(/\s+/g, " ").trim();
+      if (text.length <= limit) return text;
+      return `${text.slice(0, Math.max(0, limit - 1))}…`;
     }
 
     function safeJson(value) {

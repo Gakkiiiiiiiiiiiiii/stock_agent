@@ -746,6 +746,10 @@ class VideoAnalysisDocumentRepository:
                 "chapter_count": row.chapter_count,
                 "knowledge_unit_count": row.knowledge_unit_count,
                 "confidence_score": row.confidence_score,
+                "generator_provider": row.generator_provider,
+                "generator_model": row.generator_model,
+                "generator_version": row.generator_version,
+                "schema_version": row.schema_version,
             }
 
 

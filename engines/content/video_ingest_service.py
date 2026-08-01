@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import re
 from datetime import UTC, datetime
@@ -394,7 +395,7 @@ class VideoIngestService:
             video_id=video_id,
             source_hash=source_hash,
             parser_version="v3.0-rule",
-            extractor_version="v3.0-rule",
+            extractor_version="v3.2-k3-json-mode" if self.knowledge_extractor.model_client.available() else "v3.1-rule-fallback",
             schema_version="v1",
         )
         extraction_validation: dict = {}
@@ -414,6 +415,13 @@ class VideoIngestService:
             self.task_repo.update(task_id, stage="deduplicate_conflict", progress=92)
             units = self.knowledge_deduplicator.deduplicate(units)
             units, relations = self.knowledge_conflict_resolver.resolve(units)
+            self._ensure_reparse_does_not_regress(
+                existing_units=self.knowledge_repo.list_units_for_video(video_id),
+                replacement_units=units,
+            )
+            self.task_repo.update(task_id, stage="generate_document", progress=94)
+            analysis_payload = self.analysis_document_generator.generate(metadata=metadata, chapters=chapters, units=units)
+            self._apply_chapter_summaries(chapters, analysis_payload.get("chapter_summaries") or [])
             self.task_repo.update(task_id, stage="persist_knowledge", progress=95)
             persisted = self.knowledge_repo.replace_video_knowledge(
                 video_id=video_id,
@@ -423,8 +431,6 @@ class VideoIngestService:
             )
             persisted_units = self.knowledge_repo.list_units_for_video(video_id)
             quality_metrics = self._knowledge_quality_metrics(extraction_validation, persisted_units)
-            self.task_repo.update(task_id, stage="generate_document", progress=97)
-            analysis_payload = self.analysis_document_generator.generate(metadata=metadata, chapters=chapters, units=units)
             self.analysis_document_repo.upsert(video_id, analysis_payload)
             vector_tasks = []
             if index_knowledge:
@@ -494,6 +500,31 @@ class VideoIngestService:
             "low_evidence_unit_count": low_evidence_count,
             "knowledge_unit_count": len(persisted_units),
         }
+
+    @staticmethod
+    def _ensure_reparse_does_not_regress(existing_units: list[dict], replacement_units: list[dict]) -> None:
+        """Reject an anomalously sparse reparse before it can delete useful prior knowledge."""
+        existing_count = len(existing_units)
+        replacement_count = len(replacement_units)
+        minimum_acceptable = max(4, math.ceil(existing_count * 0.5))
+        if existing_count >= 8 and replacement_count < minimum_acceptable:
+            raise RuntimeError(
+                "知识重解析结果异常稀疏："
+                f"原有 {existing_count} 条，新结果仅 {replacement_count} 条（至少需要 {minimum_acceptable} 条）；"
+                "已保留原有知识，未执行覆盖。"
+            )
+
+    @staticmethod
+    def _apply_chapter_summaries(chapters: list[dict], summaries: list[dict]) -> None:
+        summary_by_index = {
+            int(item.get("chapter_index") or 0): str(item.get("summary") or "").strip()
+            for item in summaries
+            if isinstance(item, dict) and str(item.get("summary") or "").strip()
+        }
+        for chapter in chapters:
+            index = int(chapter.get("chapter_index") or 0)
+            if summary := summary_by_index.get(index):
+                chapter["summary"] = summary
 
     def list_videos(self, summary_mode: str = "investment", limit: int = 50) -> list[dict]:
         return self.query_repo.list_videos(summary_mode=summary_mode, limit=limit)
@@ -717,7 +748,7 @@ class VideoIngestService:
         task = self.task_repo.create(
             source_type="video_knowledge_reparse",
             source_ref=metadata["url"],
-            options={"video_id": video_id, "parser": "v3.0-rule", "index_knowledge": index_knowledge},
+            options={"video_id": video_id, "parser": "v3.2-k3-json-mode", "index_knowledge": index_knowledge},
             video_id=video_id,
         )
         result = self._build_video_knowledge(

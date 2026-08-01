@@ -14,6 +14,58 @@ class InvalidJsonModel:
         return {"content": "不是 JSON"}
 
 
+class CuratedKnowledgeModel:
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "openai_compatible",
+            "model": "k3",
+            "content": """{"units": [
+              {
+                "primary_domain": "MARKET", "knowledge_kind": "STATE", "expression_type": "AUTHOR_EXPLICIT",
+                "subject_type": "THEME", "subject_key": "券商", "subject_name": "券商", "predicate_key": "market_state",
+                "conclusion": "券商板块维持偏强状态。", "canonical_statement": "券商板块维持偏强状态。",
+                "claim_type": "OPINION", "sentiment": "BULLISH", "extraction_confidence": 0.9, "entities": ["券商"],
+                "evidence": [{"source_ref": "window_0"}]
+              },
+              {
+                "primary_domain": "MARKET", "knowledge_kind": "FORECAST", "expression_type": "AUTHOR_EXPLICIT",
+                "subject_type": "THEME", "subject_key": "券商", "subject_name": "券商", "predicate_key": "market_state",
+                "conclusion": "券商板块维持偏强状态。", "canonical_statement": "券商板块维持偏强状态。",
+                "claim_type": "FORECAST", "sentiment": "BULLISH", "extraction_confidence": 0.85,
+                "evidence": [{"source_ref": "window_0"}]
+              },
+              {
+                "primary_domain": "RISK", "knowledge_kind": "RISK_CONDITION", "expression_type": "AUTHOR_EXPLICIT",
+                "subject_type": "THEME", "subject_key": "券商", "subject_name": "券商", "predicate_key": "risk_condition",
+                "conclusion": "跌破五日线时应降低仓位。", "canonical_statement": "跌破五日线时应降低仓位。",
+                "claim_type": "OPINION", "sentiment": "BEARISH", "extraction_confidence": 0.9,
+                "evidence": [{"source_ref": "window_0"}]
+              }
+            ]}""",
+        }
+
+
+class PartialInvalidJsonModel:
+    def __init__(self):
+        self.calls = 0
+
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        self.calls += 1
+        if self.calls == 1:
+            return {
+                "content": """{"units":[{"knowledge_kind":"STATE","subject_key":"市场","subject_name":"市场","predicate_key":"market_state","conclusion":"市场维持震荡格局。","canonical_statement":"市场维持震荡格局。","claim_type":"OPINION","sentiment":"NEUTRAL","extraction_confidence":0.9,"evidence":[{"source_ref":"window_0","evidence_text":"市场处于震荡状态"}]}]}"""
+            }
+        return {"content": "[不合法 JSON"}
+
+
 def _chapter(text: str, *, ocr_text: str = "", confidence: float = 0.8) -> dict:
     return {
         "chapter_index": 0,
@@ -82,6 +134,43 @@ def test_invalid_llm_json_falls_back_to_rule_extraction_and_records_metrics():
     assert extractor.last_validation_report["accepted_count"] == len(units)
     assert all(unit["evidence"] for unit in units)
     assert all(unit.get("predicate_key") for unit in units)
+
+
+def test_llm_extraction_merges_duplicate_claims_and_keeps_grounded_evidence():
+    extractor = KnowledgeUnitExtractor(model_client=CuratedKnowledgeModel())
+    units = extractor.extract(
+        metadata={"title": "测试", "publish_time": "20260729"},
+        chapters=[_chapter("券商板块仍处于偏强状态。如果跌破五日线就需要减仓。")],
+    )
+
+    assert len(units) == 2
+    assert all(len(unit["statement"]) <= 240 for unit in units)
+    assert all(unit["evidence"][0]["start_ms"] == 0 for unit in units)
+    assert extractor.last_validation_report["accepted_count"] == 2
+
+
+def test_failed_fragment_retries_then_uses_rule_fallback_without_losing_other_fragments():
+    chapter = _chapter("市场处于震荡状态。")
+    chapter["windows"].append(
+        {
+            "window_index": 1,
+            "start_ms": 60000,
+            "end_ms": 120000,
+            "transcript_text": "如果跌破五日线就需要减仓。",
+            "ocr_text": "",
+            "confidence_score": 0.8,
+        }
+    )
+    extractor = KnowledgeUnitExtractor(
+        model_client=PartialInvalidJsonModel(),
+        max_llm_fragment_chars=12,
+    )
+
+    units = extractor.extract(metadata={"title": "测试"}, chapters=[chapter])
+
+    assert len(units) >= 2
+    assert any(unit["statement"] == "市场维持震荡格局。" for unit in units)
+    assert any(unit["knowledge_kind"] == "ACTION" for unit in units)
 
 
 def test_ocr_evidence_is_attached_when_statement_mentions_chart():

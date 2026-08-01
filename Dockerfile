@@ -51,7 +51,7 @@ COPY skills ./skills
 COPY storage ./storage
 COPY workers ./workers
 
-RUN pip install --no-cache-dir --timeout 600 --retries 5 -i "${PYPI_INDEX_URL}" -e . \
+RUN pip install --no-cache-dir --timeout 600 --retries 5 -i "${PYPI_INDEX_URL}" -e ".[media]" \
     && pip install --no-cache-dir --timeout 600 --retries 5 -i "${PYPI_INDEX_URL}" \
         "nvidia-cublas-cu12==${ASR_CUBLAS_CU12_VERSION}" \
         "nvidia-cudnn-cu12==${ASR_CUDNN_CU12_VERSION}" \

@@ -1,30 +1,58 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 
 from engines.content.chapter_classifier import ChapterClassifier
 
 
 class ChapterSegmenter:
-    def __init__(self, classifier: ChapterClassifier | None = None, min_chapter_seconds: int = 30) -> None:
+    def __init__(
+        self,
+        classifier: ChapterClassifier | None = None,
+        min_chapter_seconds: int = 30,
+        max_chapter_seconds: int | None = None,
+        max_chapter_chars: int | None = None,
+    ) -> None:
         self.classifier = classifier or ChapterClassifier()
         self.min_chapter_ms = min_chapter_seconds * 1000
+        self.max_chapter_ms = int(
+            os.getenv("VIDEO_KNOWLEDGE_CHAPTER_MAX_SECONDS", str(max_chapter_seconds or 420))
+        ) * 1000
+        self.max_chapter_chars = int(
+            os.getenv("VIDEO_KNOWLEDGE_CHAPTER_MAX_CHARS", str(max_chapter_chars or 5200))
+        )
 
     def segment(self, windows: list[dict]) -> list[dict]:
         if not windows:
             return []
         chapters: list[dict] = []
         current: list[dict] = []
+        current_chars = 0
         last_domain: str | None = None
 
         for window in windows:
             classification = self.classifier.classify(window.get("transcript_text", ""), window.get("ocr_text", ""), window.get("visual_summary", ""))
             boundary_score = self._boundary_score(current[-1] if current else None, window, last_domain, classification["primary_domain"])
-            if current and boundary_score >= 0.68:
-                chapters.append(self._build_chapter(len(chapters), current, boundary_score, "SEMANTIC_AND_VISUAL"))
+            window_chars = len(str(window.get("transcript_text") or ""))
+            forced_boundary = bool(current) and (
+                int(window.get("end_ms") or 0) - int(current[0].get("start_ms") or 0) > self.max_chapter_ms
+                or current_chars + window_chars > self.max_chapter_chars
+            )
+            if current and (boundary_score >= 0.68 or forced_boundary):
+                chapters.append(
+                    self._build_chapter(
+                        len(chapters),
+                        current,
+                        boundary_score if not forced_boundary else 1.0,
+                        "MAX_CHAPTER_SIZE" if forced_boundary else "SEMANTIC_AND_VISUAL",
+                    )
+                )
                 current = []
+                current_chars = 0
             current.append(window | {"classification": classification, "boundary_score": boundary_score})
+            current_chars += window_chars
             last_domain = classification["primary_domain"]
 
         if current:

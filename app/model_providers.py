@@ -13,14 +13,20 @@ class AnalysisModelSettings:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    temperature: float | None = None
 
     @classmethod
     def from_env(cls) -> "AnalysisModelSettings":
+        model = os.getenv("ANALYSIS_MODEL_NAME")
+        api_key = os.getenv("ANALYSIS_MODEL_API_KEY") or os.getenv("VISUAL_MODEL_API_KEY")
+        if str(model or "").lower() in {"k3", "kimi-k3", "kimi_k3"}:
+            api_key = os.getenv("VISUAL_MODEL_API_KEY") or api_key
         return cls(
             provider=os.getenv("ANALYSIS_MODEL_PROVIDER", "none"),
-            model=os.getenv("ANALYSIS_MODEL_NAME"),
+            model=model,
             base_url=os.getenv("ANALYSIS_MODEL_BASE_URL"),
-            api_key=os.getenv("ANALYSIS_MODEL_API_KEY"),
+            api_key=api_key,
+            temperature=_optional_float(os.getenv("ANALYSIS_MODEL_TEMPERATURE")),
         )
 
 
@@ -37,7 +43,14 @@ class AnalysisModelClient:
             and bool(self.settings.api_key)
         )
 
-    def complete(self, prompt: str, system: str | None = None, temperature: float = 0.2) -> dict[str, Any]:
+    def complete(
+        self,
+        prompt: str,
+        system: str | None = None,
+        temperature: float = 0.2,
+        max_tokens: int = 2048,
+        response_format: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         if not self.available():
             return {
                 "available": False,
@@ -46,12 +59,15 @@ class AnalysisModelClient:
             }
         payload = {
             "model": self.settings.model,
-            "temperature": temperature,
+            "temperature": self._effective_temperature(temperature),
+            "max_tokens": max_tokens,
             "messages": [],
         }
         if system:
             payload["messages"].append({"role": "system", "content": system})
         payload["messages"].append({"role": "user", "content": prompt})
+        if response_format is not None:
+            payload["response_format"] = response_format
         data = self._post_chat_completion(payload)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
@@ -60,8 +76,16 @@ class AnalysisModelClient:
             "provider": self.settings.provider,
             "model": self.settings.model,
             "content": message.get("content", ""),
+            "finish_reason": choice.get("finish_reason"),
             "raw": data,
         }
+
+    def _effective_temperature(self, requested: float) -> float:
+        """Kimi K3 currently accepts only temperature=1 on its compatible API."""
+        model_name = str(self.settings.model or "").lower()
+        if model_name in {"k3", "kimi-k3", "kimi_k3"}:
+            return 1.0
+        return self.settings.temperature if self.settings.temperature is not None else requested
 
     def create_chat_completion(
         self,
@@ -82,7 +106,7 @@ class AnalysisModelClient:
         payload: dict[str, Any] = {
             "model": model or self.settings.model,
             "messages": payload_messages,
-            "temperature": temperature,
+            "temperature": self._effective_temperature(temperature),
             "max_tokens": max_tokens,
         }
         if tools:
@@ -132,6 +156,7 @@ class AgentModelClient(AnalysisModelClient):
                 model=resolved.model,
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
+                temperature=None,
             ),
             http_client=http_client,
         )
@@ -163,6 +188,14 @@ class VisualModelClient(AnalysisModelClient):
                 model=resolved.model,
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
+                temperature=None,
             ),
             http_client=http_client,
         )
+
+
+def _optional_float(value: str | None) -> float | None:
+    try:
+        return float(value) if value not in {None, ""} else None
+    except (TypeError, ValueError):
+        return None

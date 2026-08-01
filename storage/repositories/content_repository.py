@@ -677,11 +677,7 @@ class ContentQueryRepository:
                 continue
             items.append(item)
         items.sort(
-            key=lambda item: (
-                str(item.get("publish_time") or ""),
-                str(item.get("updated_at") or ""),
-                str(item.get("title") or ""),
-            ),
+            key=self._video_list_sort_key,
             reverse=True,
         )
         return items[:limit]
@@ -704,6 +700,11 @@ class ContentQueryRepository:
             content = summary.get("summary_markdown")
             if content:
                 source = "database_summary"
+        analysis_document = detail.get("analysis_document") or {}
+        if not content:
+            content = analysis_document.get("document_markdown")
+            if content:
+                source = "analysis_document"
         if not content:
             return None
         return {
@@ -757,6 +758,28 @@ class ContentQueryRepository:
             if len(items) >= limit:
                 break
         return items
+
+    @staticmethod
+    def _normalize_sort_date(value: object) -> str:
+        text = str(value or "").strip()
+        match = re.match(r"^(\d{4})-?(\d{2})-?(\d{2})$", text)
+        if not match:
+            return text
+        return "".join(match.groups())
+
+    @classmethod
+    def _video_list_sort_key(cls, item: dict) -> tuple:
+        has_video = item.get("video_id") is not None
+        knowledge_ready = bool(item.get("knowledge_ready"))
+        analysis_ready = bool(item.get("analysis_document_ready"))
+        return (
+            cls._normalize_sort_date(item.get("publish_time")),
+            1 if knowledge_ready else 0,
+            1 if analysis_ready else 0,
+            1 if has_video else 0,
+            str(item.get("updated_at") or ""),
+            str(item.get("title") or ""),
+        )
 
     def _relative_summary_path(self, path: Path) -> str:
         return path.resolve().relative_to(self.summary_exporter.export_root.parent).as_posix()
