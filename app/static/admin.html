@@ -1622,9 +1622,9 @@
       const quality = detail.quality_metrics || {};
       const validation = quality.extraction_validation || {};
       const videoIdentity = video.bvid || video.platform_video_id || (video.id != null ? `#${video.id}` : "-");
-      const summaryModel = summary.llm_model || analysisDocument.generator_model || "-";
-      const coreSummary = summary.core_summary || analysisDocument.core_summary || "暂无核心摘要";
-      const summaryConfidence = summary.confidence_score ?? analysisDocument.confidence_score ?? "-";
+      const summaryModel = analysisDocument.generator_model || summary.llm_model || "-";
+      const coreSummary = analysisDocument.core_summary || summary.core_summary || "暂无核心摘要";
+      const summaryConfidence = analysisDocument.confidence_score ?? summary.confidence_score ?? "-";
       const documentSource = documentPayload?.source || (analysisDocument.document_markdown ? "analysis_document" : "summary_payload");
       metaGrid.innerHTML = `
         <div class="meta-card"><div class="meta-label">标题</div><div class="meta-value">${escapeHtml(video.title || "-")}</div></div>
@@ -1639,7 +1639,7 @@
         <div class="meta-card"><div class="meta-label">核心摘要</div><div class="meta-value">${escapeHtml(coreSummary)}</div></div>
       `;
       $("videoSummaryPath").value = documentPayload?.path || detail.summary_export_path || (analysisDocument.document_markdown ? "数据库 video_analysis_document" : "");
-      $("videoSummaryContent").value = documentPayload?.content || summary.summary_markdown || analysisDocument.document_markdown || "";
+      $("videoSummaryContent").value = analysisDocument.document_markdown || documentPayload?.content || summary.summary_markdown || "";
       renderVideoSummaryMarkdownPreview(detail, documentPayload);
       setVideoSummaryView(state.videoSummaryView || "preview");
       renderVideoKnowledgeUnits(detail.knowledge_units || []);
@@ -1721,12 +1721,7 @@
       const preview = $("videoSummaryPreview");
       const summary = detail?.summary || {};
       const analysisDocument = detail?.analysis_document || {};
-      const rawMarkdown = documentPayload?.content || summary.summary_markdown || analysisDocument.document_markdown || "";
-      if (analysisDocument.document_markdown && !summary.summary_markdown && documentPayload?.source === "analysis_document") {
-        preview.innerHTML = renderCompactAnalysisDocument(detail);
-        preview.classList.remove("empty");
-        return;
-      }
+      const rawMarkdown = analysisDocument.document_markdown || documentPayload?.content || summary.summary_markdown || "";
       if (!rawMarkdown.trim()) {
         const coreSummary = summary.core_summary || analysisDocument.core_summary || "";
         if (coreSummary) {
@@ -1745,47 +1740,6 @@
       window.requestAnimationFrame(() => {
         dedupeRenderedMarkdownImages(preview);
       });
-    }
-
-    function renderCompactAnalysisDocument(detail) {
-      const analysisDocument = detail?.analysis_document || {};
-      const chapters = detail?.chapters || [];
-      const units = detail?.knowledge_units || [];
-      const coreSummary = analysisDocument.core_summary || "暂无核心摘要";
-      const keyPoints = extractAnalysisKeyPoints(analysisDocument.document_markdown || "");
-      const chapterHtml = chapters.map((chapter) => {
-        const chapterUnits = units.filter((unit) => unit.source_chapter_id === chapter.id).slice(0, 8);
-        const unitLines = chapterUnits.map((unit) => {
-          return `<li>${escapeHtml(unit.knowledge_kind || "-")} / ${escapeHtml(unit.lifecycle_status || "-")}：${escapeHtml(truncateText(unit.canonical_statement || unit.statement || "", 180))}</li>`;
-        }).join("");
-        return `
-          <h3>${escapeHtml(chapter.title || `章节 ${Number(chapter.chapter_index || 0) + 1}`)}</h3>
-          <ul>
-            <li>时间：${escapeHtml(formatTimestampMs(chapter.start_ms))} - ${escapeHtml(formatTimestampMs(chapter.end_ms))}</li>
-            <li>领域：${escapeHtml(chapter.primary_domain || "-")} / ${escapeHtml(chapter.chapter_type || "-")}</li>
-            <li>摘要：${escapeHtml(truncateText(chapter.summary || "暂无章节摘要", 360))}</li>
-          </ul>
-          ${unitLines ? `<p>知识单元预览：</p><ul>${unitLines}</ul>` : ""}
-        `;
-      }).join("");
-      return `
-        <h1>${escapeHtml(detail?.video?.title || "视频分析")}</h1>
-        <h2>核心摘要</h2>
-        <p>${escapeHtml(coreSummary)}</p>
-        ${keyPoints.length ? `<h2>重点结论</h2><ul>${keyPoints.map((point) => `<li>${escapeHtml(point)}</li>`).join("")}</ul>` : ""}
-        <h2>章节</h2>
-        ${chapterHtml || "<p>暂无章节。</p>"}
-      `;
-    }
-
-    function extractAnalysisKeyPoints(markdown) {
-      const text = String(markdown || "");
-      const section = text.match(/##\s*重点结论\s*\n([\s\S]*?)(?:\n##\s|$)/);
-      if (!section) return [];
-      return section[1].split("\n")
-        .map((line) => line.replace(/^\s*[-*]\s+/, "").trim())
-        .filter(Boolean)
-        .slice(0, 6);
     }
 
     function buildVideoFrameContext(detail) {

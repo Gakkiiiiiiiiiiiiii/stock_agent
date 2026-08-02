@@ -687,31 +687,29 @@ class ContentQueryRepository:
         if detail is None:
             return None
 
-        summary = detail.get("summary") or {}
-        export_path = detail.get("summary_export_path")
-        content = None
-        source = None
-        if export_path:
-            path = Path(export_path)
-            if path.exists():
-                content = path.read_text(encoding="utf-8")
-                source = "markdown_export"
-        if content is None:
-            content = summary.get("summary_markdown")
-            if content:
-                source = "database_summary"
         analysis_document = detail.get("analysis_document") or {}
+        content = analysis_document.get("document_markdown")
+        source = "analysis_document" if content else None
+        # 旧 summary_markdown 只供没有新分析文档的历史视频使用；否则会把新预览遮住。
         if not content:
-            content = analysis_document.get("document_markdown")
-            if content:
-                source = "analysis_document"
+            summary = detail.get("summary") or {}
+            export_path = detail.get("summary_export_path")
+            if export_path:
+                path = Path(export_path)
+                if path.exists():
+                    content = path.read_text(encoding="utf-8")
+                    source = "markdown_export"
+            if content is None:
+                content = summary.get("summary_markdown")
+                if content:
+                    source = "database_summary"
         if not content:
             return None
         return {
             "video_id": video_id,
             "summary_mode": summary_mode,
             "title": detail["video"].get("title"),
-            "path": export_path,
+            "path": detail.get("summary_export_path"),
             "content": content,
             "source": source,
         }

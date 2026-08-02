@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 from app.api import app
-from storage.repositories.content_repository import ContentTaskRepository
+from storage.repositories.content_repository import ContentQueryRepository, ContentTaskRepository
 
 
 class FakeAdminService:
@@ -144,6 +144,25 @@ class FakeContentService:
 
 
 client = TestClient(app)
+
+
+def test_summary_document_prefers_analysis_document_over_legacy_summary(monkeypatch):
+    repo = ContentQueryRepository()
+    monkeypatch.setattr(
+        repo,
+        "get_video_detail",
+        lambda video_id, summary_mode="investment": {
+            "video": {"title": "测试视频"},
+            "summary": {"summary_markdown": "# 旧总结"},
+            "summary_export_path": None,
+            "analysis_document": {"document_markdown": "# 新 K3 总结"},
+        },
+    )
+
+    document = repo.get_video_summary_document(2)
+
+    assert document["source"] == "analysis_document"
+    assert document["content"] == "# 新 K3 总结"
 
 
 def test_content_ingest_api(monkeypatch):

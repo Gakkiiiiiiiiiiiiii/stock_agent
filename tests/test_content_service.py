@@ -178,6 +178,24 @@ class FakeKnowledgeModel:
         }
 
 
+class FakeAnalysisDocumentModel:
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "fake",
+            "model": "fake-k3",
+            "content": (
+                '{"core_summary":"券商受流动性改善催化，但需控制风险。",'
+                '"key_points":["券商受流动性改善催化维持偏强。"],'
+                '"chapter_summaries":[{"chapter_index":0,"title":"券商流动性与风险边界",'
+                '"summary":"券商受流动性改善催化维持偏强，但跌破五日线需减仓。"}]}'
+            ),
+        }
+
+
 class FakeVisionService:
     def analyze_frames(self, metadata, transcript, frames):
         _ = (metadata, transcript)
@@ -247,6 +265,7 @@ def test_video_ingest_service_processes_task(monkeypatch):
         storage_root=tmp_path / "content_storage",
     )
     service.knowledge_extractor.model_client = FakeKnowledgeModel()
+    service.analysis_document_generator.model_client = FakeAnalysisDocumentModel()
 
     try:
         queued = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVTEST123")

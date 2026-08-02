@@ -22,22 +22,11 @@ class VideoAnalysisDocumentGenerator:
         kind_counts = Counter(str(unit.get("knowledge_kind") or "STATE") for unit in units)
         domains = sorted({str(chapter.get("primary_domain") or "GENERAL") for chapter in chapters})
         curated = self._curate_with_llm(metadata, chapters, units)
-        core_summary = curated.get("core_summary") or self._fallback_core_summary(metadata, chapters, units)
-        key_points = curated.get("key_points") or self._fallback_key_points(units)
-        chapter_summaries = self._fallback_chapter_summaries(chapters, units)
-        curated_by_index = {
-            int(item.get("chapter_index") or 0): item
-            for item in (curated.get("chapter_summaries") or [])
-            if isinstance(item, dict) and str(item.get("summary") or "").strip()
-        }
-        chapter_summaries = [
-            {
-                "chapter_index": item["chapter_index"],
-                "title": str(curated_by_index.get(int(item["chapter_index"]), {}).get("title") or "").strip(),
-                "summary": str(curated_by_index.get(int(item["chapter_index"]), {}).get("summary") or item["summary"]).strip(),
-            }
-            for item in chapter_summaries
-        ]
+        if not curated:
+            raise RuntimeError("K3 分析文档生成失败；为避免规则兜底覆盖，未生成替代摘要")
+        core_summary = curated["core_summary"]
+        key_points = curated["key_points"]
+        chapter_summaries = curated["chapter_summaries"]
         markdown = self._markdown(metadata, chapters, core_summary, key_points, chapter_summaries)
         confidence_values = [float(unit.get("extraction_confidence") or 0.5) for unit in units] or [0.5]
         return {
@@ -57,15 +46,15 @@ class VideoAnalysisDocumentGenerator:
             "action_count": kind_counts["ACTION"],
             "risk_count": kind_counts["RISK_CONDITION"],
             "confidence_score": round(sum(confidence_values) / len(confidence_values), 4),
-            "generator_provider": curated.get("provider") or "rule",
-            "generator_model": curated.get("model") or "video-analysis-document-generator",
-            "generator_version": "v3.2-k3-json-mode" if curated.get("model") else "v3.1-rule-fallback",
+            "generator_provider": curated["provider"],
+            "generator_model": curated["model"],
+            "generator_version": "v3.2-k3-json-mode",
             "schema_version": "v1",
         }
 
     def _curate_with_llm(self, metadata: dict, chapters: list[dict], units: list[dict]) -> dict:
         if not self.model_client.available():
-            return {}
+            raise RuntimeError("K3 未配置，无法生成视频预览摘要")
         prompt = (
             "请把金融视频资料整理为一份给投资者阅读的结构化分析文档。只返回一个 JSON 对象，"
             "顶层必须为 {\"core_summary\":\"...\",\"key_points\":[...],\"chapter_summaries\":[...]}，"
@@ -96,16 +85,22 @@ class VideoAnalysisDocumentGenerator:
             )
             content = str(response.get("content") or "")
             payload = self._parse_json_object(content)
-            curated = self._from_json_payload(payload, chapters) if payload else self._parse_plain_brief(content, chapters)
-            if not curated.get("core_summary"):
-                return {}
+            curated = self._from_json_payload(payload, chapters)
+            expected_indexes = {int(chapter.get("chapter_index") or 0) for chapter in chapters}
+            summarized_indexes = {
+                int(item.get("chapter_index") or 0)
+                for item in curated.get("chapter_summaries", [])
+                if str(item.get("title") or "").strip() and str(item.get("summary") or "").strip()
+            }
+            if not curated.get("core_summary") or not curated.get("key_points") or summarized_indexes != expected_indexes:
+                raise ValueError("K3 返回的预览摘要字段不完整")
             return {
                 **curated,
                 "provider": response.get("provider"),
                 "model": response.get("model"),
             }
         except Exception:
-            logger.warning("LLM 视频精炼摘要失败，降级为规则摘要", exc_info=True)
+            logger.warning("K3 视频精炼摘要失败，不执行规则兜底", exc_info=True)
             return {}
 
     @staticmethod
@@ -132,53 +127,6 @@ class VideoAnalysisDocumentGenerator:
                     lines.append(f"- {unit.get('knowledge_kind')}: {statement}")
         return "\n".join(lines)[:14000]
 
-    @staticmethod
-    def _fallback_core_summary(metadata: dict, chapters: list[dict], units: list[dict]) -> str:
-        points = VideoAnalysisDocumentGenerator._fallback_key_points(units)
-        title = str(metadata.get("title") or "该视频")
-        if points:
-            return f"{title} 的主要判断是：" + "；".join(points[:3])
-        domain_text = "、".join(sorted({str(chapter.get("primary_domain") or "GENERAL") for chapter in chapters}))
-        return f"{title} 围绕 {domain_text} 展开，当前未提取到可确认的重点投资观点。"
-
-    @staticmethod
-    def _fallback_key_points(units: list[dict]) -> list[str]:
-        priority = {"ACTION": 6, "RISK_CONDITION": 6, "CAUSAL_THESIS": 5, "FORECAST": 5, "STATE": 4, "TECHNICAL_SIGNAL": 4, "FACT": 3}
-        selected: list[str] = []
-        for unit in sorted(units, key=lambda item: priority.get(str(item.get("knowledge_kind") or ""), 1), reverse=True):
-            statement = VideoAnalysisDocumentGenerator._short_text(unit.get("statement"), 100)
-            if statement and statement not in selected:
-                selected.append(statement)
-            if len(selected) >= 6:
-                break
-        return selected
-
-    @staticmethod
-    def _fallback_chapter_summaries(chapters: list[dict], units: list[dict] | None = None) -> list[dict]:
-        # 优先用该章已验证的知识单元（LLM 精炼语句）拼摘要，避免直接照抄口播原文
-        units_by_chapter: dict[int, list[dict]] = {}
-        for unit in units or []:
-            units_by_chapter.setdefault(int(unit.get("chapter_index") or 0), []).append(unit)
-        priority = {"ACTION": 6, "RISK_CONDITION": 6, "CAUSAL_THESIS": 5, "FORECAST": 5, "STATE": 4, "TECHNICAL_SIGNAL": 4}
-        summaries: list[dict] = []
-        for chapter in chapters:
-            index = int(chapter.get("chapter_index") or 0)
-            chapter_units = sorted(
-                units_by_chapter.get(index, []),
-                key=lambda item: priority.get(str(item.get("knowledge_kind") or ""), 1),
-                reverse=True,
-            )
-            parts = []
-            for unit in chapter_units:
-                statement = VideoAnalysisDocumentGenerator._short_text(unit.get("statement"), 80)
-                if statement and statement not in parts:
-                    parts.append(statement)
-                if len("；".join(parts)) >= 110:
-                    break
-            summary = "；".join(parts)[:120] if parts else VideoAnalysisDocumentGenerator._short_text(chapter.get("summary"), 120)
-            summaries.append({"chapter_index": index, "summary": summary})
-        return summaries
-
     @classmethod
     def _from_json_payload(cls, payload: dict[str, Any], chapters: list[dict]) -> dict:
         return {
@@ -186,36 +134,6 @@ class VideoAnalysisDocumentGenerator:
             "key_points": cls._short_list(payload.get("key_points"), limit=5, text_limit=100),
             "chapter_summaries": cls._chapter_summaries(payload.get("chapter_summaries"), chapters),
         }
-
-    @classmethod
-    def _parse_plain_brief(cls, content: str, chapters: list[dict]) -> dict:
-        summary = ""
-        key_points: list[str] = []
-        summaries_by_index: dict[int, str] = {}
-        for raw_line in content.replace("\r", "").split("\n"):
-            line = raw_line.strip().lstrip("-*").strip()
-            if not line:
-                continue
-            if line.startswith("摘要：") or line.startswith("摘要:"):
-                summary = cls._short_text(line.split(":", 1)[-1].split("：", 1)[-1], 240)
-                continue
-            if line.startswith("要点：") or line.startswith("要点:"):
-                point = cls._short_text(line.split(":", 1)[-1].split("：", 1)[-1], 100)
-                if point and point not in key_points:
-                    key_points.append(point)
-                continue
-            chapter_match = re.match(r"章节\s*(\d+)\s*[:：]\s*(.+)", line)
-            if chapter_match:
-                summaries_by_index[int(chapter_match.group(1))] = cls._short_text(chapter_match.group(2), 120)
-        chapter_summaries = [
-            {
-                "chapter_index": int(chapter.get("chapter_index") or 0),
-                "title": "",
-                "summary": summaries_by_index.get(int(chapter.get("chapter_index") or 0), ""),
-            }
-            for chapter in chapters
-        ]
-        return {"core_summary": summary, "key_points": key_points[:5], "chapter_summaries": chapter_summaries}
 
     @staticmethod
     def _markdown(metadata: dict, chapters: list[dict], core_summary: str, key_points: list[str], chapter_summaries: list[dict]) -> str:
