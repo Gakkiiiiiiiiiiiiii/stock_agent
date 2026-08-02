@@ -18,7 +18,7 @@ services:
       retries: 10
 
   qdrant:
-    image: qdrant/qdrant:v1.11.3
+    image: qdrant/qdrant:v1.18.2
     container_name: stock-agent-qdrant
     environment:
       QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
@@ -155,6 +155,7 @@ services:
       - ./skills:/app/skills
       - ./storage:/app/storage
       - ./workers:/app/workers
+      - ./xiaoe_hls_poc:/app/xiaoe_hls_poc
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./README.md:/app/README.md:ro
     depends_on:

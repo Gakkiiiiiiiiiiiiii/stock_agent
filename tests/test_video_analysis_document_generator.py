@@ -16,7 +16,7 @@ class CuratedSummaryModel:
             "content": """{
               "core_summary": "市场正处于温和去杠杆阶段，权重科技承压，微盘相对受益于低杠杆与低拥挤度。",
               "key_points": ["融资余额持续回落，反映市场在温和去杠杆。", "高杠杆拥挤方向调整时应控制仓位。", "微盘因杠杆和拥挤度较低，短期相对占优。"],
-              "chapter_summaries": [{"chapter_index": 0, "summary": "市场去杠杆下，权重科技承压，微盘相对占优。"}]
+              "chapter_summaries": [{"chapter_index": 0, "title": "市场去杠杆与风格切换", "summary": "市场去杠杆下，权重科技承压，微盘相对占优。"}]
             }""",
         }
 
@@ -35,6 +35,7 @@ def test_generator_uses_curated_llm_summary_and_chapter_brief():
     assert result["generator_model"] == "k3"
     assert len(result["key_points"]) == 3
     assert result["chapter_summaries"][0]["summary"].startswith("市场去杠杆")
+    assert result["chapter_summaries"][0]["title"] == "市场去杠杆与风格切换"
     assert "## 重点结论" in result["document_markdown"]
 
 
@@ -67,3 +68,75 @@ def test_kimi_k3_forces_temperature_one():
 
     assert http_client.payload["temperature"] == 1.0
     assert http_client.payload["response_format"] == {"type": "json_object"}
+
+
+class PlainTextBriefModel:
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "openai_compatible",
+            "model": "k3",
+            "content": "摘要：市场处于出清尾声，等待流动性修复。\n要点：被动抛压减弱。\n章节0：半导体出清接近尾声，量能萎缩。\n章节1：美联储政策路径影响外资流向。",
+        }
+
+
+def test_generator_parses_zero_based_plain_text_chapter_summaries():
+    generator = VideoAnalysisDocumentGenerator(model_client=PlainTextBriefModel())
+    result = generator.generate(
+        metadata={"title": "复盘", "publish_time": "20260729"},
+        chapters=[
+            {"chapter_index": 0, "title": "半导体", "primary_domain": "INDUSTRY"},
+            {"chapter_index": 1, "title": "美联储", "primary_domain": "MACRO"},
+        ],
+        units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声", "chapter_index": 0, "extraction_confidence": 0.9}],
+    )
+
+    assert result["chapter_summaries"][0]["summary"].startswith("半导体出清")
+    assert result["chapter_summaries"][1]["summary"].startswith("美联储")
+
+
+def test_generator_merges_partial_curated_summaries_with_unit_fallback():
+    class PartialCuratedModel:
+        def available(self):
+            return True
+
+        def complete(self, **kwargs):
+            _ = kwargs
+            return {
+                "provider": "fake",
+                "model": "k3",
+                "content": '{"core_summary":"核心判断","key_points":["要点一"],"chapter_summaries":[{"chapter_index":0,"summary":"第0章精炼摘要"}]}',
+            }
+
+    generator = VideoAnalysisDocumentGenerator(model_client=PartialCuratedModel())
+    result = generator.generate(
+        metadata={"title": "复盘", "publish_time": "20260729"},
+        chapters=[
+            {"chapter_index": 0, "title": "指数", "primary_domain": "MARKET", "summary": "大家晚上好欢迎收看"},
+            {"chapter_index": 1, "title": "半导体", "primary_domain": "INDUSTRY", "summary": "这个呢比之前来的好为什么呢"},
+        ],
+        units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声，量能萎缩。", "chapter_index": 1}],
+    )
+
+    assert result["chapter_summaries"][0]["summary"] == "第0章精炼摘要"
+    assert "半导体出清接近尾声" in result["chapter_summaries"][1]["summary"]
+    assert "这个呢比之前来的好" not in result["chapter_summaries"][1]["summary"]
+
+
+def test_generator_fallback_chapter_summary_uses_units_not_transcript():
+    generator = VideoAnalysisDocumentGenerator(model_client=None)
+    chapters = [
+        {"chapter_index": 0, "title": "半导体", "primary_domain": "INDUSTRY", "summary": "大家晚上好欢迎收看一眼看盘今天呢我们来讲一下这个半导体啊它这个走势"},
+    ]
+    units = [
+        {"knowledge_kind": "CAUSAL_THESIS", "statement": "流动性危机中恐慌自我强化，底部由流动性修复决定。", "chapter_index": 0},
+        {"knowledge_kind": "STATE", "statement": "半导体指数跌破多条均线，处于下行趋势。", "chapter_index": 0},
+    ]
+
+    summaries = generator._fallback_chapter_summaries(chapters, units)
+
+    assert "流动性危机中恐慌自我强化" in summaries[0]["summary"]
+    assert "大家晚上好" not in summaries[0]["summary"]

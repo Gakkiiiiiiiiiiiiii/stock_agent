@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from difflib import SequenceMatcher
 from typing import Any
+
+import httpx
 
 from app.model_providers import AnalysisModelClient
 from engines.content.knowledge_schema import KnowledgeUnitSchemaValidator
@@ -31,22 +34,27 @@ class KnowledgeUnitExtractor:
         self.last_validation_report: dict = {"accepted_count": 0, "rejected_count": 0, "repaired_count": 0, "rejection_reasons": []}
 
     def extract(self, metadata: dict, chapters: list[dict]) -> list[dict]:
+        if not self.model_client.available():
+            raise RuntimeError("LLM 未配置（ANALYSIS_MODEL_*），无法进行知识抽取")
         units: list[dict] = []
         reports: list[dict] = []
         for index, chapter in enumerate(chapters):
             if chapter.get("chapter_type") == "ADVERTISEMENT":
                 continue
             chapter_units: list[dict] = []
-            if self.model_client.available() and index < self.max_llm_chapters:
-                try:
-                    chapter_units = self._extract_with_llm(metadata, chapter)
-                except Exception:
-                    logger.warning("LLM 原子知识抽取失败，降级为规则抽取 chapter=%s", chapter.get("chapter_index"), exc_info=True)
-            if not chapter_units:
-                chapter_units = self._extract_with_rules(chapter)
+            if index < self.max_llm_chapters:
+                chapter_units = self._extract_with_llm(metadata, chapter)
             validation = self.schema_validator.validate_many(chapter_units, chapter=chapter)
-            reports.append({"chapter_index": chapter.get("chapter_index"), **validation.metrics})
-            units.extend(validation.valid_units)
+            grounded_units = [unit for unit in validation.valid_units if self._grounding_ok(unit, chapter)]
+            dropped = len(validation.valid_units) - len(grounded_units)
+            if dropped:
+                logger.warning(
+                    "落地校验丢弃 %s 条知识单元（数字/代码在章节转写中无出处）chapter=%s",
+                    dropped,
+                    chapter.get("chapter_index"),
+                )
+            reports.append({"chapter_index": chapter.get("chapter_index"), **validation.metrics, "grounding_dropped_count": dropped})
+            units.extend(grounded_units)
         selected_units = self._select_high_value_units(units)
         self.last_validation_report = self._merge_validation_reports(reports)
         self.last_validation_report["accepted_count"] = len(selected_units)
@@ -58,19 +66,11 @@ class KnowledgeUnitExtractor:
         fragments = self._chapter_fragments(chapter)
         for fragment_index, fragment in enumerate(fragments, start=1):
             fragment_units = self._extract_fragment_with_llm(metadata, fragment, fragment_index, len(fragments))
-            if fragment_units:
-                units.extend(fragment_units)
-                continue
-            # A malformed LLM reply must not silently erase all of this portion of a video.
-            # Keep grounded rule-extracted claims for this fragment while the LLM is unavailable.
-            fallback_units = self._extract_with_rules(fragment)
-            logger.warning(
-                "LLM 原子知识片段不可用，已降级为规则抽取 fragment=%s/%s units=%s",
-                fragment_index,
-                len(fragments),
-                len(fallback_units),
-            )
-            units.extend(fallback_units)
+            if not fragment_units:
+                raise RuntimeError(
+                    f"LLM 知识抽取失败 chapter={chapter.get('chapter_index')} fragment={fragment_index}/{len(fragments)}"
+                )
+            units.extend(fragment_units)
         return self._select_high_value_units(units, limit_per_chapter=self.max_units_per_chapter)
 
     def _extract_fragment_with_llm(
@@ -80,7 +80,10 @@ class KnowledgeUnitExtractor:
         fragment_index: int,
         fragment_count: int,
     ) -> list[dict]:
-        for attempt in range(2):
+        max_attempts = 3
+        for attempt in range(max_attempts):
+            if attempt:
+                time.sleep(min(2 * attempt, 5))
             try:
                 prompt = self._llm_prompt(
                     metadata,
@@ -102,14 +105,22 @@ class KnowledgeUnitExtractor:
                 if response.get("finish_reason") == "length":
                     raise ValueError("LLM JSON output was truncated")
                 raise ValueError("LLM returned an empty units array")
-            except Exception:
+            except Exception as exc:
                 logger.warning(
-                    "LLM 原子知识片段解析失败 fragment=%s/%s attempt=%s/2",
+                    "LLM 原子知识片段解析失败 fragment=%s/%s attempt=%s/%s",
                     fragment_index,
                     fragment_count,
                     attempt + 1,
+                    max_attempts,
                     exc_info=True,
                 )
+                if (
+                    isinstance(exc, httpx.HTTPStatusError)
+                    and exc.response is not None
+                    and exc.response.status_code == 429
+                    and attempt + 1 < max_attempts
+                ):
+                    time.sleep(30 * (attempt + 1))
         return []
 
     def _llm_prompt(
@@ -137,6 +148,8 @@ class KnowledgeUnitExtractor:
             "应消除口语重复和明显的 ASR 错字；不得照抄长段转写。条件写入 condition_text，风险/失效条件写入 invalidation_text，"
             "实体写入 entities。evidence 仅用于定位原始语音证据，每项只填写 source_ref（window_N）；"
             "系统会从该时间窗回填原始 ASR 文本，因此不要返回 evidence_text，也不要把原始口播放进 conclusion。"
+            "结论中的具体数字、证券代码、专有名词必须能在转写原文中找到出处；找不到出处的具体数字和标的一律不要写入结论。"
+            "ASR 可能有错别字，专有名称可按上下文修正，但数字不得外推或编造。\n"
             "不要杜撰股票代码、数据或日期。\n"
             "返回格式示例：{\"units\":[{\"knowledge_kind\":\"STATE\",\"subject_key\":\"A股市场\",\"subject_name\":\"A股市场\","
             "\"predicate_key\":\"deleveraging_state\",\"conclusion\":\"市场仍处于温和去杠杆阶段，拥挤科技方向承压。\","
@@ -172,93 +185,6 @@ class KnowledgeUnitExtractor:
         if not fragments:
             return [chapter]
         return fragments[: self.max_llm_fragments_per_chapter]
-
-    def _extract_with_rules(self, chapter: dict) -> list[dict]:
-        text = self._chapter_text(chapter)
-        sentences = [part.strip() for part in re.split(r"[。！？\n]", text) if len(part.strip()) >= 6]
-        units: list[dict] = []
-        for sentence in sentences:
-            split_units = self._split_sentence(sentence, chapter)
-            units.extend(split_units)
-        if not units and text.strip():
-            units.append(self._build_unit(text.strip()[:280], chapter, "STATE", "OPINION", "NEUTRAL"))
-        return units[: self.max_units_per_chapter]
-
-    def _split_sentence(self, sentence: str, chapter: dict) -> list[dict]:
-        units: list[dict] = []
-        method_match = re.search(r"(.+?(?:需要|一般|通常|可以作为).+?(?:判断|信号|指标|方法).*)", sentence)
-        if method_match:
-            units.append(self._build_unit(method_match.group(1), chapter, "METHOD", "OPINION", "NEUTRAL"))
-        if any(token in sentence for token in ("数据显示", "公布", "已经", "上涨", "下跌", "跌破", "站上", "成交额")) and re.search(r"\d|上证|创业板|CPI|PPI|M1|M2", sentence):
-            kind = "TECHNICAL_SIGNAL" if any(token in sentence for token in ("跌破", "站上", "支撑", "压力", "均线", "MACD")) else "FACT"
-            units.append(self._build_unit(sentence, chapter, kind, "FACT" if kind == "FACT" else "OPINION", self._sentiment(sentence)))
-        if any(token in sentence for token in ("我认为", "还不能", "看多", "看空", "偏强", "偏弱", "状态", "处于")):
-            units.append(self._build_unit(sentence, chapter, "STATE", "OPINION", self._sentiment(sentence)))
-        if any(token in sentence for token in ("预计", "预期", "可能", "大概率", "未来", "下周", "下一季度")):
-            units.append(self._build_unit(sentence, chapter, "FORECAST", "FORECAST", self._sentiment(sentence)))
-        if any(token in sentence for token in ("催化", "驱动", "提振", "利好", "受益")):
-            units.append(self._build_unit(sentence, chapter, "CAUSAL_THESIS", "OPINION", self._sentiment(sentence)))
-        if any(token in sentence for token in ("如果", "若", "只有", "可以考虑", "仓位", "加仓", "减仓", "低吸", "止盈", "止损")):
-            units.append(self._build_unit(sentence, chapter, "ACTION", "OPINION", self._sentiment(sentence)))
-        if any(token in sentence for token in ("风险", "风控", "证伪", "失效", "跌破", "不成立", "不能破")):
-            units.append(self._build_unit(sentence, chapter, "RISK_CONDITION", "OPINION", "BEARISH"))
-        if any(token in sentence for token in ("推动", "导致", "受益", "驱动", "因为", "所以")) and chapter.get("primary_domain") in {"INDUSTRY", "MACRO", "COMPANY"}:
-            units.append(self._build_unit(sentence, chapter, "CAUSAL_THESIS", "OPINION", self._sentiment(sentence)))
-        return self._dedup_units(units)
-
-    def _build_unit(self, sentence: str, chapter: dict, kind: str, claim_type: str, sentiment: str) -> dict:
-        condition_text = self._extract_condition(sentence)
-        invalidation_text = self._extract_invalidation(sentence)
-        evidence = self._evidence_for_sentence(sentence, chapter)
-        return {
-            "chapter_index": chapter.get("chapter_index"),
-            "primary_domain": self._domain_for_kind(chapter.get("primary_domain") or "GENERAL", kind),
-            "secondary_domains": chapter.get("secondary_domains") or [],
-            "knowledge_kind": kind,
-            "temporal_class": None,
-            "expression_type": "AUTHOR_EXPLICIT",
-            "predicate_key": self._predicate_for_rule(sentence, kind),
-            "statement": sentence,
-            "canonical_statement": re.sub(r"\s+", "", sentence),
-            "claim_type": claim_type,
-            "sentiment": sentiment,
-            "certainty_score": 0.62 if claim_type in {"OPINION", "FORECAST"} else 0.78,
-            "extraction_confidence": max(0.5, float(chapter.get("confidence_score") or 0.65) - 0.05),
-            "time_horizon": self._time_horizon(sentence),
-            "timeframe": self._timeframe(sentence),
-            "condition_text": condition_text,
-            "invalidation_text": invalidation_text,
-            "entities": self._entities_from_chapter(chapter, sentence),
-            "evidence": evidence,
-            "attributes": {"rule_extracted": True},
-            "extractor_provider": "rule",
-            "extractor_model": "knowledge-unit-rules",
-            "extractor_version": "v3.0-rule",
-        }
-
-    @staticmethod
-    def _domain_for_kind(chapter_domain: str, kind: str) -> str:
-        if kind == "ACTION":
-            return "TRADING"
-        if kind == "RISK_CONDITION":
-            return "RISK"
-        return chapter_domain
-
-    @staticmethod
-    def _predicate_for_rule(sentence: str, kind: str) -> str:
-        if "支撑" in sentence:
-            return "support_level"
-        if "压力" in sentence or "阻力" in sentence:
-            return "resistance_level"
-        if "加仓" in sentence:
-            return "increase_position"
-        if "减仓" in sentence:
-            return "reduce_position"
-        if "风险" in sentence or "证伪" in sentence:
-            return "risk_condition"
-        if "催化" in sentence or "驱动" in sentence:
-            return "catalyst"
-        return str(kind or "STATE").lower()
 
     @staticmethod
     def _chapter_text(chapter: dict) -> str:
@@ -339,59 +265,6 @@ class KnowledgeUnitExtractor:
                 }
             )
         return entities
-
-    @staticmethod
-    def _extract_condition(sentence: str) -> str | None:
-        for pattern in (r"(如果.+?(?:就|那么|可以).+)", r"(若.+?(?:就|可以).+)", r"(只有.+?才.+)", r"(前提是.+)"):
-            match = re.search(pattern, sentence)
-            if match:
-                return match.group(1)[:500]
-        return None
-
-    @staticmethod
-    def _extract_invalidation(sentence: str) -> str | None:
-        for pattern in (r"(如果.+?失效.*)", r"(若.+?失效.*)", r"(跌破.+?(?:失效|不成立|就坏了).*)", r"(证伪.+)", r"(不能破.+)"):
-            match = re.search(pattern, sentence)
-            if match:
-                return match.group(1)[:500]
-        return None
-
-    @staticmethod
-    def _sentiment(sentence: str) -> str:
-        if any(token in sentence for token in ("看空", "风险", "下跌", "跌破", "承压", "失效", "补跌", "减仓")):
-            return "BEARISH"
-        if any(token in sentence for token in ("看多", "上涨", "突破", "支撑", "利好", "受益", "加仓")):
-            return "BULLISH"
-        return "NEUTRAL"
-
-    @staticmethod
-    def _time_horizon(sentence: str) -> str | None:
-        if any(token in sentence for token in ("未来几年", "长期")):
-            return "LONG_TERM"
-        if any(token in sentence for token in ("下一季度", "季度")):
-            return "QUARTER"
-        if any(token in sentence for token in ("下周", "本周", "未来几天")):
-            return "SHORT_TERM"
-        return None
-
-    @staticmethod
-    def _timeframe(sentence: str) -> str | None:
-        for token in ("日线", "周线", "月线", "分钟级", "短线", "中线", "长线"):
-            if token in sentence:
-                return token
-        return None
-
-    @staticmethod
-    def _dedup_units(units: list[dict]) -> list[dict]:
-        seen: set[tuple[str, str]] = set()
-        result = []
-        for unit in units:
-            key = (unit["knowledge_kind"], unit["statement"])
-            if key in seen:
-                continue
-            seen.add(key)
-            result.append(unit)
-        return result
 
     def _normalize_llm_unit(self, item: dict[str, Any], chapter: dict, response: dict) -> dict:
         unit = dict(item)
@@ -501,6 +374,25 @@ class KnowledgeUnitExtractor:
                 if probe in transcript:
                     return window
         return windows[0] if windows else None
+
+    @staticmethod
+    def _grounding_ok(unit: dict, chapter: dict) -> bool:
+        """结论中的数字（>=2 位或小数）与证券代码必须能在章节转写原文中找到出处。"""
+        statement = str(unit.get("statement") or "")
+        tokens = set(re.findall(r"\d{6}|\d{4}\.HK", statement, flags=re.IGNORECASE))
+        tokens.update(
+            token
+            for token in re.findall(r"\d+(?:\.\d+)?", statement)
+            if len(token.lstrip("0")) >= 2 or "." in token
+        )
+        if not tokens:
+            return True
+        haystack = re.sub(r"\s+", "", " ".join(str(window.get("transcript_text") or "") for window in chapter.get("windows") or []))
+        for token in tokens:
+            if token not in haystack and token.replace(".", "") not in haystack:
+                logger.warning("知识单元落地校验失败，数字/代码 %s 无出处: %s", token, statement[:60])
+                return False
+        return True
 
     def _select_high_value_units(self, units: list[dict], limit_per_chapter: int | None = None) -> list[dict]:
         limit = limit_per_chapter or self.max_units_per_chapter

@@ -107,9 +107,13 @@ class TemporalWindowBuilder:
 
     @staticmethod
     def _frame_entities(frame: dict) -> list[str]:
+        # 多模态模型已判定该帧画面与口播无关：不采信其任何实体
+        if frame.get("narration_aligned") is False:
+            return []
+        # 帧实体只取模型甄别的 symbols 和主画面描述里的代码；
+        # 不对原始 OCR 做数字正则——其中行情软件侧边栏公告等内容与口播无关。
         entities = [str(item).strip() for item in frame.get("symbols") or [] if str(item).strip()]
-        text = f"{frame.get('ocr_text') or ''} {frame.get('visual_summary') or ''}"
-        entities.extend(re.findall(r"\b\d{6}\b|\b\d{4}\.HK\b", text, flags=re.IGNORECASE))
+        entities.extend(re.findall(r"\b\d{6}\b|\b\d{4}\.HK\b", str(frame.get("visual_summary") or ""), flags=re.IGNORECASE))
         return entities
 
     @staticmethod

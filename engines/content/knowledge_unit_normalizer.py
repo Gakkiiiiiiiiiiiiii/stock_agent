@@ -21,14 +21,20 @@ class KnowledgeUnitNormalizer:
             canonical = self._canonicalize(statement)
             entities = self._normalize_entities(unit, metadata)
             subject = self._infer_subject(unit, entities)
-            if not subject.get("subject_key"):
+            subject_key = unit.get("subject_key") or subject.get("subject_key")
+            if not subject_key:
                 continue
+            subject = {
+                "subject_type": unit.get("subject_type") or subject.get("subject_type"),
+                "subject_key": subject_key,
+                "subject_name": unit.get("subject_name") or subject.get("subject_name"),
+            }
             content_basis = "|".join(
                 [
                     str(unit.get("chapter_index") or 0),
                     str(unit.get("primary_domain") or "GENERAL"),
                     str(unit.get("knowledge_kind") or "STATE"),
-                    subject.get("subject_key") or "",
+                    str(subject_key),
                     canonical,
                     str(unit.get("condition_text") or ""),
                     str(unit.get("invalidation_text") or ""),
@@ -57,7 +63,7 @@ class KnowledgeUnitNormalizer:
                     "scope_type": unit.get("scope_type") or subject.get("subject_type"),
                     "scope_key": unit.get("scope_key") or subject.get("subject_key"),
                     "verification_status": verification_status,
-                    "extractor_version": unit.get("extractor_version") or "v3.0-rule",
+                    "extractor_version": unit.get("extractor_version") or "v3.2-k3-json-mode",
                     "schema_version": "v1",
                     "as_of_time": unit.get("as_of_time") or source_date,
                 }

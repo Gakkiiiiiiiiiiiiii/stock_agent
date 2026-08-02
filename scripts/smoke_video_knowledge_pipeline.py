@@ -102,8 +102,8 @@ class FakeAsrService:
 
 
 class FakeFrameExtractor:
-    def extract(self, video_path, output_dir, transcript_segments=None):
-        _ = (video_path, transcript_segments)
+    def extract(self, video_path, output_dir, transcript_segments=None, chapters=None):
+        _ = (video_path, transcript_segments, chapters)
         target = Path(output_dir) / "frame_000001.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"fake frame")
@@ -115,6 +115,31 @@ class FakeFrameExtractor:
                 "trigger_source": "smoke",
             }
         ]
+
+
+class FakeKnowledgeModel:
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "fake",
+            "model": "fake-k3",
+            "content": (
+                '{"units": ['
+                '{"knowledge_kind": "CAUSAL_THESIS", "subject_key": "黄金", "subject_name": "黄金",'
+                ' "predicate_key": "catalyst", "conclusion": "黄金主题受流动性改善催化维持偏强。",'
+                ' "claim_type": "OPINION", "sentiment": "BULLISH", "extraction_confidence": 0.9,'
+                ' "entities": [{"entity_name": "黄金", "entity_type": "THEME"}],'
+                ' "evidence": [{"source_ref": "window_0"}]},'
+                '{"knowledge_kind": "RISK_CONDITION", "subject_key": "黄金", "subject_name": "黄金",'
+                ' "predicate_key": "risk_condition", "conclusion": "若跌破五日线则黄金偏强判断失效需减仓。",'
+                ' "claim_type": "OPINION", "sentiment": "BEARISH", "extraction_confidence": 0.85,'
+                ' "evidence": [{"source_ref": "window_0"}]}'
+                ']}'
+            ),
+        }
 
 
 class FakeVisionService:
@@ -183,6 +208,7 @@ def run_smoke(root: Path, *, keep_db: bool = False) -> dict:
             vision_service=FakeVisionService(),
             storage_root=work_dir / "content_storage",
         )
+        service.knowledge_extractor.model_client = FakeKnowledgeModel()
         queued = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVSMOKE123")
         detail = service.process_task(queued["task_id"])
         video_id = int(detail["video"]["id"])

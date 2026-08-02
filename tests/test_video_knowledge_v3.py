@@ -15,7 +15,7 @@ from storage.db import Base, SessionLocal
 from storage.models.content import FinancialEvent, VideoChunk, VideoSummary
 from storage.models.knowledge import KnowledgeExtractionRun
 from storage.models.vector import MemoryRecord, VectorIndexTask
-from tests.test_content_service import FakeAsrService, FakeAudioPipeline, FakeBilibiliClient, FakeFrameExtractor, FakeVisionService
+from tests.test_content_service import FakeAsrService, FakeAudioPipeline, FakeBilibiliClient, FakeFrameExtractor, FakeKnowledgeModel, FakeVisionService
 
 
 def configure_test_db(tmp_path: Path) -> None:
@@ -42,6 +42,7 @@ def test_video_ingest_writes_v3_knowledge_without_video_memory():
         vision_service=FakeVisionService(),
         storage_root=tmp_path / "content_storage",
     )
+    service.knowledge_extractor.model_client = FakeKnowledgeModel()
 
     try:
         queued = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVTEST123")

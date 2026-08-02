@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import os
 import re
@@ -43,6 +44,8 @@ from storage.repositories.knowledge_repository import (
     VideoAnalysisDocumentRepository,
 )
 from storage.repositories.vector_repository import MemoryRepository, VectorMappingRepository
+
+logger = logging.getLogger(__name__)
 
 
 class VideoIngestService:
@@ -395,7 +398,7 @@ class VideoIngestService:
             video_id=video_id,
             source_hash=source_hash,
             parser_version="v3.0-rule",
-            extractor_version="v3.2-k3-json-mode" if self.knowledge_extractor.model_client.available() else "v3.1-rule-fallback",
+            extractor_version="v3.2-k3-json-mode",
             schema_version="v1",
         )
         extraction_validation: dict = {}
@@ -407,14 +410,18 @@ class VideoIngestService:
             self.task_repo.update(task_id, stage="knowledge_extract", progress=82)
             units = self.knowledge_extractor.extract(metadata=metadata, chapters=chapters)
             extraction_validation = getattr(self.knowledge_extractor, "last_validation_report", {})
+            logger.info("知识流水线 video_id=%s extract=%s", video_id, len(units))
             self.task_repo.update(task_id, stage="knowledge_normalize", progress=86)
             units = self.knowledge_normalizer.normalize(units, metadata=metadata)
+            logger.info("知识流水线 video_id=%s normalize=%s", video_id, len(units))
             source_date = self.knowledge_normalizer.parse_source_datetime(metadata.get("publish_time"))
             self.task_repo.update(task_id, stage="temporal_policy", progress=89)
             units = self.knowledge_temporal_policy.apply(units, source_date=source_date)
             self.task_repo.update(task_id, stage="deduplicate_conflict", progress=92)
             units = self.knowledge_deduplicator.deduplicate(units)
+            logger.info("知识流水线 video_id=%s dedup=%s", video_id, len(units))
             units, relations = self.knowledge_conflict_resolver.resolve(units)
+            logger.info("知识流水线 video_id=%s conflict_resolve=%s relations=%s", video_id, len(units), len(relations))
             self._ensure_reparse_does_not_regress(
                 existing_units=self.knowledge_repo.list_units_for_video(video_id),
                 replacement_units=units,
@@ -517,14 +524,16 @@ class VideoIngestService:
     @staticmethod
     def _apply_chapter_summaries(chapters: list[dict], summaries: list[dict]) -> None:
         summary_by_index = {
-            int(item.get("chapter_index") or 0): str(item.get("summary") or "").strip()
+            int(item.get("chapter_index") or 0): item
             for item in summaries
             if isinstance(item, dict) and str(item.get("summary") or "").strip()
         }
         for chapter in chapters:
             index = int(chapter.get("chapter_index") or 0)
-            if summary := summary_by_index.get(index):
-                chapter["summary"] = summary
+            if item := summary_by_index.get(index):
+                chapter["summary"] = str(item.get("summary") or "").strip()
+                if title := str(item.get("title") or "").strip():
+                    chapter["title"] = title
 
     def list_videos(self, summary_mode: str = "investment", limit: int = 50) -> list[dict]:
         return self.query_repo.list_videos(summary_mode=summary_mode, limit=limit)
@@ -787,6 +796,15 @@ class VideoIngestService:
             return None
         return str(candidate)
 
+    def _build_provisional_chapters(self, transcript: dict) -> list[dict]:
+        """抽帧前基于转写切出临时主题章节，用于按章节分配帧预算。"""
+        try:
+            windows = self.temporal_window_builder.build(transcript=transcript, frame_insights=[])
+            return self.chapter_segmenter.segment(windows)
+        except Exception:
+            logger.warning("临时章节切分失败，抽帧降级为均匀采样", exc_info=True)
+            return []
+
     def _build_visual_context(
         self,
         metadata: dict,
@@ -798,20 +816,24 @@ class VideoIngestService:
         try:
             video_path = self.bilibili_client.download_video(self.raw_video_dir, url=url, bv_id=bv_id)
             frame_output_dir = self.frame_dir / str(metadata.get("bvid") or metadata.get("platform_video_id") or video_id)
+            chapters = self._build_provisional_chapters(transcript)
             frames = self.frame_extractor.extract(
                 video_path=video_path,
                 output_dir=frame_output_dir,
                 transcript_segments=transcript.get("segments") or [],
+                chapters=chapters,
             )
             frame_insights = self.vision_service.analyze_frames(metadata=metadata, transcript=transcript, frames=frames)
             self.frame_repo.replace_for_video(video_id, frame_insights)
             if not frame_insights:
+                logger.warning("bilibili 视觉上下文为空: video_id=%s bvid=%s", video_id, bv_id)
                 return None
             return {
                 "context": self.multimodal_context_builder.build(transcript=transcript, frame_insights=frame_insights),
                 "frame_insights": frame_insights,
             }
         except Exception:
+            logger.warning("bilibili 视觉上下文构建失败: video_id=%s bvid=%s", video_id, bv_id, exc_info=True)
             return None
 
     def _build_xiaoe_visual_context(
@@ -831,20 +853,24 @@ class VideoIngestService:
                 output_stem=str(metadata.get("platform_video_id") or video_id),
             )
             frame_output_dir = self.frame_dir / str(metadata.get("platform_video_id") or video_id)
+            chapters = self._build_provisional_chapters(transcript)
             frames = self.frame_extractor.extract(
                 video_path=video_path,
                 output_dir=frame_output_dir,
                 transcript_segments=transcript.get("segments") or [],
+                chapters=chapters,
             )
             frame_insights = self.vision_service.analyze_frames(metadata=metadata, transcript=transcript, frames=frames)
             self.frame_repo.replace_for_video(video_id, frame_insights)
             if not frame_insights:
+                logger.warning("xiaoe 视觉上下文为空: video_id=%s platform_video_id=%s", video_id, metadata.get("platform_video_id"))
                 return None
             return {
                 "context": self.multimodal_context_builder.build(transcript=transcript, frame_insights=frame_insights),
                 "frame_insights": frame_insights,
             }
         except Exception:
+            logger.warning("xiaoe 视觉上下文构建失败: video_id=%s platform_video_id=%s", video_id, metadata.get("platform_video_id"), exc_info=True)
             return None
 
     def _enrich_chunks(self, chunks: list[dict]) -> list[dict]:

@@ -152,3 +152,51 @@ def test_video_vision_service_uses_ocr_guided_summary_when_image_input_is_unsupp
         assert model.complete_calls == 2
     finally:
         shutil.rmtree(tmp_path, ignore_errors=True)
+
+
+class MisalignedVisualModel:
+    def available(self):
+        return True
+
+    def create_chat_completion(self, **kwargs):
+        _ = kwargs
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": (
+                            '{"narration_aligned": false,'
+                            '"visual_summary":"画面与口播内容无关，主屏为资讯公告列表。",'
+                            '"themes":["公告"],"symbols":["000712","锦龙股份"],'
+                            '"visual_tags":["news_page"],"objects":[{"name":"锦龙股份","value":"000712"}],'
+                            '"confidence_score":0.7}'
+                        )
+                    }
+                }
+            ]
+        }
+
+
+def test_video_vision_service_drops_symbols_when_frame_is_not_narration_aligned():
+    temp_root = Path("D:/project/stock_agent/.pytest-tmp")
+    temp_root.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mkdtemp(prefix="vision-misaligned-test-", dir=temp_root))
+    image_path = tmp_path / "frame.jpg"
+    image_path.write_bytes(b"fake frame bytes")
+    service = VideoVisionService(
+        model_client=MisalignedVisualModel(),
+        ocr_service=EmptyOcrService(),
+    )
+    transcript = {"segments": [{"start_ms": 900, "end_ms": 1600, "text": "半导体已经接近出清的尾声。"}]}
+    frames = [{"frame_index": 1, "timestamp_ms": 1000, "image_path": str(image_path), "trigger_source": "cue"}]
+
+    try:
+        insights = service.analyze_frames(metadata={"title": "测试视频"}, transcript=transcript, frames=frames)
+        assert len(insights) == 1
+        assert insights[0]["narration_aligned"] is False
+        assert insights[0]["symbols"] == []
+        assert insights[0]["themes"] == []
+        assert insights[0]["objects"] == []
+        assert insights[0]["confidence_score"] <= 0.2
+    finally:
+        shutil.rmtree(tmp_path, ignore_errors=True)

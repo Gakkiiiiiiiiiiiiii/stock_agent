@@ -61,11 +61,18 @@ class VideoVisionService:
             insight["ocr_text"] = ocr_text
             insight["related_text"] = related_text
             insight["visual_summary"] = str(visual_payload.get("visual_summary") or "").strip()
+            insight["narration_aligned"] = self._coerce_narration_aligned(visual_payload.get("narration_aligned"))
             insight["themes"] = self._ensure_string_list(visual_payload.get("themes"))
             insight["symbols"] = self._ensure_string_list(visual_payload.get("symbols"))
             insight["visual_tags"] = self._ensure_string_list(visual_payload.get("visual_tags"))
             insight["objects"] = visual_payload.get("objects") if isinstance(visual_payload.get("objects"), list) else []
             insight["confidence_score"] = self._coerce_confidence(visual_payload.get("confidence_score"))
+            if not insight["narration_aligned"]:
+                # 模型判定画面与口播无关：不采信该帧的主题/标的，仅保留说明性摘要
+                insight["themes"] = []
+                insight["symbols"] = []
+                insight["objects"] = []
+                insight["confidence_score"] = min(insight["confidence_score"], 0.2)
             if not insight["visual_summary"]:
                 insight["visual_summary"] = self._build_fallback_visual_summary(
                     related_text=related_text,
@@ -250,18 +257,21 @@ class VideoVisionService:
     def _build_prompt(metadata: dict, timestamp_ms: int, ocr_text: str, related_text: str) -> str:
         return (
             "请结合图片和已识别 OCR 文本，提取这一帧是否包含值得纳入投资总结的信息。\n"
-            "输出 JSON，字段必须包含：visual_summary, themes, symbols, visual_tags, objects, confidence_score。\n"
+            "输出 JSON，字段必须包含：narration_aligned, visual_summary, themes, symbols, visual_tags, objects, confidence_score。\n"
             "要求：\n"
+            "- narration_aligned: 你先判断主画面（主K线图、主表格、主讲PPT）的内容与 nearby_transcript 是否直接相关，相关为 true，无关为 false。\n"
             "- visual_summary: 用简洁中文描述这张图表达的核心信息。\n"
             "- themes: 画面里明确支持的主题列表。\n"
-            "- symbols: 画面里明确出现或强相关的股票代码列表。\n"
+            "- symbols: 只允许两类：(1) 主画面的主体标的；(2) 与 nearby_transcript 直接相关的代码。OCR 文本可能混有行情软件侧边栏、公告列表、资讯滚动区的无关代码，每个代码写入前必须逐个确认它属于上述两类之一，禁止把 OCR 里的代码全部搬入。\n"
             "- visual_tags: 从 candlestick_chart, line_chart, financial_table, presentation_slide, news_page, subtitle 中选择。\n"
-            "- objects: 若能明确识别出股票代码、价格、指标，输出对象数组。\n"
+            "- objects: 若能明确识别出股票代码、价格、指标，输出对象数组，准入标准与 symbols 相同。\n"
             "- confidence_score: 0 到 1。\n"
+            "画面与口播对齐规则（最重要）：\n"
+            "- 帧是口播内容的视觉增强。只描述与口播相关的主画面内容，忽略侧边栏、公告列表、资讯滚动区、广告位等 UI 区域。\n"
+            "- 若 narration_aligned 为 false，visual_summary 如实说明“画面与口播内容无关”，themes/symbols/objects 输出空数组。\n"
             "分工与交叉印证规则：\n"
-            "- 你负责解读画面语义（K线形态、趋势、图表结构、表格含义）；具体数字、点位、代码以 OCR 文本为准。\n"
+            "- 你负责解读画面语义（K线形态、趋势、图表结构、表格含义）；主画面区域的具体数字、点位以 OCR 文本为准。\n"
             "- 若你目测的数值与 OCR 文本不一致，必须采用 OCR 的数值，不要输出与 OCR 冲突的数字。\n"
-            "- OCR 文本中没有出现的具体数值、代码，不要写入 symbols 和 objects。\n"
             "- 不要根据口播臆造图中没有的信息。\n"
             f"video_title: {metadata.get('title', '')}\n"
             f"timestamp_ms: {timestamp_ms}\n"
@@ -336,6 +346,14 @@ class VideoVisionService:
         except (TypeError, ValueError):
             return 0.0
         return max(0.0, min(score, 1.0))
+
+    @staticmethod
+    def _coerce_narration_aligned(value: Any) -> bool:
+        if value is None:
+            return True
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() not in {"false", "0", "no", "否", "无关"}
 
     @staticmethod
     def _has_meaningful_visual_payload(payload: dict[str, Any]) -> bool:

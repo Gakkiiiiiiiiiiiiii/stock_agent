@@ -66,9 +66,26 @@ class ChapterSegmenter:
         ocr_text = " ".join(str(window.get("ocr_text") or "") for window in windows).strip()
         visual_summary = " ".join(str(window.get("visual_summary") or "") for window in windows).strip()
         classification = self.classifier.classify(text, ocr_text, visual_summary)
-        entities = sorted({entity for window in windows for entity in (window.get("entities") or [])})
-        entities.extend(item for item in self.classifier.extract_entities(f"{text} {ocr_text}") if item not in entities)
-        title = self.classifier.infer_title(text, classification["primary_domain"], entities)
+        window_entities = [entity for window in windows for entity in (window.get("entities") or [])]
+        # 帧是口播的视觉增强：实体以口播为锚、以 LLM 视觉判定为辅。
+        # 口播提到的排最前；visual_summary / 帧 symbols 由多模态模型按画面与口播的相关性甄别后采纳；
+        # 原始 OCR 不再直接提供实体——其中行情软件侧边栏公告等内容与口播无关。
+        spoken_entities = self.classifier.extract_entities(text)
+        visual_entities = self.classifier.extract_entities(visual_summary)
+        entities: list[str] = []
+        for source in (spoken_entities, visual_entities, window_entities):
+            for entity in source:
+                if entity not in entities:
+                    entities.append(entity)
+        entities = entities[:12]
+        # 标题优先用口播实体；其次人类可读实体；纯代码（如 999999）只在无可读实体时使用
+        bare_code = r"(?i)\d{6}|\d{4}\.HK"
+        title_entity = (
+            next((entity for entity in spoken_entities if entity in entities), None)
+            or next((entity for entity in entities if not re.fullmatch(bare_code, entity)), None)
+            or (entities[0] if entities else None)
+        )
+        title = self.classifier.infer_title(text, classification["primary_domain"], [title_entity] if title_entity else [])
         summary = self._summarize_text(text, ocr_text, visual_summary)
         return {
             "chapter_index": index,

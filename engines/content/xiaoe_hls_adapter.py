@@ -54,6 +54,8 @@ class XiaoeHlsAdapter:
         target_dir.mkdir(parents=True, exist_ok=True)
         stem = self._safe_stem(output_stem or self.extract_video_id(m3u8_url) or hashlib.sha1(m3u8_url.encode("utf-8")).hexdigest()[:16])
         target = target_dir / f"{stem}.mp4"
+        if target.is_file() and target.stat().st_size > 1024:
+            return target
         from xiaoe_hls_poc.input.request_loader import EffectiveContext
 
         ctx = EffectiveContext(

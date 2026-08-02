@@ -225,9 +225,22 @@ async def _capture(args: argparse.Namespace) -> int:
             await page.goto(args.course_url, wait_until="domcontentloaded", timeout=90000)
             await page.wait_for_timeout(5000)
             course_items = collect_course_items()
-        seen: set[str] = set()
-        course_items = [item for item in course_items if not (item.resource_id in seen or seen.add(item.resource_id))]
-        course_items = course_items[: args.limit]
+
+        def dedupe(items: list[CourseItem]) -> list[CourseItem]:
+            seen: set[str] = set()
+            return [item for item in items if not (item.resource_id in seen or seen.add(item.resource_id))]
+
+        # 分页：滚动加载更多，直到凑够 offset+limit 或列表不再增长
+        target_count = args.offset + args.limit
+        stall_rounds = 0
+        course_items = dedupe(course_items)
+        while len(course_items) < target_count and stall_rounds < 6:
+            before = len(course_items)
+            await page.mouse.wheel(0, 4000)
+            await page.wait_for_timeout(2500)
+            course_items = dedupe(collect_course_items())
+            stall_rounds = stall_rounds + 1 if len(course_items) == before else 0
+        course_items = course_items[args.offset : args.offset + args.limit]
         if not course_items:
             raise RuntimeError("未捕获课程列表，请确认已登录并能访问课程目录。")
 
@@ -297,6 +310,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--chrome", default=DEFAULT_CHROME)
     parser.add_argument("--out-dir", default=DEFAULT_OUT)
     parser.add_argument("--limit", type=int, default=8)
+    parser.add_argument("--offset", type=int, default=0, help="跳过前 N 节课程（用于分批抓取）")
     parser.add_argument("--wait-ms", type=int, default=4000)
     parser.add_argument("--cdp-url", help="连接已打开的可见 Chrome，例如 http://127.0.0.1:9223")
     return parser.parse_args()

@@ -25,6 +25,13 @@ class ChapterClassifier:
             if score:
                 scores[(domain, chapter_type)] = score
         if not scores:
+            if self._looks_like_ad(merged):
+                return {
+                    "primary_domain": "GENERAL",
+                    "secondary_domains": [],
+                    "chapter_type": "ADVERTISEMENT",
+                    "confidence_score": 0.72,
+                }
             return {
                 "primary_domain": "GENERAL",
                 "secondary_domains": [],
@@ -34,7 +41,9 @@ class ChapterClassifier:
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         primary_domain, chapter_type = ranked[0][0]
         secondary = [domain for (domain, _), score in ranked[1:4] if score > 0 and domain != primary_domain]
-        if self._looks_like_ad(merged):
+        # Calls to subscribe or like often appear briefly in otherwise substantive videos.
+        # Do not discard a whole multi-minute market chapter merely because it contains one.
+        if self._looks_like_ad(merged) and ranked[0][1] <= 1:
             return {
                 "primary_domain": "GENERAL",
                 "secondary_domains": [],

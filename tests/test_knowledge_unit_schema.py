@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from engines.content.knowledge_schema import KnowledgeUnitSchemaValidator
 from engines.content.knowledge_unit_extractor import KnowledgeUnitExtractor
 from engines.content.knowledge_unit_normalizer import KnowledgeUnitNormalizer
@@ -123,17 +125,48 @@ def test_schema_rejects_missing_required_fields_and_empty_evidence():
     assert missing_evidence["reason"] == "missing_evidence"
 
 
-def test_invalid_llm_json_falls_back_to_rule_extraction_and_records_metrics():
+def test_invalid_llm_json_raises_instead_of_rule_fallback():
     extractor = KnowledgeUnitExtractor(model_client=InvalidJsonModel())
-    units = extractor.extract(
-        metadata={"title": "测试", "publish_time": "20260729"},
-        chapters=[_chapter("券商处于偏强状态。如果跌破五日线就需要减仓。")],
-    )
+    with pytest.raises(RuntimeError, match="LLM 知识抽取失败"):
+        extractor.extract(
+            metadata={"title": "测试", "publish_time": "20260729"},
+            chapters=[_chapter("券商处于偏强状态。如果跌破五日线就需要减仓。")],
+        )
 
-    assert len(units) >= 2
-    assert extractor.last_validation_report["accepted_count"] == len(units)
-    assert all(unit["evidence"] for unit in units)
-    assert all(unit.get("predicate_key") for unit in units)
+
+def test_grounding_check_drops_unit_with_fabricated_numbers():
+    extractor = KnowledgeUnitExtractor(model_client=CuratedKnowledgeModel())
+    chapter = _chapter("消费转向供给侧改革，酿酒板块反弹到压力位。以4000点乐观假设外推，那片矿就能再造一个赤峰黄金。")
+    fabricated = {
+        "chapter_index": 0,
+        "primary_domain": "COMPANY",
+        "knowledge_kind": "FACT",
+        "expression_type": "AUTHOR_EXPLICIT",
+        "predicate_key": "fact",
+        "subject_key": "赤峰黄金",
+        "statement": "老挝Sepon铜金矿黄金当量由约107吨增至260吨，测算利润或再造一个赤峰黄金。",
+        "canonical_statement": "老挝Sepon铜金矿黄金当量由约107吨增至260吨。",
+        "entities": [{"entity_name": "赤峰黄金", "entity_type": "SECURITY"}],
+        "evidence": [{"source_ref": "window_0"}],
+    }
+
+    assert extractor._grounding_ok(fabricated, chapter) is False
+    grounded = dict(fabricated)
+    grounded["statement"] = "按金价4000的乐观假设线性外推，单片矿利润足以再造一个赤峰黄金体量。"
+    assert extractor._grounding_ok(grounded, chapter) is True
+
+
+def test_extract_raises_when_model_unavailable():
+    class UnavailableModel:
+        def available(self):
+            return False
+
+    extractor = KnowledgeUnitExtractor(model_client=UnavailableModel())
+    with pytest.raises(RuntimeError, match="LLM 未配置"):
+        extractor.extract(
+            metadata={"title": "测试"},
+            chapters=[_chapter("券商处于偏强状态。")],
+        )
 
 
 def test_llm_extraction_merges_duplicate_claims_and_keeps_grounded_evidence():
@@ -149,7 +182,8 @@ def test_llm_extraction_merges_duplicate_claims_and_keeps_grounded_evidence():
     assert extractor.last_validation_report["accepted_count"] == 2
 
 
-def test_failed_fragment_retries_then_uses_rule_fallback_without_losing_other_fragments():
+def test_failed_fragment_raises_after_retries(monkeypatch):
+    monkeypatch.setattr("engines.content.knowledge_unit_extractor.time.sleep", lambda seconds: None)
     chapter = _chapter("市场处于震荡状态。")
     chapter["windows"].append(
         {
@@ -166,21 +200,16 @@ def test_failed_fragment_retries_then_uses_rule_fallback_without_losing_other_fr
         max_llm_fragment_chars=12,
     )
 
-    units = extractor.extract(metadata={"title": "测试"}, chapters=[chapter])
-
-    assert len(units) >= 2
-    assert any(unit["statement"] == "市场维持震荡格局。" for unit in units)
-    assert any(unit["knowledge_kind"] == "ACTION" for unit in units)
+    with pytest.raises(RuntimeError, match="fragment=2/2"):
+        extractor.extract(metadata={"title": "测试"}, chapters=[chapter])
 
 
 def test_ocr_evidence_is_attached_when_statement_mentions_chart():
-    extractor = KnowledgeUnitExtractor(model_client=InvalidJsonModel())
-    units = extractor.extract(
-        metadata={"title": "测试"},
-        chapters=[_chapter("图表显示券商价格站上均线，状态偏强。", ocr_text="K线图：券商指数站上五日均线")],
-    )
+    chapter = _chapter("图表显示券商价格站上均线，状态偏强。", ocr_text="K线图：券商指数站上五日均线")
 
-    evidence_types = {item["source_type"] for unit in units for item in unit["evidence"]}
+    evidence = KnowledgeUnitExtractor._evidence_for_sentence("图表显示券商价格站上均线，状态偏强。", chapter)
+
+    evidence_types = {item["source_type"] for item in evidence}
     assert "ASR" in evidence_types
     assert "OCR" in evidence_types
 
@@ -266,3 +295,29 @@ def test_normalizer_does_not_default_state_subject_to_domain():
     )
 
     assert units == []
+
+
+def test_normalizer_keeps_llm_unit_with_own_subject_and_related_entities():
+    """回归：LLM 单元自带 subject_key、实体全为 RELATED 且文本无实体词时不得被误杀。"""
+    units = KnowledgeUnitNormalizer().normalize(
+        [
+            {
+                "chapter_index": 0,
+                "primary_domain": "MARKET",
+                "knowledge_kind": "STATE",
+                "expression_type": "AUTHOR_EXPLICIT",
+                "predicate_key": "deleveraging_state",
+                "subject_type": "THEME",
+                "subject_key": "市场流动性",
+                "subject_name": "市场流动性",
+                "statement": "出清接近尾声，被动抛压明显减弱。",
+                "canonical_statement": "出清接近尾声，被动抛压明显减弱。",
+                "entities": [{"entity_type": "THEME", "entity_key": "动量", "entity_name": "动量", "relation_role": "RELATED"}],
+                "evidence": [{"source_type": "ASR", "evidence_text": "出清接近尾声", "start_ms": 0, "end_ms": 1000}],
+            }
+        ],
+        metadata={"platform_video_id": "BVTEST"},
+    )
+
+    assert len(units) == 1
+    assert units[0]["subject_key"] == "市场流动性"

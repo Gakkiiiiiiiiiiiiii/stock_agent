@@ -72,7 +72,13 @@ class VideoFrameExtractor:
             os.getenv("VIDEO_FRAME_DUPLICATE_DISTANCE_THRESHOLD", str(duplicate_distance_threshold or 6))
         )
 
-    def extract(self, video_path: str | Path, output_dir: str | Path, transcript_segments: list[dict] | None = None) -> list[dict]:
+    def extract(
+        self,
+        video_path: str | Path,
+        output_dir: str | Path,
+        transcript_segments: list[dict] | None = None,
+        chapters: list[dict] | None = None,
+    ) -> list[dict]:
         source = Path(video_path)
         if not source.exists():
             raise FileNotFoundError(source)
@@ -85,6 +91,7 @@ class VideoFrameExtractor:
             duration_ms=duration_ms,
             transcript_segments=transcript_segments or [],
             frame_budget=frame_budget,
+            chapters=chapters,
         )
         frames: list[dict] = []
         seen_hashes: set[str] = set()
@@ -114,12 +121,34 @@ class VideoFrameExtractor:
                     "frame_index": index,
                     "timestamp_ms": timestamp_ms,
                     "image_path": str(image_path.resolve()),
-                    "trigger_source": "cue" if self._is_cue_timestamp(timestamp_ms, transcript_segments or []) else "interval",
+                    "trigger_source": (
+                        "cue"
+                        if self._is_cue_timestamp(timestamp_ms, transcript_segments or [])
+                        else ("chapter" if chapters else "interval")
+                    ),
                 }
             )
         return frames
 
-    def _select_timestamps(self, video_path: Path, duration_ms: int, transcript_segments: list[dict], frame_budget: int) -> list[int]:
+    def _select_timestamps(
+        self,
+        video_path: Path,
+        duration_ms: int,
+        transcript_segments: list[dict],
+        frame_budget: int,
+        chapters: list[dict] | None = None,
+    ) -> list[int]:
+        scene_timestamps = self._detect_scene_change_timestamps(video_path, limit=frame_budget)
+        cue_timestamps = self._collect_cue_timestamps(transcript_segments, duration_ms)
+        normalized_chapters = self._normalize_chapters(chapters or [], duration_ms)
+        if normalized_chapters:
+            return self._select_timestamps_by_chapter(
+                chapters=normalized_chapters,
+                cue_timestamps=cue_timestamps,
+                scene_timestamps=scene_timestamps,
+                frame_budget=frame_budget,
+            )
+
         timestamps: list[int] = [0]
         interval_ms = max(1, self.frame_interval_seconds) * 1000
         current = interval_ms
@@ -128,24 +157,6 @@ class VideoFrameExtractor:
             current += interval_ms
         if duration_ms > 1000:
             timestamps.append(max(0, duration_ms - 1000))
-        scene_timestamps = self._detect_scene_change_timestamps(video_path, limit=frame_budget)
-
-        cue_timestamps: list[int] = []
-        for segment in transcript_segments:
-            text = str(segment.get("text") or "").strip()
-            if not text:
-                continue
-            normalized = re.sub(r"\s+", "", text)
-            if any(keyword in normalized for keyword in self.cue_keywords):
-                start_ms = int(segment.get("start_ms") or 0)
-                end_ms = int(segment.get("end_ms") or start_ms)
-                cue_timestamps.extend(
-                    [
-                        max(0, start_ms - self.cue_window_seconds * 1000),
-                        start_ms,
-                        min(duration_ms, end_ms + self.cue_window_seconds * 1000),
-                    ]
-                )
 
         prioritized = self._dedupe_sorted(cue_timestamps, tolerance_ms=2000)
         scene_based = self._dedupe_sorted(scene_timestamps, tolerance_ms=2500)
@@ -171,6 +182,92 @@ class VideoFrameExtractor:
             if all(abs(timestamp_ms - existing) > 2000 for existing in selected):
                 selected.append(timestamp_ms)
         return sorted(selected)
+
+    def _collect_cue_timestamps(self, transcript_segments: list[dict], duration_ms: int) -> list[int]:
+        cue_timestamps: list[int] = []
+        for segment in transcript_segments:
+            text = str(segment.get("text") or "").strip()
+            if not text:
+                continue
+            normalized = re.sub(r"\s+", "", text)
+            if any(keyword in normalized for keyword in self.cue_keywords):
+                start_ms = int(segment.get("start_ms") or 0)
+                end_ms = int(segment.get("end_ms") or start_ms)
+                cue_timestamps.extend(
+                    [
+                        max(0, start_ms - self.cue_window_seconds * 1000),
+                        start_ms,
+                        min(duration_ms, end_ms + self.cue_window_seconds * 1000),
+                    ]
+                )
+        return cue_timestamps
+
+    @staticmethod
+    def _normalize_chapters(chapters: list[dict], duration_ms: int) -> list[dict]:
+        normalized: list[dict] = []
+        for chapter in chapters:
+            start_ms = max(0, int(chapter.get("start_ms") or 0))
+            end_ms = min(duration_ms, int(chapter.get("end_ms") or 0))
+            if end_ms > start_ms:
+                normalized.append({"start_ms": start_ms, "end_ms": end_ms})
+        normalized.sort(key=lambda item: item["start_ms"])
+        return normalized
+
+    def _select_timestamps_by_chapter(
+        self,
+        *,
+        chapters: list[dict],
+        cue_timestamps: list[int],
+        scene_timestamps: list[int],
+        frame_budget: int,
+    ) -> list[int]:
+        quotas = self._allocate_chapter_quotas(chapters, frame_budget)
+        selected: list[int] = []
+        for chapter, quota in zip(chapters, quotas):
+            if quota <= 0 or len(selected) >= frame_budget:
+                continue
+            start_ms = int(chapter["start_ms"])
+            end_ms = int(chapter["end_ms"])
+            picked: list[int] = []
+
+            def try_add(timestamp_ms: int) -> None:
+                if len(picked) >= quota or len(selected) + len(picked) >= frame_budget:
+                    return
+                if any(abs(timestamp_ms - existing) <= 2000 for existing in selected + picked):
+                    return
+                picked.append(timestamp_ms)
+
+            for timestamp_ms in (t for t in cue_timestamps if start_ms <= t <= end_ms):
+                try_add(timestamp_ms)
+            for timestamp_ms in (t for t in scene_timestamps if start_ms <= t <= end_ms):
+                try_add(timestamp_ms)
+            if len(picked) < quota:
+                span = max(1, end_ms - start_ms)
+                for slot in range(quota):
+                    timestamp_ms = start_ms + span // 2 if quota == 1 else start_ms + round(span * slot / (quota - 1))
+                    try_add(timestamp_ms)
+            if not picked:
+                try_add(start_ms + max(1, end_ms - start_ms) // 2)
+            selected.extend(picked)
+        return sorted(selected)
+
+    @staticmethod
+    def _allocate_chapter_quotas(chapters: list[dict], frame_budget: int) -> list[int]:
+        count = len(chapters)
+        if count == 0:
+            return []
+        if frame_budget <= count:
+            return [1 if index < frame_budget else 0 for index in range(count)]
+        remaining = frame_budget - count
+        durations = [max(1, int(chapter["end_ms"]) - int(chapter["start_ms"])) for chapter in chapters]
+        total_duration = sum(durations)
+        shares = [remaining * duration / total_duration for duration in durations]
+        extras = [int(share) for share in shares]
+        leftover = remaining - sum(extras)
+        by_fraction = sorted(range(count), key=lambda index: shares[index] - extras[index], reverse=True)
+        for index in by_fraction[:leftover]:
+            extras[index] += 1
+        return [1 + extra for extra in extras]
 
     def _resolve_frame_budget(self, duration_ms: int, transcript_segments: list[dict]) -> int:
         duration_seconds = max(1, math.ceil(duration_ms / 1000))

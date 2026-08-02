@@ -136,8 +136,8 @@ class FakeQdrantClient:
 
 
 class FakeFrameExtractor:
-    def extract(self, video_path, output_dir, transcript_segments=None):
-        _ = (video_path, transcript_segments)
+    def extract(self, video_path, output_dir, transcript_segments=None, chapters=None):
+        _ = (video_path, transcript_segments, chapters)
         target = Path(output_dir) / "frame_000001.jpg"
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b"fake frame")
@@ -149,6 +149,33 @@ class FakeFrameExtractor:
                 "trigger_source": "cue",
             }
         ]
+
+
+class FakeKnowledgeModel:
+    """全链路测试用的 LLM 桩：始终返回两条合法原子知识单元。"""
+
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "fake",
+            "model": "fake-k3",
+            "content": (
+                '{"units": ['
+                '{"knowledge_kind": "CAUSAL_THESIS", "subject_key": "券商", "subject_name": "券商",'
+                ' "predicate_key": "catalyst", "conclusion": "券商板块受流动性改善催化维持偏强。",'
+                ' "claim_type": "OPINION", "sentiment": "BULLISH", "extraction_confidence": 0.9,'
+                ' "entities": [{"entity_name": "券商", "entity_type": "THEME"}],'
+                ' "evidence": [{"source_ref": "window_0"}]},'
+                '{"knowledge_kind": "RISK_CONDITION", "subject_key": "券商", "subject_name": "券商",'
+                ' "predicate_key": "risk_condition", "conclusion": "若跌破五日线则偏强判断失效需减仓。",'
+                ' "claim_type": "OPINION", "sentiment": "BEARISH", "extraction_confidence": 0.85,'
+                ' "evidence": [{"source_ref": "window_0"}]}'
+                ']}'
+            ),
+        }
 
 
 class FakeVisionService:
@@ -219,6 +246,7 @@ def test_video_ingest_service_processes_task(monkeypatch):
         vision_service=FakeVisionService(),
         storage_root=tmp_path / "content_storage",
     )
+    service.knowledge_extractor.model_client = FakeKnowledgeModel()
 
     try:
         queued = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVTEST123")

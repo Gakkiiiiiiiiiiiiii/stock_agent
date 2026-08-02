@@ -36,17 +36,21 @@ class VideoOcrService:
         self.paddle_text_rec_score_thresh = self._read_float_env("VIDEO_OCR_SCORE_THRESH", 0.75)
         self.paddle_det_model_name = os.getenv("VIDEO_OCR_DET_MODEL_NAME", "PP-OCRv5_server_det").strip() or "PP-OCRv5_server_det"
         self.paddle_rec_model_name = os.getenv("VIDEO_OCR_REC_MODEL_NAME", "PP-OCRv5_server_rec").strip() or "PP-OCRv5_server_rec"
-        if self.backend != "paddleocr":
-            raise ValueError(f"unsupported VIDEO_OCR_BACKEND: {self.backend}. Only 'paddleocr' is allowed.")
+        if self.backend not in {"paddleocr", "none"}:
+            raise ValueError(f"unsupported VIDEO_OCR_BACKEND: {self.backend}. Allowed values: 'paddleocr', 'none'.")
         self._paddleocr_class = None
         self._paddleocr_engine = None
         self._dll_dir_handles: list[Any] = []
         self.denoise_config = self._load_denoise_config(denoise_path)
 
     def available(self) -> bool:
+        if self.backend == "none":
+            return False
         return self._paddleocr_available()
 
     def extract_text(self, image_path: str | Path) -> str:
+        if self.backend == "none":
+            return ""
         source = Path(image_path)
         if not source.exists():
             raise FileNotFoundError(source)

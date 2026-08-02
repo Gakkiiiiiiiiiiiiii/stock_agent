@@ -3,8 +3,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
+import sys
 from pathlib import Path
 from typing import Any
+
+# xiaoe_hls_poc 未包含在 editable 安装中，直接运行脚本时需要项目根目录在 sys.path 上
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 
@@ -111,10 +116,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-root", default=DEFAULT_OUT_ROOT)
     parser.add_argument("--language-hint", default="zh")
     parser.add_argument("--index-knowledge", action="store_true")
+    parser.add_argument("--enable-visual", action="store_true", help="下载整段视频并抽取视觉帧（需要缓存中有未过期的 hls_url）")
     return parser.parse_args()
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     args = parse_args()
     rows = _load_cache(Path(args.cache))
     row = _select_video(rows, args.resource_id, args.date, args.title_contains)
@@ -132,11 +139,15 @@ def main() -> int:
     audio_pipeline = AudioPipeline()
     wav_path = audio_pipeline.standardize_audio(source_mp3, out_dir)
     asr = AsrService()
-    transcript = asr.transcribe(wav_path, language_hint=args.language_hint)
-    transcript["source_audio"] = str(source_mp3)
-    transcript["standardized_audio"] = str(wav_path)
     transcript_path = out_dir / "transcript.json"
-    transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
+    if transcript_path.is_file():
+        logging.getLogger(__name__).info("复用已有转写: %s", transcript_path)
+        transcript = json.loads(transcript_path.read_text(encoding="utf-8"))
+    else:
+        transcript = asr.transcribe(wav_path, language_hint=args.language_hint)
+        transcript["source_audio"] = str(source_mp3)
+        transcript["standardized_audio"] = str(wav_path)
+        transcript_path.write_text(json.dumps(transcript, ensure_ascii=False, indent=2), encoding="utf-8")
 
     create_all()
     service = VideoIngestService(audio_pipeline=audio_pipeline, asr_service=asr)
@@ -164,12 +175,31 @@ def main() -> int:
         options={"title": metadata["title"], "parser": "v3.0-rule"},
         video_id=asset.id,
     )
+    frame_insights: list[dict[str, Any]] = []
+    if args.enable_visual:
+        hls_url = row.get("hls_url")
+        if not hls_url:
+            raise RuntimeError("匹配视频没有 hls_url，无法抽取视觉帧；请刷新播放信息缓存后重试")
+        visual_headers = {
+            "Referer": str(row.get("page_url") or "https://appaoswidcd4711.h5.xiaoeknow.com/"),
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36",
+        }
+        visual_bundle = service._build_xiaoe_visual_context(
+            metadata=metadata,
+            transcript=transcript,
+            m3u8_url=str(hls_url),
+            headers=visual_headers,
+            video_id=asset.id,
+        )
+        if visual_bundle is None:
+            raise RuntimeError("视觉上下文构建失败：hls_url 可能已过期或视频下载/抽帧失败，请刷新播放信息缓存后重试（详见告警日志）")
+        frame_insights = visual_bundle.get("frame_insights") or []
     knowledge_result = service._build_video_knowledge(
         task_id=task.id,
         metadata=metadata,
         video_id=asset.id,
         transcript=transcript,
-        frame_insights=[],
+        frame_insights=frame_insights,
         index_knowledge=bool(args.index_knowledge),
     )
     service.task_repo.update(task.id, status="success", stage="success", progress=100, video_id=asset.id)
@@ -189,6 +219,7 @@ def main() -> int:
         "summary": str(summary_path),
         "chapters": len(detail.get("chapters") or []),
         "knowledge_units": len(detail.get("knowledge_units") or []),
+        "frame_insights": len(frame_insights),
     }, ensure_ascii=False, indent=2))
     return 0
 

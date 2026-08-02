@@ -102,6 +102,18 @@ def test_video_ocr_service_prefers_gpu_when_nvidia_env_is_present(monkeypatch):
     assert service._resolve_paddle_device("auto") == "gpu:0"
 
 
+def test_video_ocr_service_backend_none_disables_local_ocr():
+    service = VideoOcrService(backend="none")
+
+    assert service.available() is False
+    assert service.extract_text("不存在的文件.jpg") == ""
+
+
+def test_video_ocr_service_rejects_unknown_backend():
+    with pytest.raises(ValueError, match="unsupported VIDEO_OCR_BACKEND"):
+        VideoOcrService(backend="tesseract")
+
+
 def test_video_ocr_service_filters_trading_ui_noise_lines():
     service = VideoOcrService(backend="paddleocr")
     raw_text = "\n".join(
