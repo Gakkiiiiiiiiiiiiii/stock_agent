@@ -14,7 +14,7 @@ from engines.market.trend_engine import compute_trend_score
 from engines.regime.high_position_retreat_detector import detect_high_position_retreat
 from engines.regime.llm_regime_judge import judge_regime_with_llm_hint
 from engines.regime.regime_preclassifier import preclassify_regime
-from engines.regime.regime_state_machine import resolve_regime_transition
+from engines.regime.regime_state_machine import PersistentRegimeStateMachine, resolve_regime_transition
 
 
 class MarketFeatureSnapshot(BaseModel):
@@ -110,6 +110,8 @@ def get_market_regime(
     high_position_big_negative_count: int | None = None,
     retreat_days: int | None = None,
     force_refresh: bool = False,
+    market_code: str = "CN_A",
+    persist_state: bool = True,
 ) -> dict:
     _ = force_refresh
     if snapshot is None:
@@ -192,7 +194,20 @@ def get_market_regime(
     }
     regime = preclassify_regime(features)
     llm_hint = judge_regime_with_llm_hint(features)
-    state = resolve_regime_transition(previous_regime=previous_regime, candidate_regime=regime["primary_regime"])
+    if persist_state and previous_regime is None:
+        from storage.bootstrap import create_all
+
+        create_all()
+        state = PersistentRegimeStateMachine().advance(
+            market_code=market_code,
+            candidate_regime=regime["primary_regime"],
+            as_of=snapshot_obj.as_of,
+            confidence=regime.get("confidence"),
+            features=features,
+            transition_reason={"llm_hint": llm_hint},
+        )
+    else:
+        state = resolve_regime_transition(previous_regime=previous_regime, candidate_regime=regime["primary_regime"])
     return {
         "snapshot": snapshot_obj.model_dump(),
         "features": features,

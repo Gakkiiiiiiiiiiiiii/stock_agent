@@ -1,0 +1,26 @@
+slug: daily-market-decision
+name: 每日市场决策
+execution:
+  required_tools:
+    - get_market_snapshot
+    - get_market_regime
+    - route_strategy
+    - search_video_insights
+    - retrieve_relevant_context
+    - get_sector_strength
+    - rank_themes_by_score
+    - scan_technical_rules
+    - scan_alpha_factors
+    - evaluate_portfolio_risk
+  max_tool_rounds: 12
+  require_fresh_market_data: true
+  require_memory_lookup: true
+  require_regime: true
+output:
+  required_sections:
+    - 市场环境
+    - 风格判断
+    - 今日强主题
+    - 候选标的
+    - 仓位建议
+    - 明日观察点

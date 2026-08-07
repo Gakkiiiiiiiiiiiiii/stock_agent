@@ -1,0 +1,19 @@
+slug: decision-outcome-review
+name: 决策结果复盘
+description: 基于已保存决策、真实结果和当时市场状态，生成可复用的策略经验。
+execution:
+  required_tools:
+    - get_decision
+    - get_decision_outcome
+    - get_market_regime
+    - retrieve_relevant_context
+    - review_investment_decision
+  max_tool_rounds: 8
+  require_memory_lookup: true
+  require_regime: true
+output:
+  required_sections:
+    - 决策回顾
+    - 结果评估
+    - 正确与错误
+    - 改进经验

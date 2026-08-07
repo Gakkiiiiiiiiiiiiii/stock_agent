@@ -1,0 +1,16 @@
+slug: market-regime-strategy-router
+name: 市场状态与策略路由
+execution:
+  required_tools:
+    - get_market_regime
+    - route_strategy
+    - retrieve_relevant_context
+  max_tool_rounds: 8
+  require_memory_lookup: true
+  require_regime: true
+output:
+  required_sections:
+    - 当前市场状态
+    - 状态切换与置信度
+    - 当前优先策略
+    - 仓位纪律

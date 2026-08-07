@@ -1,17 +1,26 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, Field
+
+from app.skill_contract import SkillExecutionContract, SkillOutputContract
 
 from financial_agent.utils import project_root
 
 
-@dataclass(frozen=True)
-class SkillDefinition:
+class SkillDefinition(BaseModel):
     slug: str
     name: str
     description: str
-    content: str
+    content: str = ""
+    execution: SkillExecutionContract = Field(default_factory=SkillExecutionContract)
+    output: SkillOutputContract = Field(default_factory=SkillOutputContract)
+
+    @property
+    def instructions(self) -> str:
+        return self.content
 
 
 def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
@@ -37,12 +46,17 @@ def load_skills(skill_root: Path | None = None) -> list[SkillDefinition]:
         raw = path.read_text(encoding="utf-8")
         frontmatter, body = _parse_frontmatter(raw)
         slug = path.parent.name
+        contract_path = path.parent / "SKILL.yaml"
+        contract = yaml.safe_load(contract_path.read_text(encoding="utf-8")) if contract_path.exists() else {}
+        contract = contract or {}
         skills.append(
             SkillDefinition(
-                slug=slug,
-                name=frontmatter.get("name", slug),
-                description=frontmatter.get("description", ""),
+                slug=contract.get("slug", slug),
+                name=contract.get("name", frontmatter.get("name", slug)),
+                description=contract.get("description", frontmatter.get("description", "")),
                 content=body,
+                execution=contract.get("execution", {}),
+                output=contract.get("output", {}),
             )
         )
     return skills
@@ -55,4 +69,3 @@ def format_skill_catalog(skills: list[SkillDefinition]) -> str:
     for skill in skills:
         lines.append(f"- {skill.slug}: {skill.description or skill.name}")
     return "\n".join(lines)
-

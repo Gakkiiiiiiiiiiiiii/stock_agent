@@ -8,9 +8,12 @@ from collections.abc import Callable
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
+from app.tools.decision_tools import build_decision_tools
+from app.tools.definitions import ToolDefinition
 from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
     content_server,
+    decision_server,
     factor_mining_server,
     industry_knowledge_server,
     knowledge_server,
@@ -603,11 +606,44 @@ class ClaudeToolRegistry:
                 },
                 lambda payload: factor_mining_server.scan_alpha_factors(**payload),
             ),
+            "save_investment_decision": (
+                {
+                    "name": "save_investment_decision",
+                    "description": "Persist an important research decision for later outcome evaluation and review.",
+                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "skill_slug": {"type": "string"}, "market_regime": {"type": "string"}, "thesis": {"type": "object"}, "themes": {"type": "array", "items": {"type": "string"}}, "candidates": {"type": "array", "items": {"type": "object"}}, "confidence": {"type": "number"}, "tool_trace": {"type": "array", "items": {"type": "object"}}}},
+                },
+                lambda payload: decision_server.save_investment_decision(**payload),
+            ),
+            "get_decision": (
+                {"name": "get_decision", "description": "Get a previously persisted investment decision.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}}, "required": ["decision_id"]}},
+                lambda payload: decision_server.get_decision(**payload),
+            ),
+            "get_decision_outcome": (
+                {"name": "get_decision_outcome", "description": "Get the measured outcome of an investment decision.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "horizon_days": {"type": "integer"}}, "required": ["decision_id"]}},
+                lambda payload: decision_server.get_decision_outcome(**payload),
+            ),
+            "record_decision_outcome": (
+                {"name": "record_decision_outcome", "description": "Record a measured decision outcome for a review horizon.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "evaluation_date": {"type": "string"}, "horizon_days": {"type": "integer"}, "benchmark_return": {"type": "number"}, "portfolio_return": {"type": "number"}}, "required": ["decision_id", "evaluation_date", "horizon_days"]}},
+                lambda payload: decision_server.record_decision_outcome(**payload),
+            ),
+            "review_investment_decision": (
+                {"name": "review_investment_decision", "description": "Store a structured post-outcome review and turn its lessons into strategy memory.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "review": {"type": "object"}, "outcome_id": {"type": "integer"}}, "required": ["decision_id", "review"]}},
+                lambda payload: decision_server.review_investment_decision(**payload),
+            ),
         }
         if os.getenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "false").lower() not in {"1", "true", "yes"}:
             for legacy_name in ("calc_technical_indicators", "detect_pattern_signal", "scan_stock_signals"):
                 self._tools.pop(legacy_name, None)
+        self.register_many(build_decision_tools())
         self._policies: dict[str, ToolPolicy] = self._default_policies()
+
+    def register(self, definition: ToolDefinition) -> None:
+        """Compatibility bridge while legacy domain tools are migrated incrementally."""
+        self._tools[definition.name] = (definition.anthropic_schema(), definition.executor)
+
+    def register_many(self, definitions: list[ToolDefinition]) -> None:
+        for definition in definitions:
+            self.register(definition)
 
     def anthropic_tools(self) -> list[dict[str, Any]]:
         return [item[0] for item in self._tools.values()]
@@ -695,7 +731,7 @@ class ClaudeToolRegistry:
             "construct_portfolio",
             "ingest_bilibili_video",
         }
-        writes = {"upsert_theme_logic"}
+        writes = {"upsert_theme_logic", "save_investment_decision", "record_decision_outcome", "review_investment_decision"}
         policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
             "get_kline", "get_market_snapshot", "get_sector_strength", "calc_technical_indicators",
             "calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules", "explain_technical_rule",
@@ -705,6 +741,7 @@ class ClaudeToolRegistry:
             "get_video_summary", "search_video_insights", "search_video_knowledge", "get_current_subject_state",
             "get_subject_history", "get_video_knowledge_units", "get_knowledge_unit", "list_knowledge_conflicts",
             "list_factor_library", "list_recent_alpha_candidates",
+            "get_decision", "get_decision_outcome",
         )}
         policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
         policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})

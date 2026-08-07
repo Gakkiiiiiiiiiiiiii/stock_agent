@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from storage.db import Base
@@ -49,6 +49,8 @@ class MemoryRecord(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     memory_type: Mapped[str] = mapped_column(String(64))
+    subject_key: Mapped[str | None] = mapped_column(String(256), index=True)
+    merge_key: Mapped[str | None] = mapped_column(String(512), unique=True)
     title: Mapped[str] = mapped_column(String(256))
     content: Mapped[str] = mapped_column(Text)
     source_type: Mapped[str] = mapped_column(String(64))
@@ -60,10 +62,17 @@ class MemoryRecord(Base):
     status: Mapped[str] = mapped_column(String(32), default="validated")
     importance: Mapped[str] = mapped_column(String(32), default="medium")
     confidence: Mapped[float] = mapped_column(Float, default=0.7)
+    temporal_class: Mapped[str] = mapped_column(String(32), default="SLOW_CHANGING")
+    facts: Mapped[dict] = mapped_column(JSON, default=dict)
+    lessons: Mapped[list] = mapped_column(JSON, default=list)
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    conflict_group: Mapped[str | None] = mapped_column(String(64), index=True)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime)
     valid_to: Mapped[datetime | None] = mapped_column(DateTime)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
 class MarketRegimeLabel(Base):

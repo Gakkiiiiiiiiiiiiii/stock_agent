@@ -89,6 +89,17 @@ class MemoryRepository:
                 )
             ).scalars().first()
 
+    def get_by_merge_key(self, merge_key: str) -> MemoryRecord | None:
+        with session_scope() as session:
+            return session.execute(select(MemoryRecord).where(MemoryRecord.merge_key == merge_key)).scalars().first()
+
+    def next_version(self, memory_id: int) -> int:
+        from storage.models.research import MemoryVersion
+
+        with session_scope() as session:
+            versions = session.execute(select(MemoryVersion.version).where(MemoryVersion.memory_id == memory_id)).scalars().all()
+            return max(versions, default=0) + 1
+
     def list_by_title_prefix(self, source_type: str, title_prefix: str) -> list[MemoryRecord]:
         with session_scope() as session:
             return list(

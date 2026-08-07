@@ -9,6 +9,7 @@ from typing import Any
 from app.model_providers import AgentModelClient, AgentModelSettings
 from app.skill_loader import SkillDefinition, format_skill_catalog, load_skills
 from app.tool_registry import ClaudeToolRegistry
+from agent.executor import SkillExecutor
 
 
 @dataclass
@@ -172,7 +173,7 @@ class ClaudeAgent:
             return SkillSelectionDecision(skill=fallback, reason="Fallback keyword routing selected this skill.")
         raise RuntimeError("Primary agent model did not select a skill")
 
-    def _run_skill(
+    def _run_skill_legacy(
         self,
         skill: SkillDefinition,
         user_query: str,
@@ -294,6 +295,31 @@ class ClaudeAgent:
                 self._emit(emit, "report_delta", {"delta": chunk})
             return final_content, tool_calls, trace_steps
         raise RuntimeError("Primary agent tool loop exceeded max rounds")
+
+    def _run_skill(
+        self,
+        skill: SkillDefinition,
+        user_query: str,
+        context: dict[str, Any] | None = None,
+        emit: Callable[[str, dict[str, Any]], None] | None = None,
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
+        system = (
+            "You are the primary model running a Claude-style financial analysis agent framework. "
+            "You must personally do skill execution planning, tool invocation, and final report writing. "
+            "Use the provided tools for all deterministic computation and data retrieval. "
+            "If the ask_research_model tool is available, you may use it as a subordinate helper, "
+            "but you remain responsible for the final judgment. "
+            f"Never fabricate missing market data. If data is insufficient, say so clearly. Today's runtime date is {date.today().isoformat()}.\n\n"
+            f"Selected skill: {skill.slug}\n\n"
+            f"Skill instructions:\n{skill.instructions}\n\n"
+            "The selected skill has an executable contract. You must complete it before giving a final answer. "
+            "Before any tool call, you may write a short user-visible execution note. "
+            "Keep it brief and factual. Do not reveal hidden chain-of-thought."
+        )
+        report, tool_calls, trace_steps, _state = SkillExecutor(
+            self.client, self.tool_registry, self.max_tool_rounds
+        ).run(skill=skill, user_query=user_query, context=context, system=system, emit=emit)
+        return report, tool_calls, trace_steps
 
     @staticmethod
     def _parse_json_object(content: str) -> dict[str, Any]:
