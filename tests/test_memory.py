@@ -5,7 +5,7 @@ from storage.bootstrap import create_all
 from storage.repositories.vector_repository import MemoryRepository, VectorTaskRepository
 
 
-def test_write_memory_and_enqueue_task():
+def test_write_memory_and_enqueue_task(isolated_database):
     create_all()
     result = write_memory_and_enqueue(
         {

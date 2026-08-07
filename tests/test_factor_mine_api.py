@@ -7,7 +7,7 @@ from workers.job_worker import heartbeat_loop, process_one_job
 client = TestClient(app)
 
 
-def test_factor_mine_task_flow(monkeypatch):
+def test_factor_mine_task_flow(monkeypatch, isolated_database):
     import mcp_servers.factor_mining_server as factor_mining_server
 
     monkeypatch.setattr(
@@ -27,7 +27,7 @@ def test_factor_mine_task_flow(monkeypatch):
     assert data["error"] is None
 
 
-def test_factor_mine_task_failure(monkeypatch):
+def test_factor_mine_task_failure(monkeypatch, isolated_database):
     """后台任务抛异常（如容器内无法访问 QMT）时应优雅落 failed + error。"""
     import mcp_servers.factor_mining_server as factor_mining_server
 
@@ -43,7 +43,7 @@ def test_factor_mine_task_failure(monkeypatch):
     assert data["result"] is None
 
 
-def test_factor_mine_unknown_task():
+def test_factor_mine_unknown_task(isolated_database):
     response = client.get("/api/v1/admin/factors/mine/deadbeef")
     assert response.status_code == 404
 

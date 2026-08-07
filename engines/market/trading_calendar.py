@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
+from engines.market.exchange_calendar import ExchangeTradingCalendar
 
 
 def next_trading_day(day: date) -> date:
@@ -46,11 +47,7 @@ def latest_available_trading_day(as_of: date | datetime | None = None) -> date:
 
 def normalize_trading_date(as_of: date | datetime) -> date:
     """Normalize a runtime timestamp to its trading-date bucket without remote I/O."""
-    day = _as_date(as_of)
-    assert day is not None
-    while day.weekday() >= 5:
-        day -= timedelta(days=1)
-    return day
+    return ExchangeTradingCalendar().normalize(as_of)
 
 
 def advance_trading_days(day: date, sessions: int) -> date:
@@ -59,12 +56,7 @@ def advance_trading_days(day: date, sessions: int) -> date:
     The worker still evaluates using real market data; this lightweight calendar
     only decides when a job becomes eligible and conservatively skips weekends.
     """
-    result = normalize_trading_date(day)
-    for _ in range(max(0, sessions)):
-        result += timedelta(days=1)
-        while result.weekday() >= 5:
-            result += timedelta(days=1)
-    return result
+    return ExchangeTradingCalendar().advance_sessions(day, sessions)
 
 
 def _next_qmt_index_day(day: date) -> date | None:

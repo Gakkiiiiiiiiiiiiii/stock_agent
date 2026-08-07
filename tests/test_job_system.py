@@ -7,7 +7,7 @@ from storage.db import session_scope
 from storage.repositories.job_repository import JobTaskRepository
 
 
-def test_job_idempotency():
+def test_job_idempotency(isolated_database):
     repo = JobTaskRepository()
     JobTaskRepository._schema_ready = False
     task_type = f"test_job_{uuid4().hex}"
@@ -17,7 +17,7 @@ def test_job_idempotency():
     assert first["id"] == second["id"]
 
 
-def test_job_claim_and_retry():
+def test_job_claim_and_retry(isolated_database):
     repo = JobTaskRepository()
     JobTaskRepository._schema_ready = False
     task_type = f"test_job_{uuid4().hex}"
@@ -33,7 +33,7 @@ def test_job_claim_and_retry():
     assert repo.get(task["id"])["status"] == "FAILED_FINAL"
 
 
-def test_job_claim_respects_lease_timeout():
+def test_job_claim_respects_lease_timeout(isolated_database):
     repo = JobTaskRepository()
     JobTaskRepository._schema_ready = False
     task_type = f"test_job_{uuid4().hex}"
@@ -49,7 +49,7 @@ def test_job_claim_respects_lease_timeout():
     assert reclaimed["worker_id"] == "worker-2"
 
 
-def test_stale_worker_cannot_heartbeat_or_finish_after_reclaim():
+def test_stale_worker_cannot_heartbeat_or_finish_after_reclaim(isolated_database):
     repo = JobTaskRepository()
     JobTaskRepository._schema_ready = False
     task_type = f"test_job_{uuid4().hex}"

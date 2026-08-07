@@ -26,6 +26,16 @@ class MarketRegimeState(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
 
 
+class MarketTradingCalendar(Base):
+    __tablename__ = "market_trading_calendar"
+
+    market_code: Mapped[str] = mapped_column(String(16), primary_key=True)
+    trading_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    is_open: Mapped[bool] = mapped_column(Boolean)
+    source: Mapped[str | None] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
 class MarketRegimeHistory(Base):
     __tablename__ = "market_regime_history"
 

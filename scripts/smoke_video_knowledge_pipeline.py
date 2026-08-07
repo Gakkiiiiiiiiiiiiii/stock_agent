@@ -142,6 +142,24 @@ class FakeKnowledgeModel:
         }
 
 
+class FakeAnalysisDocumentModel:
+    def available(self):
+        return True
+
+    def complete(self, **kwargs):
+        _ = kwargs
+        return {
+            "provider": "fake",
+            "model": "fake-k3",
+            "content": (
+                '{"core_summary":"黄金主题受避险需求和流动性改善支撑，但跌破关键均线时应控制风险。",'
+                '"key_points":["黄金主题催化仍在，但仓位需控制。"],'
+                '"chapter_summaries":[{"chapter_index":0,"title":"黄金催化与风险边界",'
+                '"summary":"黄金受避险和流动性改善支持，跌破关键均线则判断失效。"}]}'
+            ),
+        }
+
+
 class FakeVisionService:
     def analyze_frames(self, metadata, transcript, frames):
         _ = (metadata, transcript)
@@ -209,6 +227,7 @@ def run_smoke(root: Path, *, keep_db: bool = False) -> dict:
             storage_root=work_dir / "content_storage",
         )
         service.knowledge_extractor.model_client = FakeKnowledgeModel()
+        service.analysis_document_generator.model_client = FakeAnalysisDocumentModel()
         queued = service.enqueue_bilibili(url="https://www.bilibili.com/video/BVSMOKE123")
         detail = service.process_task(queued["task_id"])
         video_id = int(detail["video"]["id"])
