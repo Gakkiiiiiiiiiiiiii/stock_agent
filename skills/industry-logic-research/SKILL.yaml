@@ -1,0 +1,7 @@
+slug: industry-logic-research
+name: 产业逻辑研究
+execution:
+  required_tools: [search_video_insights, retrieve_relevant_context, search_theme_logic, get_theme_related_stocks, evaluate_theme_trigger, rank_themes_by_score]
+  max_tool_rounds: 10
+output:
+  required_sections: [主题结论, 最近视频观点校验, 核心逻辑, 产业链拆解, 受益标的, 催化因素, 监控关键词, 触发规则, 证伪条件, 是否建议入库]

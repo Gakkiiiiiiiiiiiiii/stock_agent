@@ -73,7 +73,7 @@ class SkillExecutor:
                 self._emit(emit, "trace", {"step": call_step})
                 self._emit(emit, "tool_call", {"call_id": call_id, "name": name, "input": arguments})
                 result = self.tool_registry.execute(name, arguments)
-                state.record_tool_result(name, result)
+                state.record_tool_result(name, result, call_id=call_id)
                 tool_calls.append({"call_id": call_id, "name": name, "input": arguments, "output": result})
                 result_step = {"type": "tool_result", "title": name, "content": self._tool_result_summary(result), "data": {"call_id": call_id, "output": result}}
                 trace_steps.append(result_step)

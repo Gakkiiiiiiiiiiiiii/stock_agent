@@ -20,6 +20,7 @@ class ClaudeAgentResponse:
     tool_calls: list[dict[str, Any]]
     trace: dict[str, Any]
     raw_text: str | None = None
+    decision_id: str | None = None
 
 
 @dataclass
@@ -74,6 +75,9 @@ class ClaudeAgent:
             raise RuntimeError("Primary agent model is not configured")
         self._emit(emit, "status", {"message": "Selecting skill..."})
         decision = self._choose_skill(user_query, context, force_skill=force_skill)
+        from agent.context_builder import ContextBuilder
+
+        context = ContextBuilder().build(user_query, context)
         self._emit(
             emit,
             "selection",
@@ -97,6 +101,7 @@ class ClaudeAgent:
         )
         self._emit(emit, "status", {"message": f"Running skill: {decision.skill.slug}"})
         report, tool_calls, trace_steps = self._run_skill(decision.skill, user_query, context, emit=emit)
+        decision_id = self._ensure_formal_decision(decision.skill, user_query, report, tool_calls)
         trace = {
             "selection_reason": decision.reason,
             "steps": [
@@ -116,7 +121,30 @@ class ClaudeAgent:
             tool_calls=tool_calls,
             trace=trace,
             raw_text=report,
+            decision_id=decision_id,
         )
+
+    @staticmethod
+    def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]]) -> str | None:
+        if skill.slug != "daily-market-decision":
+            return None
+        for call in tool_calls:
+            if call.get("name") == "save_investment_decision":
+                output = call.get("output") or {}
+                if output.get("decision_id"):
+                    return str(output["decision_id"])
+        from engines.decision.decision_service import DecisionService
+
+        regime_call = next((item.get("output") or {} for item in reversed(tool_calls) if item.get("name") == "get_market_regime"), {})
+        saved = DecisionService().save_decision(
+            query=query,
+            skill_slug=skill.slug,
+            market_regime=(regime_call.get("regime") or {}).get("primary_regime"),
+            market_features=regime_call.get("features") or {},
+            thesis={"report": report},
+            tool_trace=tool_calls,
+        )
+        return str(saved["decision_id"])
 
     def _choose_skill(
         self,

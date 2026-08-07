@@ -33,6 +33,15 @@ class MarketRegimeRepository:
             session.refresh(item)
             return item
 
+    def close_active_history(self, market_code: str, ended_at: date) -> None:
+        with session_scope() as session:
+            active = session.execute(
+                select(MarketRegimeHistory).where(MarketRegimeHistory.market_code == market_code, MarketRegimeHistory.ended_at.is_(None)).order_by(MarketRegimeHistory.started_at.desc())
+            ).scalars().first()
+            if active is not None:
+                active.ended_at = ended_at
+                session.add(active)
+
     def list_history(self, market_code: str, limit: int = 30) -> list[MarketRegimeHistory]:
         with session_scope() as session:
             return list(session.execute(
@@ -52,6 +61,18 @@ class DecisionRepository:
     def get(self, decision_id: str) -> InvestmentDecision | None:
         with session_scope() as session:
             return session.get(InvestmentDecision, decision_id)
+
+    def update(self, decision_id: str, **payload) -> InvestmentDecision:
+        with session_scope() as session:
+            decision = session.get(InvestmentDecision, decision_id)
+            if decision is None:
+                raise FileNotFoundError(decision_id)
+            for key, value in payload.items():
+                setattr(decision, key, value)
+            session.add(decision)
+            session.flush()
+            session.refresh(decision)
+            return decision
 
     def add_outcome(self, **payload) -> InvestmentDecisionOutcome:
         with session_scope() as session:

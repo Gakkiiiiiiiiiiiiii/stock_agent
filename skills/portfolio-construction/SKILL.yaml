@@ -1,0 +1,7 @@
+slug: portfolio-construction
+name: 组合构建
+execution:
+  required_tools: [route_strategy, evaluate_portfolio_risk, construct_portfolio]
+  max_tool_rounds: 8
+output:
+  required_sections: []

@@ -1,0 +1,9 @@
+slug: skill-evolution-review
+name: 策略进化复核
+execution:
+  required_tools: [search_strategy_memory, walk_forward_validate]
+  optional_tools: [retrieve_relevant_context]
+  max_tool_rounds: 8
+  require_memory_lookup: true
+output:
+  required_sections: []

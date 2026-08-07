@@ -4,7 +4,7 @@ execution:
   required_tools:
     - get_market_regime
     - route_strategy
-    - retrieve_relevant_context
+    - search_strategy_memory
   max_tool_rounds: 8
   require_memory_lookup: true
   require_regime: true

@@ -1,0 +1,8 @@
+slug: portfolio-risk-review
+name: 组合风险复核
+execution:
+  required_tools: [evaluate_portfolio_risk, search_theme_logic, get_market_snapshot]
+  max_tool_rounds: 8
+  require_fresh_market_data: true
+output:
+  required_sections: [总体风险, 单票集中度, 主题暴露, 止损/证伪检查, 降仓或观察建议]

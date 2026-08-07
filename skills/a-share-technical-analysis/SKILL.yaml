@@ -1,0 +1,9 @@
+slug: a-share-technical-analysis
+name: A股技术分析
+execution:
+  required_tools: [get_kline, calc_profile_indicators, evaluate_technical_rules, get_market_regime, evaluate_portfolio_risk]
+  optional_tools: [get_sector_strength, search_theme_logic, retrieve_relevant_context]
+  max_tool_rounds: 10
+  require_regime: true
+output:
+  required_sections: [当前技术状态, 买点类型, 信号强度, 风险点, 操作建议, 需要等待的确认条件, 证伪条件]

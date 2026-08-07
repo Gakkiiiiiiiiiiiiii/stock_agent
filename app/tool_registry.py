@@ -10,6 +10,7 @@ from typing import Any
 from app.model_providers import AnalysisModelClient
 from app.tools.decision_tools import build_decision_tools
 from app.tools.definitions import ToolDefinition
+from app.tools.memory_tools import build_memory_tools
 from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
     content_server,
@@ -635,6 +636,7 @@ class ClaudeToolRegistry:
             for legacy_name in ("calc_technical_indicators", "detect_pattern_signal", "scan_stock_signals"):
                 self._tools.pop(legacy_name, None)
         self.register_many(build_decision_tools())
+        self.register_many(build_memory_tools())
         self._policies: dict[str, ToolPolicy] = self._default_policies()
 
     def register(self, definition: ToolDefinition) -> None:
@@ -731,7 +733,7 @@ class ClaudeToolRegistry:
             "construct_portfolio",
             "ingest_bilibili_video",
         }
-        writes = {"upsert_theme_logic", "save_investment_decision", "record_decision_outcome", "review_investment_decision"}
+        writes = {"upsert_theme_logic", "record_decision_outcome", "review_investment_decision"}
         policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
             "get_kline", "get_market_snapshot", "get_sector_strength", "calc_technical_indicators",
             "calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules", "explain_technical_rule",
@@ -741,7 +743,7 @@ class ClaudeToolRegistry:
             "get_video_summary", "search_video_insights", "search_video_knowledge", "get_current_subject_state",
             "get_subject_history", "get_video_knowledge_units", "get_knowledge_unit", "list_knowledge_conflicts",
             "list_factor_library", "list_recent_alpha_candidates",
-            "get_decision", "get_decision_outcome",
+            "get_decision", "get_decision_outcome", "search_memory", "search_strategy_memory", "search_decision_memory", "search_user_preferences",
         )}
         policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
         policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})

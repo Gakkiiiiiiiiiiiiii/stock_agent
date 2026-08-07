@@ -1,0 +1,7 @@
+slug: factor-mining
+name: 因子挖掘
+execution:
+  required_tools: [mine_factors, list_factor_library, evaluate_factor, scan_alpha_factors]
+  max_tool_rounds: 12
+output:
+  required_sections: [本轮挖掘概况, 入库因子清单, 因子经济含义解读, 样本内局限与待核验声明]

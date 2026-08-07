@@ -13,3 +13,16 @@ market_regime:
     max_breadth: 0.6
   high_position_retreat:
     min_retreat_score: 0.65
+transition:
+  confirmation_days:
+    high_position_retreat: 1
+    downtrend_market: 2
+    crowding_market: 2
+    rotation_market: 2
+    range_market: 3
+  hysteresis:
+    min_days_in_regime: 2
+    switch_confidence_gap: 0.08
+  emergency_regimes:
+    - high_position_retreat
+    - downtrend_market

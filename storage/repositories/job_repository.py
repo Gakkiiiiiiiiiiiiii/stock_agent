@@ -20,6 +20,7 @@ class JobTaskRepository:
         payload: dict[str, Any],
         idempotency_key: str | None = None,
         max_retries: int = 3,
+        not_before: datetime | None = None,
     ) -> dict[str, Any]:
         self._ensure_schema()
         if idempotency_key:
@@ -32,8 +33,8 @@ class JobTaskRepository:
                 text(
                     """
                     INSERT INTO job_task
-                    (id, task_type, payload, status, progress, retry_count, max_retries, idempotency_key, created_at)
-                    VALUES (:id, :task_type, :payload, 'PENDING', 0, 0, :max_retries, :idempotency_key, :created_at)
+                    (id, task_type, payload, status, progress, retry_count, max_retries, idempotency_key, created_at, not_before)
+                    VALUES (:id, :task_type, :payload, 'PENDING', 0, 0, :max_retries, :idempotency_key, :created_at, :not_before)
                     """
                 ),
                 {
@@ -43,6 +44,7 @@ class JobTaskRepository:
                     "max_retries": max_retries,
                     "idempotency_key": idempotency_key,
                     "created_at": datetime.now(timezone.utc).replace(tzinfo=None),
+                    "not_before": not_before.replace(tzinfo=None) if not_before and not_before.tzinfo else not_before,
                 },
             )
         return self.get(task_id) or {"id": task_id, "status": "PENDING"}
@@ -93,7 +95,7 @@ class JobTaskRepository:
         lease_cutoff = now - timedelta(seconds=max(int(lease_seconds), 1))
         lease_token = secrets.token_hex(16)
         with session_scope() as session:
-            filters = "(status IN ('PENDING', 'FAILED_RETRYABLE') OR (status='RUNNING' AND heartbeat_at < :lease_cutoff))"
+            filters = "(status IN ('PENDING', 'FAILED_RETRYABLE') OR (status='RUNNING' AND heartbeat_at < :lease_cutoff)) AND (not_before IS NULL OR not_before <= :now)"
             params: dict[str, Any] = {"worker_id": worker_id, "now": now, "lease_cutoff": lease_cutoff, "lease_token": lease_token}
             if task_types:
                 keys = []
@@ -350,6 +352,7 @@ class JobTaskRepository:
                         started_at TIMESTAMP,
                         heartbeat_at TIMESTAMP,
                         finished_at TIMESTAMP
+                        ,not_before TIMESTAMP
                     )
                     """
                 )
@@ -360,4 +363,6 @@ class JobTaskRepository:
                 session.execute(text("ALTER TABLE job_task ADD COLUMN lease_token VARCHAR(64)"))
             if "lease_version" not in existing_columns:
                 session.execute(text("ALTER TABLE job_task ADD COLUMN lease_version BIGINT NOT NULL DEFAULT 0"))
+            if "not_before" not in existing_columns:
+                session.execute(text("ALTER TABLE job_task ADD COLUMN not_before TIMESTAMP"))
         cls._schema_ready = True

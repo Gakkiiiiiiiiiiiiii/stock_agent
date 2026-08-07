@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any
 
 from engines.memory.service import MemoryService
 from storage.bootstrap import create_all
 from storage.repositories.research_repository import DecisionRepository
+from storage.repositories.job_repository import JobTaskRepository
+from engines.market.trading_calendar import advance_trading_days
 
 
 class DecisionService:
@@ -18,7 +20,21 @@ class DecisionService:
     def save_decision(self, **payload: Any) -> dict:
         create_all()
         decision = self.repository.create(**payload)
-        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat()}
+        jobs = self.schedule_evaluations(decision.id, decision.created_at.date())
+        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs}
+
+    @staticmethod
+    def schedule_evaluations(decision_id: str, decision_date: date) -> list[str]:
+        repo = JobTaskRepository()
+        jobs = []
+        for horizon in (1, 5, 20):
+            due = advance_trading_days(decision_date, horizon)
+            job = repo.create("decision_outcome", {"decision_id": decision_id, "horizon_days": horizon, "evaluation_date": due.isoformat()}, idempotency_key=f"decision-outcome:{decision_id}:{horizon}", not_before=datetime.combine(due, datetime.min.time(), tzinfo=UTC))
+            jobs.append(job["id"])
+        review_due = advance_trading_days(decision_date, 5)
+        review_job = repo.create("decision_review", {"decision_id": decision_id, "horizon_days": 5}, idempotency_key=f"decision-review:{decision_id}:5", not_before=datetime.combine(review_due, datetime.min.time(), tzinfo=UTC))
+        jobs.append(review_job["id"])
+        return jobs
 
     def get_decision(self, decision_id: str) -> dict:
         create_all()
@@ -35,6 +51,7 @@ class DecisionService:
         portfolio = payload.get("portfolio_return")
         payload.setdefault("excess_return", portfolio - benchmark if portfolio is not None and benchmark is not None else None)
         outcome = self.repository.add_outcome(decision_id=decision_id, evaluation_date=evaluation_date, horizon_days=horizon_days, **payload)
+        self.repository.update(decision_id, evaluation_status="OUTCOME_RECORDED", next_evaluation_date=None if horizon_days >= 20 else evaluation_date)
         return {"outcome_id": outcome.id, "decision_id": decision_id, "excess_return": outcome.excess_return}
 
     def get_outcome(self, decision_id: str, horizon_days: int | None = None) -> dict:
@@ -75,6 +92,7 @@ class DecisionService:
             lessons=lessons,
             memory_candidate_ids=memory_ids,
         )
+        self.repository.update(decision_id, evaluation_status="REVIEWED", reviewed_at=datetime.now(UTC))
         return {"review_id": review_row.id, "decision_id": decision_id, "memory_ids": memory_ids}
 
     @staticmethod

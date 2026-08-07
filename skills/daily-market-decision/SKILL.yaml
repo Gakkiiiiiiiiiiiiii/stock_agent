@@ -5,17 +5,23 @@ execution:
     - get_market_snapshot
     - get_market_regime
     - route_strategy
+    - get_sector_strength
+    - evaluate_portfolio_risk
+    - search_strategy_memory
+    - save_investment_decision
+  optional_tools:
     - search_video_insights
     - retrieve_relevant_context
-    - get_sector_strength
     - rank_themes_by_score
     - scan_technical_rules
     - scan_alpha_factors
-    - evaluate_portfolio_risk
   max_tool_rounds: 12
   require_fresh_market_data: true
   require_memory_lookup: true
   require_regime: true
+  freshness:
+    require_same_trading_day: true
+    max_age_minutes: 30
 output:
   required_sections:
     - 市场环境

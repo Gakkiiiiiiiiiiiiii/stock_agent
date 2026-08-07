@@ -1,0 +1,9 @@
+slug: decision-conflict-resolver
+name: 决策冲突处理
+execution:
+  required_tools: [search_strategy_memory, adjust_signal, evaluate_portfolio_risk, construct_portfolio]
+  optional_tools: [retrieve_relevant_context]
+  max_tool_rounds: 8
+  require_memory_lookup: true
+output:
+  required_sections: []

@@ -18,7 +18,7 @@ class LeaseLostError(RuntimeError):
 def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> bool:
     repo = JobTaskRepository()
     worker = worker_id or f"job-worker-{socket.gethostname()}"
-    task = repo.claim(job_id, worker) if job_id else repo.claim_next(worker, ["factor_mine", "knowledge_lifecycle_sweep"], lease_seconds=300)
+    task = repo.claim(job_id, worker) if job_id else repo.claim_next(worker, ["factor_mine", "knowledge_lifecycle_sweep", "decision_outcome", "decision_review"], lease_seconds=300)
     if task is None:
         return False
     lease_token = task.get("lease_token")
@@ -61,6 +61,38 @@ def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> 
                 lease_token=lease_token,
                 lease_version=lease_version,
             )
+            return True
+        if task["task_type"] == "decision_outcome":
+            from datetime import date
+            from engines.decision.decision_service import DecisionService
+            from engines.decision.outcome_evaluator import DecisionOutcomeEvaluator
+
+            payload = task.get("payload") or {}
+            with heartbeat_loop(repo, task["id"], worker, lease_token=lease_token, lease_version=lease_version) as ensure_lease:
+                service = DecisionService()
+                decision_result = service.get_decision(payload["decision_id"])
+                if not decision_result.get("found"):
+                    raise ValueError("DECISION_NOT_FOUND")
+                metrics = DecisionOutcomeEvaluator().evaluate(decision_result["decision"], date.fromisoformat(payload["evaluation_date"]))
+                result = service.record_outcome(payload["decision_id"], date.fromisoformat(payload["evaluation_date"]), int(payload["horizon_days"]), **metrics)
+                ensure_lease()
+            repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), worker_id=worker, lease_token=lease_token, lease_version=lease_version)
+            return True
+        if task["task_type"] == "decision_review":
+            from engines.decision.decision_service import DecisionService
+
+            payload = task.get("payload") or {}
+            with heartbeat_loop(repo, task["id"], worker, lease_token=lease_token, lease_version=lease_version) as ensure_lease:
+                service = DecisionService()
+                outcome = service.get_outcome(payload["decision_id"], int(payload.get("horizon_days", 5)))
+                if not outcome.get("found"):
+                    raise ValueError("OUTCOME_NOT_READY")
+                excess = outcome["outcome"].get("excess_return")
+                quality = max(0.0, min(1.0, 0.5 + float(excess or 0) * 5))
+                lesson = "相对基准表现偏弱，下一次应降低同类信号权重。" if excess is not None and excess < 0 else "该决策相对基准表现有效，继续跟踪其适用市场环境。"
+                result = service.review(payload["decision_id"], {"decision_quality": quality, "lessons": [lesson]}, outcome["outcome"]["id"])
+                ensure_lease()
+            repo.mark_finished(task["id"], "SUCCEEDED", result_ref=json.dumps(result, ensure_ascii=False), worker_id=worker, lease_token=lease_token, lease_version=lease_version)
             return True
         raise ValueError(f"unsupported task_type: {task['task_type']}")
     except Exception as exc:  # noqa: BLE001

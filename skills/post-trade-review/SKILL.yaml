@@ -1,0 +1,9 @@
+slug: post-trade-review
+name: 交易复盘
+execution:
+  required_tools: [search_strategy_memory]
+  optional_tools: [retrieve_relevant_context]
+  max_tool_rounds: 8
+  require_memory_lookup: true
+output:
+  required_sections: [基本信息, 操作原因, 对应策略, 当时预期, 证伪条件, 实际走势, 是否符合系统, 错误类型, 改进措施, 是否更新知识库/规则]

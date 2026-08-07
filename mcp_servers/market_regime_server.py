@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Literal
 
 from pydantic import BaseModel
 
@@ -111,7 +112,8 @@ def get_market_regime(
     retreat_days: int | None = None,
     force_refresh: bool = False,
     market_code: str = "CN_A",
-    persist_state: bool = True,
+    state_mode: Literal["persistent", "stateless"] = "persistent",
+    persist_state: bool | None = None,
 ) -> dict:
     _ = force_refresh
     if snapshot is None:
@@ -194,7 +196,9 @@ def get_market_regime(
     }
     regime = preclassify_regime(features)
     llm_hint = judge_regime_with_llm_hint(features)
-    if persist_state and previous_regime is None:
+    if persist_state is not None:
+        state_mode = "persistent" if persist_state else "stateless"
+    if state_mode == "persistent":
         from storage.bootstrap import create_all
 
         create_all()

@@ -8,6 +8,12 @@ def retrieve_relevant_context(query: str, task_type: str | None = None, filters:
     return retrieve_memory(query=query, filters=filters, top_k=top_k) | {"task_type": task_type}
 
 
+def search_memory(query: str, memory_types: list[str] | None = None, market_regime: str | None = None, top_k: int = 5) -> dict:
+    from engines.memory.memory_retriever import retrieve_memory
+
+    return retrieve_memory(query=query, memory_types=memory_types, market_regime=market_regime, top_k=top_k)
+
+
 def hybrid_search_memory(query: str, collections: list[str] | None = None, filters: dict | None = None, top_n: int = 10) -> dict:
     result = retrieve_memory(query=query, filters=filters, top_k=top_n)
     if collections:

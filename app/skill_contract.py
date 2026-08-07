@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +19,22 @@ class SkillExecutionContract(BaseModel):
     require_fresh_market_data: bool = False
     require_memory_lookup: bool = False
     require_regime: bool = False
+    freshness: "FreshnessPolicy | None" = None
+
+
+class FreshnessPolicy(BaseModel):
+    max_age_minutes: int | None = None
+    require_same_trading_day: bool = False
+    require_after_market_open: bool = False
+
+
+class ToolExecutionRecord(BaseModel):
+    name: str
+    call_id: str | None = None
+    success: bool
+    error_code: str | None = None
+    error_message: str | None = None
+    result_meta: dict = Field(default_factory=dict)
 
 
 class SkillExecutionState(BaseModel):
@@ -27,22 +43,68 @@ class SkillExecutionState(BaseModel):
     skill_slug: str
     round_index: int = 0
     called_tools: list[str] = Field(default_factory=list)
+    successful_tools: list[str] = Field(default_factory=list)
+    failed_tools: list[str] = Field(default_factory=list)
     tool_results: dict[str, list[dict]] = Field(default_factory=dict)
-    market_data_timestamp: datetime | str | None = None
+    tool_execution_records: list[ToolExecutionRecord] = Field(default_factory=list)
+    market_data_timestamp: datetime | None = None
     regime_loaded: bool = False
     memory_loaded: bool = False
+    strategy_memory_loaded: bool = False
+    decision_memory_loaded: bool = False
+    user_preference_loaded: bool = False
     contract_violations: list[str] = Field(default_factory=list)
 
-    def record_tool_result(self, name: str, result: dict) -> None:
+    def record_tool_result(self, name: str, result: dict, call_id: str | None = None) -> None:
         self.called_tools.append(name)
         self.tool_results.setdefault(name, []).append(result)
-        if name == "get_market_regime" and "error" not in result:
+        success = is_tool_result_success(result)
+        error = result.get("error") if isinstance(result, dict) else None
+        error_code = error.get("code") if isinstance(error, dict) else None
+        error_message = error.get("message") if isinstance(error, dict) else (str(error) if error else None)
+        self.tool_execution_records.append(ToolExecutionRecord(name=name, call_id=call_id, success=success, error_code=error_code, error_message=error_message))
+        target = self.successful_tools if success else self.failed_tools
+        if name not in target:
+            target.append(name)
+        if name == "get_market_regime" and success:
             self.regime_loaded = True
-        if name in {"retrieve_relevant_context", "retrieve_memory"} and "error" not in result:
+        if success and name in {"search_memory", "search_strategy_memory", "search_decision_memory", "search_user_preferences"} and _has_memory_results(result):
             self.memory_loaded = True
-        if name in {"get_market_snapshot", "get_kline"} and "error" not in result:
+            self.strategy_memory_loaded |= name in {"search_memory", "search_strategy_memory"}
+            self.decision_memory_loaded |= name in {"search_memory", "search_decision_memory"}
+            self.user_preference_loaded |= name in {"search_memory", "search_user_preferences"}
+        if name in {"get_market_snapshot", "get_kline"} and success:
             snapshot = result.get("snapshot", result)
-            self.market_data_timestamp = snapshot.get("as_of") or snapshot.get("timestamp") or datetime.now().isoformat()
+            self.market_data_timestamp = _parse_timestamp(snapshot.get("as_of") or snapshot.get("snapshot_time") or snapshot.get("data_timestamp") or snapshot.get("timestamp"))
+
+
+def is_tool_result_success(result: object) -> bool:
+    if result is None:
+        return False
+    if isinstance(result, dict):
+        return not (result.get("error") or result.get("success") is False or str(result.get("status", "")).lower() in {"failed", "error"})
+    return True
+
+
+def _has_memory_results(result: object) -> bool:
+    if not isinstance(result, dict):
+        return False
+    for key in ("memories", "contexts", "results"):
+        if isinstance(result.get(key), list) and result[key]:
+            return True
+    return False
+
+
+def _parse_timestamp(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return None
 
 
 class SkillContractViolation(Exception):
@@ -52,22 +114,26 @@ class SkillContractViolation(Exception):
 
 
 class SkillContractValidator:
-    def validate(self, skill: "SkillDefinition", state: SkillExecutionState, final_text: str) -> list[str]:
+    def validate(self, skill: "SkillDefinition", state: SkillExecutionState, final_text: str, now: datetime | None = None) -> list[str]:
         execution = skill.execution
         called = set(state.called_tools)
+        successful = set(state.successful_tools)
         violations: list[str] = []
-        missing = [name for name in execution.required_tools if name not in called]
+        missing = [name for name in execution.required_tools if name not in successful]
         if missing:
-            violations.append(f"Required tools have not been called: {', '.join(missing)}.")
+            failed = [name for name in missing if name in state.failed_tools]
+            unresolved = [name for name in missing if name not in state.failed_tools]
+            violations.extend(f"REQUIRED_TOOL_FAILED:{name}" for name in failed)
+            violations.extend(f"MISSING_REQUIRED_TOOL:{name}" for name in unresolved)
         forbidden = sorted(called.intersection(execution.forbidden_tools))
         if forbidden:
             violations.append(f"Forbidden tools were called: {', '.join(forbidden)}.")
         if state.round_index < execution.min_tool_rounds:
             violations.append(f"At least {execution.min_tool_rounds} tool rounds are required.")
-        if execution.require_fresh_market_data and state.market_data_timestamp is None:
-            violations.append("Fresh market data is required; call get_market_snapshot or get_kline.")
+        if execution.require_fresh_market_data:
+            violations.extend(self._freshness_violations(state.market_data_timestamp, execution.freshness, now))
         if execution.require_memory_lookup and not state.memory_loaded:
-            violations.append("Memory/context lookup is required; call retrieve_relevant_context or retrieve_memory.")
+            violations.append("MEMORY_LOOKUP_REQUIRED: call a dedicated search_memory tool and obtain at least one memory result.")
         if execution.require_regime and not state.regime_loaded:
             violations.append("Market regime is required; call get_market_regime.")
         for section in skill.output.required_sections:
@@ -75,6 +141,23 @@ class SkillContractValidator:
                 violations.append(f"Final report is missing required section: {section}.")
         state.contract_violations = violations
         return violations
+
+    @staticmethod
+    def _freshness_violations(timestamp: datetime | None, policy: FreshnessPolicy | None, now: datetime | None) -> list[str]:
+        if timestamp is None:
+            return ["MARKET_DATA_TIMESTAMP_MISSING"]
+        policy = policy or FreshnessPolicy()
+        reference = now or datetime.now(UTC)
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=UTC)
+        age_minutes = (reference - timestamp.astimezone(UTC)).total_seconds() / 60
+        if age_minutes < -5:
+            return ["MARKET_DATA_TIMESTAMP_INVALID"]
+        if policy.max_age_minutes is not None and age_minutes > policy.max_age_minutes:
+            return ["MARKET_DATA_STALE"]
+        if policy.require_same_trading_day and timestamp.date() != reference.date():
+            return ["MARKET_DATA_NOT_SAME_TRADING_DAY"]
+        return []
 
 
 # Imported only for type checking at runtime-free module initialization.

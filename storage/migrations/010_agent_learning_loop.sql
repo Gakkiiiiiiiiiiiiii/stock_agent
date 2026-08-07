@@ -1,3 +1,25 @@
+-- Standalone migration tests and fresh SQLite deployments may not have ORM
+-- metadata created yet, so create the legacy base table before hardening it.
+CREATE TABLE IF NOT EXISTS memory_record (
+    id INTEGER PRIMARY KEY,
+    memory_type VARCHAR(64) NOT NULL,
+    title VARCHAR(256) NOT NULL,
+    content TEXT NOT NULL,
+    source_type VARCHAR(64) NOT NULL,
+    source_date TIMESTAMP,
+    related_regime VARCHAR(64),
+    related_strategy VARCHAR(64),
+    related_theme VARCHAR(128),
+    related_symbol VARCHAR(32),
+    status VARCHAR(32) NOT NULL DEFAULT 'validated',
+    importance VARCHAR(32) NOT NULL DEFAULT 'medium',
+    confidence REAL NOT NULL DEFAULT 0.7,
+    valid_from TIMESTAMP,
+    valid_to TIMESTAMP,
+    is_deleted BOOLEAN NOT NULL DEFAULT 0,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 ALTER TABLE memory_record ADD COLUMN subject_key VARCHAR(256);
 ALTER TABLE memory_record ADD COLUMN merge_key VARCHAR(512);
 ALTER TABLE memory_record ADD COLUMN temporal_class VARCHAR(32) NOT NULL DEFAULT 'SLOW_CHANGING';

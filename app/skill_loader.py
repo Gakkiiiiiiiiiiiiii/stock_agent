@@ -23,6 +23,10 @@ class SkillDefinition(BaseModel):
         return self.content
 
 
+class SkillDefinitionError(ValueError):
+    pass
+
+
 def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     if not raw.startswith("---"):
         return {}, raw
@@ -47,7 +51,9 @@ def load_skills(skill_root: Path | None = None) -> list[SkillDefinition]:
         frontmatter, body = _parse_frontmatter(raw)
         slug = path.parent.name
         contract_path = path.parent / "SKILL.yaml"
-        contract = yaml.safe_load(contract_path.read_text(encoding="utf-8")) if contract_path.exists() else {}
+        if not contract_path.exists():
+            raise SkillDefinitionError(f"Skill {slug} is missing required SKILL.yaml")
+        contract = yaml.safe_load(contract_path.read_text(encoding="utf-8"))
         contract = contract or {}
         skills.append(
             SkillDefinition(

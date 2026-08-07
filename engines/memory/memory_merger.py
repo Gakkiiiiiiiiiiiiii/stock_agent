@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 from engines.memory.models import MemoryCandidate
+from engines.memory.conflict_resolver import MemoryConflictResolver
 from engines.memory.memory_writer import enqueue_memory_reindex, write_memory_and_enqueue
 from storage.db import session_scope
 from storage.models.research import MemoryVersion
@@ -11,8 +12,9 @@ from storage.repositories.vector_repository import MemoryRepository
 
 
 class MemoryMerger:
-    def __init__(self, repository: MemoryRepository | None = None) -> None:
+    def __init__(self, repository: MemoryRepository | None = None, conflict_resolver: MemoryConflictResolver | None = None) -> None:
         self.repository = repository or MemoryRepository()
+        self.conflict_resolver = conflict_resolver or MemoryConflictResolver()
 
     def merge(self, candidate: MemoryCandidate, source_type: str, source_id: str, metadata: dict | None = None) -> dict:
         existing = self.repository.get_by_merge_key(candidate.merge_key)
@@ -21,14 +23,18 @@ class MemoryMerger:
             saved = write_memory_and_enqueue(payload, target_collection="financial_memory")
             return {"action": "created", **saved, "merge_key": candidate.merge_key}
         self._snapshot(existing.id, existing.content, existing.facts or {}, float(existing.confidence), "merge")
-        if self._conflicts(existing, candidate):
+        conflict_type, resolution = self.conflict_resolver.resolve(existing, candidate, metadata)
+        if conflict_type and resolution == "retain_existing":
+            self.repository.update(existing.id, last_seen_at=datetime.now(UTC))
+            return {"action": "retained_existing", "memory_id": existing.id, "conflict_type": conflict_type}
+        if conflict_type:
             group = existing.conflict_group or str(uuid4())
             self.repository.update(existing.id, status="SUPERSEDED", conflict_group=group, last_seen_at=datetime.now(UTC))
             payload["merge_key"] = f"{candidate.merge_key}::{source_id}"
             payload["conflict_group"] = group
             payload["status"] = "ACTIVE"
             saved = write_memory_and_enqueue(payload, target_collection="financial_memory")
-            return {"action": "conflict", "superseded_memory_id": existing.id, "conflict_group": group, **saved}
+            return {"action": "conflict", "conflict_type": conflict_type, "superseded_memory_id": existing.id, "conflict_group": group, **saved}
         merged_lessons = list(dict.fromkeys([*(existing.lessons or []), *candidate.lessons]))
         saved = write_memory_and_enqueue(
             payload | {"lessons": merged_lessons, "confidence": max(float(existing.confidence), candidate.confidence)},
@@ -36,12 +42,6 @@ class MemoryMerger:
             existing_memory_id=existing.id,
         )
         return {"action": "updated", **saved, "merge_key": candidate.merge_key}
-
-    @staticmethod
-    def _conflicts(existing, candidate: MemoryCandidate) -> bool:
-        old_stance = (existing.facts or {}).get("stance")
-        new_stance = candidate.facts.get("stance")
-        return bool(old_stance and new_stance and old_stance != new_stance)
 
     @staticmethod
     def _payload(candidate: MemoryCandidate, source_type: str, metadata: dict | None) -> dict:

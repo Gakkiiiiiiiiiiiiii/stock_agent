@@ -4,8 +4,9 @@ import json
 from datetime import date
 
 from agent.executor import SkillExecutor
-from app.skill_contract import SkillExecutionContract, SkillOutputContract
-from app.skill_loader import SkillDefinition
+from app.skill_contract import FreshnessPolicy, SkillContractValidator, SkillExecutionContract, SkillExecutionState, SkillOutputContract
+from app.skill_loader import SkillDefinition, load_skills
+from app.tool_registry import ClaudeToolRegistry
 from engines.decision.decision_service import DecisionService
 from engines.memory.service import MemoryService
 from engines.regime.regime_state_machine import PersistentRegimeStateMachine
@@ -58,17 +59,72 @@ def test_skill_contract_requires_tools_before_final():
     assert any(step["type"] == "contract_violation" for step in trace)
 
 
+def test_required_tool_error_and_stale_market_data_do_not_satisfy_contract():
+    skill = SkillDefinition(
+        slug="hardening", name="hardening", description="", content="",
+        execution=SkillExecutionContract(required_tools=["get_market_regime", "get_market_snapshot"], require_fresh_market_data=True, freshness=FreshnessPolicy(require_same_trading_day=True, max_age_minutes=30)),
+    )
+    state = SkillExecutionState(skill_slug=skill.slug)
+    state.record_tool_result("get_market_regime", {"error": {"code": "UNAVAILABLE"}})
+    state.record_tool_result("get_market_snapshot", {"snapshot": {"as_of": "2026-08-07T08:00:00+00:00"}})
+    violations = SkillContractValidator().validate(skill, state, "", now=date_to_datetime(2026, 8, 7, 10, 0))
+    assert "REQUIRED_TOOL_FAILED:get_market_regime" in violations
+    assert "MARKET_DATA_STALE" in violations
+
+
+def test_knowledge_retrieval_does_not_satisfy_dedicated_memory_contract():
+    skill = SkillDefinition(slug="memory", name="memory", description="", content="", execution=SkillExecutionContract(require_memory_lookup=True))
+    state = SkillExecutionState(skill_slug=skill.slug)
+    state.record_tool_result("retrieve_relevant_context", {"contexts": [{"source_type": "video_knowledge_unit"}]})
+    assert "MEMORY_LOOKUP_REQUIRED: call a dedicated search_memory tool and obtain at least one memory result." in SkillContractValidator().validate(skill, state, "")
+    state.record_tool_result("search_strategy_memory", {"contexts": [{"record": {"memory_type": "STRATEGY_EXPERIENCE"}}]})
+    assert SkillContractValidator().validate(skill, state, "") == []
+
+
+def test_every_skill_has_a_valid_contract():
+    registry = ClaudeToolRegistry()
+    known = set(registry._tools)
+    for skill in load_skills():
+        required = set(skill.execution.required_tools)
+        optional = set(skill.execution.optional_tools)
+        forbidden = set(skill.execution.forbidden_tools)
+        assert required <= known
+        assert optional <= known
+        assert forbidden <= known
+        assert not required & forbidden
+
+
+def date_to_datetime(year, month, day, hour, minute):
+    from datetime import UTC, datetime
+
+    return datetime(year, month, day, hour, minute, tzinfo=UTC)
+
+
 def test_persistent_regime_uses_confirmation_days(monkeypatch, tmp_path):
     configure_test_database(monkeypatch, tmp_path)
     state_machine = PersistentRegimeStateMachine()
-    state_machine.advance("CN_A", "rotation_market", date(2026, 8, 1))
-    first = state_machine.advance("CN_A", "range_market", date(2026, 8, 2))
-    second = state_machine.advance("CN_A", "range_market", date(2026, 8, 3))
-    third = state_machine.advance("CN_A", "range_market", date(2026, 8, 4))
+    state_machine.advance("CN_A", "rotation_market", date(2026, 8, 3))
+    first = state_machine.advance("CN_A", "range_market", date(2026, 8, 4))
+    second = state_machine.advance("CN_A", "range_market", date(2026, 8, 5))
+    third = state_machine.advance("CN_A", "range_market", date(2026, 8, 6))
     assert first["switch_status"] == "watch_switch"
     assert second["candidate_days"] == 2
     assert third["confirmed_regime"] == "range_market"
     assert third["switch_status"] == "confirmed_switch"
+
+
+def test_same_day_and_weekend_do_not_add_regime_confirmation_days(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    state_machine = PersistentRegimeStateMachine()
+    state_machine.advance("CN_A", "rotation_market", date(2026, 8, 7))
+    weekend = state_machine.advance("CN_A", "range_market", date(2026, 8, 8))
+    first = state_machine.advance("CN_A", "range_market", date(2026, 8, 10))
+    same_day = state_machine.advance("CN_A", "range_market", date(2026, 8, 10))
+    next_day = state_machine.advance("CN_A", "range_market", date(2026, 8, 11))
+    assert weekend["candidate_days"] == 0
+    assert first["candidate_days"] == 1
+    assert same_day["candidate_days"] == 1
+    assert next_day["candidate_days"] == 2
 
 
 def test_memory_merge_and_decision_review_feed_long_term_memory(monkeypatch, tmp_path):

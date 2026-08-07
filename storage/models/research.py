@@ -18,6 +18,8 @@ class MarketRegimeState(Base):
     candidate_regime: Mapped[str | None] = mapped_column(String(64))
     candidate_since: Mapped[date | None] = mapped_column(Date)
     candidate_days: Mapped[int] = mapped_column(Integer, default=0)
+    last_evaluated_date: Mapped[date | None] = mapped_column(Date)
+    confirmed_days: Mapped[int] = mapped_column(Integer, default=1)
     confidence: Mapped[float | None] = mapped_column(Float)
     features: Mapped[dict] = mapped_column(JSON, default=dict)
     transition_reason: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -70,6 +72,9 @@ class InvestmentDecision(Base):
     evidence_refs: Mapped[list] = mapped_column(JSON, default=list)
     tool_trace: Mapped[list] = mapped_column(JSON, default=list)
     status: Mapped[str] = mapped_column(String(32), default="active")
+    evaluation_status: Mapped[str] = mapped_column(String(32), default="PENDING")
+    next_evaluation_date: Mapped[date | None] = mapped_column(Date)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
 
 
 class InvestmentDecisionOutcome(Base):
