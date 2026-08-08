@@ -11,6 +11,7 @@ from app.model_providers import AnalysisModelClient
 from app.tools.decision_tools import build_decision_tools
 from app.tools.definitions import ToolDefinition
 from app.tools.memory_tools import build_memory_tools
+from app.tools.market_tools import build_market_tools
 from app.tools.regime_tools import build_regime_tools
 from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
@@ -639,6 +640,7 @@ class ClaudeToolRegistry:
         self.register_many(build_decision_tools())
         self.register_many(build_memory_tools())
         self.register_many(build_regime_tools())
+        self.register_many(build_market_tools())
         self._policies: dict[str, ToolPolicy] = self._default_policies()
 
     def register(self, definition: ToolDefinition) -> None:

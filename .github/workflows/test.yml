@@ -36,3 +36,24 @@ jobs:
             --cov=engines.backtest \
             --cov-report=term-missing \
             --cov-fail-under=70
+
+  architecture-coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Record architecture coverage baseline
+        run: |
+          pytest -q -m "not integration and not media and not qmt and not slow" \
+            --cov=engines.decision --cov=engines.memory --cov=engines.retrieval \
+            --cov=agent --cov=app.skill_contract --cov=app.scheduler_service \
+            --cov=app.model_providers --cov-report=term --cov-report=json:artifacts/architecture_coverage.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: architecture-coverage
+          path: artifacts/architecture_coverage.json

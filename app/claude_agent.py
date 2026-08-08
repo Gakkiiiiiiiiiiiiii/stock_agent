@@ -47,12 +47,14 @@ class ClaudeAgent:
         if client is not None:
             self.client = client
         elif model:
+            base = AgentModelSettings.from_env()
             self.client = AgentModelClient(
                 settings=AgentModelSettings(
-                    provider=AgentModelSettings.from_env().provider,
+                    provider=base.provider,
                     model=model,
-                    base_url=AgentModelSettings.from_env().base_url,
-                    api_key=AgentModelSettings.from_env().api_key,
+                    base_url=base.base_url,
+                    api_key=base.api_key,
+                    capabilities=base.capabilities,
                 )
             )
         else:

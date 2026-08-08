@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from engines.retrieval.hybrid_retriever import HybridRetriever
+from engines.retrieval.config import RetrievalConfig
 from engines.retrieval.query_understanding import build_retrieval_plan
 
 
@@ -62,6 +63,17 @@ class FakeSparseRetriever:
                 "recall_sources": ["sparse"],
             }
         ]
+
+
+class FailingComponent:
+    def search(self, *args, **kwargs):
+        raise AssertionError("sparse retriever should not be called")
+
+    def score_candidates(self, *args, **kwargs):
+        raise AssertionError("bm25 scorer should not be called")
+
+    def rerank(self, *args, **kwargs):
+        raise AssertionError("reranker should not be called")
 
 
 def test_hybrid_retriever_prefers_newer_knowledge_when_scores_tie():
@@ -242,3 +254,13 @@ def test_sparse_score_is_real():
     scored = retriever.sparse_scorer.score_candidates("黄金 高股息", [{"chunk_id": "a", "text": "黄金 高股息 机会"}])
     assert scored[0]["bm25_score"] > 0
     assert scored[0]["sparse_score_source"] == "bm25_candidate_text"
+
+
+def test_dense_only_never_calls_sparse_bm25_or_reranker():
+    retriever = HybridRetriever(
+        qdrant_client=FakeQdrant(), reranker=FailingComponent(), embedder=FakeEmbedder(), hydrator=EmptyHydrator(),
+        sparse_retriever=FailingComponent(), sparse_scorer=FailingComponent(),
+        config=RetrievalConfig(sparse_recall_enabled=False, bm25_score_enabled=False, reranker_enabled=False, freshness_score_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
+    )
+    result = retriever.retrieve("纯 dense", top_k=1)
+    assert result["contexts"][0]["bm25_score"] == 0.0

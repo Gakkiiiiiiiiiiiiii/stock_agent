@@ -27,9 +27,10 @@ class RetrievalAblationRunner:
 
 def build_standard_ablation_variants(factory=HybridRetriever) -> dict[str, object]:
     configs = {
-        "dense_only": RetrievalConfig(sparse_enabled=False, reranker_enabled=False, freshness_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
-        "dense_sparse": RetrievalConfig(reranker_enabled=False, freshness_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
-        "with_reranker": RetrievalConfig(freshness_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
+        "dense_only": RetrievalConfig(sparse_recall_enabled=False, bm25_score_enabled=False, reranker_enabled=False, freshness_score_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
+        "dense_sparse": RetrievalConfig(bm25_score_enabled=False, reranker_enabled=False, freshness_score_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
+        "with_bm25_score": RetrievalConfig(reranker_enabled=False, freshness_score_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
+        "with_reranker": RetrievalConfig(freshness_score_enabled=False, source_priority_enabled=False, conflict_resolution_enabled=False),
         "with_freshness": RetrievalConfig(source_priority_enabled=False, conflict_resolution_enabled=False),
         "with_source_priority": RetrievalConfig(conflict_resolution_enabled=False),
         "with_conflict_resolution": RetrievalConfig(),

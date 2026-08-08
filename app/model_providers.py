@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import os
+import json
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
 
 from app.model_capabilities import ModelCapabilities
+from app.model_capability_resolver import ModelCapabilityResolver
 
 
 class ModelCapabilityError(RuntimeError):
+    pass
+
+
+class StructuredOutputError(RuntimeError):
     pass
 
 
@@ -20,7 +26,7 @@ class AnalysisModelSettings:
     base_url: str | None = None
     api_key: str | None = None
     temperature: float | None = None
-    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
+    capabilities: ModelCapabilities | None = None
 
     @classmethod
     def from_env(cls) -> "AnalysisModelSettings":
@@ -34,14 +40,14 @@ class AnalysisModelSettings:
             base_url=os.getenv("ANALYSIS_MODEL_BASE_URL"),
             api_key=api_key,
             temperature=_optional_float(os.getenv("ANALYSIS_MODEL_TEMPERATURE")),
-            capabilities=ModelCapabilities.from_env("ANALYSIS_MODEL"),
+            capabilities=ModelCapabilityResolver.resolve(os.getenv("ANALYSIS_MODEL_PROVIDER", "none"), model, "ANALYSIS_MODEL"),
         )
 
 
 class AnalysisModelClient:
     def __init__(self, settings: AnalysisModelSettings | None = None, http_client: httpx.Client | None = None) -> None:
         self.settings = settings or AnalysisModelSettings.from_env()
-        self.capabilities = self.settings.capabilities
+        self.capabilities = self.settings.capabilities or ModelCapabilityResolver.resolve(self.settings.provider, self.settings.model, "ANALYSIS_MODEL")
         self.http_client = http_client or httpx.Client(timeout=180)
 
     def available(self) -> bool:
@@ -75,13 +81,28 @@ class AnalysisModelClient:
             "max_tokens": max_tokens,
             "messages": [],
         }
+        is_json_object = (response_format or {}).get("type") == "json_object"
+        native_structured = self.supports("json_mode" if is_json_object else "json_schema")
+        structured_output_fallback = response_format is not None and not native_structured
+        if structured_output_fallback:
+            system = ((system or "") + "\nReturn strictly valid JSON only. Do not use Markdown fences or prose.").strip()
         if system:
             payload["messages"].append({"role": "system", "content": system})
         payload["messages"].append({"role": "user", "content": prompt})
-        structured_output_fallback = response_format is not None and not self.supports("json_schema")
-        if response_format is not None and self.supports("json_schema"):
+        if response_format is not None and native_structured:
             payload["response_format"] = response_format
         data = self._post_chat_completion(payload)
+        if structured_output_fallback:
+            for attempt in range(2):
+                content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+                try:
+                    json.loads(content)
+                    break
+                except json.JSONDecodeError:
+                    if attempt:
+                        raise StructuredOutputError("STRUCTURED_OUTPUT_INVALID_JSON")
+                    payload["messages"].append({"role": "system", "content": "Previous output was invalid JSON. Retry with one valid JSON object only."})
+                    data = self._post_chat_completion(payload)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         return {
@@ -152,7 +173,7 @@ class AgentModelSettings:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
-    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
+    capabilities: ModelCapabilities | None = None
 
     @classmethod
     def from_env(cls) -> "AgentModelSettings":
@@ -161,7 +182,7 @@ class AgentModelSettings:
             model=os.getenv("AGENT_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),
             base_url=os.getenv("AGENT_MODEL_BASE_URL", os.getenv("ANALYSIS_MODEL_BASE_URL")),
             api_key=os.getenv("AGENT_MODEL_API_KEY", os.getenv("ANALYSIS_MODEL_API_KEY")),
-            capabilities=ModelCapabilities.from_env("AGENT_MODEL"),
+            capabilities=ModelCapabilityResolver.resolve(os.getenv("AGENT_MODEL_PROVIDER", os.getenv("ANALYSIS_MODEL_PROVIDER", "none")), os.getenv("AGENT_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")), "AGENT_MODEL"),
         )
 
 
@@ -175,7 +196,8 @@ class AgentModelClient(AnalysisModelClient):
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
                 temperature=None,
-                capabilities=resolved.capabilities,
+                capabilities=resolved.capabilities
+                or ModelCapabilityResolver.resolve(resolved.provider, resolved.model, "AGENT_MODEL"),
             ),
             http_client=http_client,
         )
@@ -187,7 +209,7 @@ class VisualModelSettings:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
-    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
+    capabilities: ModelCapabilities | None = None
 
     @classmethod
     def from_env(cls) -> "VisualModelSettings":
@@ -196,7 +218,7 @@ class VisualModelSettings:
             model=os.getenv("VISUAL_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),
             base_url=os.getenv("VISUAL_MODEL_BASE_URL", os.getenv("ANALYSIS_MODEL_BASE_URL")),
             api_key=os.getenv("VISUAL_MODEL_API_KEY", os.getenv("ANALYSIS_MODEL_API_KEY")),
-            capabilities=ModelCapabilities.from_env("VISUAL_MODEL"),
+            capabilities=ModelCapabilityResolver.resolve(os.getenv("VISUAL_MODEL_PROVIDER", os.getenv("ANALYSIS_MODEL_PROVIDER", "none")), os.getenv("VISUAL_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")), "VISUAL_MODEL"),
         )
 
 
@@ -210,7 +232,8 @@ class VisualModelClient(AnalysisModelClient):
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
                 temperature=None,
-                capabilities=resolved.capabilities,
+                capabilities=resolved.capabilities
+                or ModelCapabilityResolver.resolve(resolved.provider, resolved.model, "VISUAL_MODEL"),
             ),
             http_client=http_client,
         )

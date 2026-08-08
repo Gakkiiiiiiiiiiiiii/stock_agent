@@ -39,7 +39,7 @@ class HybridRetriever:
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
         dense_candidates: list[dict] = []
-        if self.config.dense_enabled:
+        if self.config.dense_recall_enabled:
             for collection in plan["collections"]:
                 hits = self.qdrant_client.search(collection=collection, vector=query_vector, limit=plan["top_n_retrieve"], query_filter=query_filter)
                 for hit in hits:
@@ -49,9 +49,9 @@ class HybridRetriever:
             collections=plan["collections"],
             filters=plan["filters"],
             limit=plan["top_n_retrieve"],
-        ) if self.config.sparse_enabled else []
+        ) if self.config.sparse_recall_enabled else []
         candidates = self._merge_recall_candidates(dense_candidates, sparse_candidates)
-        candidates = self.sparse_scorer.score_candidates(plan["query"], candidates)
+        candidates = self.sparse_scorer.score_candidates(plan["query"], candidates) if self.config.bm25_score_enabled else [item | {"bm25_score": 0.0, "sparse_score_source": "disabled"} for item in candidates]
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"]) if self.config.reranker_enabled else candidates[: plan["top_k_rerank"]]
         reranked = self._merge_candidate_fields(candidates, reranked)
         reranked = self._apply_hybrid_score(reranked)
@@ -128,7 +128,7 @@ class HybridRetriever:
             bm25 = float(item.get("bm25_score") or 0.0)
             rerank = float(item.get("rerank_score") or 0.0)
             source_quality = float(payload.get("source_quality") or 0.5)
-            freshness = float(payload.get("freshness_score") or self._freshness_score(payload)) if self.config.freshness_enabled else 0.0
+            freshness = float(payload.get("freshness_score") or self._freshness_score(payload)) if self.config.freshness_score_enabled else 0.0
             status = self._status_score(payload.get("status"))
             if self._is_expired(payload):
                 status = 0.0
@@ -138,7 +138,7 @@ class HybridRetriever:
                 + 0.20 * bm25
                 + 0.30 * rerank
                 + 0.05 * source_quality
-                + (0.05 * freshness if self.config.freshness_enabled else 0.0)
+                + (0.05 * freshness if self.config.freshness_score_enabled else 0.0)
                 + 0.05 * status,
                 6,
             )

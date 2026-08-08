@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from engines.domain_result import DomainResultMeta
 
 from engines.market.breadth_engine import compute_breadth
 from engines.market.crowding_engine import compute_crowding_score
@@ -20,6 +22,7 @@ from engines.regime.regime_state_machine import PersistentRegimeStateMachine, re
 
 class MarketFeatureSnapshot(BaseModel):
     as_of: datetime
+    meta: DomainResultMeta = Field(default_factory=DomainResultMeta)
     universe_size: int | None = None
     requested_quote_count: int | None = None
     received_quote_count: int | None = None
@@ -80,7 +83,7 @@ def _unknown_result(snapshot: MarketFeatureSnapshot, previous_regime: str | None
     regime = preclassify_regime(features)
     state = resolve_regime_transition(previous_regime=previous_regime, candidate_regime=regime["primary_regime"])
     return {
-        "snapshot": snapshot.model_dump(),
+        "snapshot": snapshot.model_copy(update={"meta": snapshot.meta.model_copy(update={"as_of": snapshot.as_of, "missing_fields": missing_fields, "warnings": sorted(set(snapshot.quality_flags))})}).model_dump(),
         "features": features,
         "regime": regime,
         "llm_hint": {"regime": "UNKNOWN", "reason": "market feature snapshot is incomplete"},
@@ -212,8 +215,15 @@ def get_market_regime(
         )
     else:
         state = resolve_regime_transition(previous_regime=previous_regime, candidate_regime=regime["primary_regime"])
+    snapshot_for_output = snapshot_obj.model_copy(
+        update={
+            "meta": snapshot_obj.meta.model_copy(
+                update={"as_of": snapshot_obj.as_of, "confidence": regime.get("confidence"), "warnings": snapshot_obj.quality_flags}
+            )
+        }
+    )
     return {
-        "snapshot": snapshot_obj.model_dump(),
+        "snapshot": snapshot_for_output.model_dump(),
         "features": features,
         "regime": regime,
         "llm_hint": llm_hint,

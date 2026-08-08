@@ -93,7 +93,7 @@ def test_model_capabilities_gate_tools_and_fallback_structured_output():
         received.update(json.loads(request.content))
         return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}}]})
 
-    settings = AnalysisModelSettings(provider="openai_compatible", model="test", base_url="http://model", api_key="key")
+    settings = AnalysisModelSettings(provider="openai_compatible", model="test", base_url="http://model", api_key="key", capabilities=ModelCapabilities())
     client = AnalysisModelClient(settings=settings, http_client=httpx.Client(transport=httpx.MockTransport(handler)))
     result = client.complete("hello", response_format={"type": "json_object"})
     assert result["structured_output_fallback"] is True
@@ -111,7 +111,9 @@ def test_regression_gate_uses_relative_tolerance_and_zero_leakage_growth():
 
 def test_standard_ablation_variants_toggle_one_component_at_a_time():
     variants = build_standard_ablation_variants(factory=lambda *, config: config)
-    assert variants["dense_only"].sparse_enabled is False
+    assert variants["dense_only"].sparse_recall_enabled is False
+    assert variants["dense_only"].bm25_score_enabled is False
     assert variants["dense_sparse"].reranker_enabled is False
+    assert variants["with_bm25_score"].bm25_score_enabled is True
     assert variants["with_reranker"].reranker_enabled is True
     assert variants["with_conflict_resolution"].conflict_resolution_enabled is True
