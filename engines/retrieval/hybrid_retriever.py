@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from qdrant_client.http import models
 
 from engines.retrieval.embedder import LocalChineseNgramEmbedder, build_embedder
+from engines.retrieval.filters import normalize_retrieval_filters
 from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
@@ -31,7 +32,7 @@ class HybridRetriever:
         self.sparse_retriever = sparse_retriever or PostgresSparseRetriever()
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
-        plan = build_retrieval_plan(query=query, task_type=task_type, filters=filters, top_k=top_k)
+        plan = build_retrieval_plan(query=query, task_type=task_type, filters=normalize_retrieval_filters(filters), top_k=top_k)
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
         dense_candidates: list[dict] = []
@@ -76,6 +77,8 @@ class HybridRetriever:
             return None
         must = []
         for key, value in filters.items():
+            if key == "valid_at":
+                continue
             if isinstance(value, list):
                 must.append(models.FieldCondition(key=key, match=models.MatchAny(any=value)))
             else:

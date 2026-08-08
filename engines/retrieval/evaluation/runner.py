@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
-from engines.retrieval.evaluation.metrics import ndcg_at_k, precision_at_k, recall_at_k, reciprocal_rank
+from engines.retrieval.evaluation.metrics import ndcg_at_k, precision_at_k, recall_at_k, reciprocal_rank, temporal_accuracy
 from engines.retrieval.evaluation.models import RetrievalGoldenCase
 
 
@@ -17,10 +18,23 @@ class RetrievalEvaluationRunner:
     def run(self, cases: list[RetrievalGoldenCase]) -> dict:
         rows = []
         for case in cases:
-            result = self.retriever.retrieve(case.query, task_type=case.task_type, top_k=10)
+            filters = {"memory_types": case.expected_memory_types} if case.expected_memory_types else None
+            started = time.perf_counter()
+            result = self.retriever.retrieve(case.query, task_type=case.task_type, filters=filters, top_k=10)
+            latency_ms = (time.perf_counter() - started) * 1000
             contexts = result.get("contexts") or []
-            retrieved = [str((item.get("record") or {}).get("title") or item.get("title") or "") for item in contexts]
-            expected = set(case.expected_subjects)
-            rows.append({"id": case.id, "recall_at_5": recall_at_k(retrieved, expected, 5), "recall_at_10": recall_at_k(retrieved, expected, 10), "precision_at_5": precision_at_k(retrieved, expected, 5), "mrr": reciprocal_rank(retrieved, expected), "ndcg_at_10": ndcg_at_k(retrieved, expected, 10), "expired_leakage": any(str(item.get("status", "")).lower() == "expired" for item in contexts)})
+            retrieved = [_identifier(item) for item in contexts]
+            expected = set(case.expected_ids or case.expected_subjects)
+            records = [item.get("record") or item for item in contexts]
+            types = {str(record.get("memory_type") or "") for record in records}
+            regimes = {str(record.get("related_regime") or "") for record in records}
+            row = {"case_id": case.case_id, "recall_at_5": recall_at_k(retrieved, expected, 5), "recall_at_10": recall_at_k(retrieved, expected, 10), "precision_at_5": precision_at_k(retrieved, expected, 5), "mrr": reciprocal_rank(retrieved, expected), "ndcg_at_10": ndcg_at_k(retrieved, expected, 10), "expired_leakage": any(str(record.get("status", "")).lower() == "expired" for record in records), "temporal_accuracy": temporal_accuracy(contexts, case.as_of), "conflict_accuracy": float(not bool(set(retrieved) & set(case.forbidden_ids))), "memory_type_recall": float(not case.expected_memory_types or set(case.expected_memory_types).issubset(types)), "regime_conditioned_recall": float(not case.expected_regime or case.expected_regime in regimes), "source_priority_accuracy": float(not case.expected_sources or any(record.get("source_type") in {item.get("source_type") for item in case.expected_sources} for record in records[:3])), "latency_ms": latency_ms}
+            rows.append(row)
         count = len(rows) or 1
-        return {"cases": rows, "summary": {key: sum(float(row[key]) for row in rows) / count for key in ("recall_at_5", "recall_at_10", "precision_at_5", "mrr", "ndcg_at_10")} | {"expired_knowledge_leakage_rate": sum(row["expired_leakage"] for row in rows) / count}}
+        metric_names = ("recall_at_5", "recall_at_10", "precision_at_5", "mrr", "ndcg_at_10", "temporal_accuracy", "conflict_accuracy", "memory_type_recall", "regime_conditioned_recall", "source_priority_accuracy", "latency_ms")
+        return {"cases": rows, "summary": {key: sum(float(row[key]) for row in rows) / count for key in metric_names} | {"expired_knowledge_leakage_rate": sum(row["expired_leakage"] for row in rows) / count}}
+
+
+def _identifier(item: dict) -> str:
+    record = item.get("record") or {}
+    return str(record.get("id") or record.get("memory_id") or record.get("knowledge_uid") or record.get("title") or item.get("title") or "")

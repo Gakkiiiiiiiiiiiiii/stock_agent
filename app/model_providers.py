@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+from app.model_capabilities import ModelCapabilities
 
 
 @dataclass(frozen=True)
@@ -14,6 +16,7 @@ class AnalysisModelSettings:
     base_url: str | None = None
     api_key: str | None = None
     temperature: float | None = None
+    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
 
     @classmethod
     def from_env(cls) -> "AnalysisModelSettings":
@@ -27,12 +30,14 @@ class AnalysisModelSettings:
             base_url=os.getenv("ANALYSIS_MODEL_BASE_URL"),
             api_key=api_key,
             temperature=_optional_float(os.getenv("ANALYSIS_MODEL_TEMPERATURE")),
+            capabilities=ModelCapabilities.from_env("ANALYSIS_MODEL"),
         )
 
 
 class AnalysisModelClient:
     def __init__(self, settings: AnalysisModelSettings | None = None, http_client: httpx.Client | None = None) -> None:
         self.settings = settings or AnalysisModelSettings.from_env()
+        self.capabilities = self.settings.capabilities
         self.http_client = http_client or httpx.Client(timeout=180)
 
     def available(self) -> bool:
@@ -42,6 +47,9 @@ class AnalysisModelClient:
             and bool(self.settings.base_url)
             and bool(self.settings.api_key)
         )
+
+    def supports(self, capability: str) -> bool:
+        return bool(getattr(self.capabilities, capability, False))
 
     def complete(
         self,
@@ -136,6 +144,7 @@ class AgentModelSettings:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
 
     @classmethod
     def from_env(cls) -> "AgentModelSettings":
@@ -144,6 +153,7 @@ class AgentModelSettings:
             model=os.getenv("AGENT_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),
             base_url=os.getenv("AGENT_MODEL_BASE_URL", os.getenv("ANALYSIS_MODEL_BASE_URL")),
             api_key=os.getenv("AGENT_MODEL_API_KEY", os.getenv("ANALYSIS_MODEL_API_KEY")),
+            capabilities=ModelCapabilities.from_env("AGENT_MODEL"),
         )
 
 
@@ -157,6 +167,7 @@ class AgentModelClient(AnalysisModelClient):
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
                 temperature=None,
+                capabilities=resolved.capabilities,
             ),
             http_client=http_client,
         )
@@ -168,6 +179,7 @@ class VisualModelSettings:
     model: str | None = None
     base_url: str | None = None
     api_key: str | None = None
+    capabilities: ModelCapabilities = field(default_factory=ModelCapabilities)
 
     @classmethod
     def from_env(cls) -> "VisualModelSettings":
@@ -176,6 +188,7 @@ class VisualModelSettings:
             model=os.getenv("VISUAL_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),
             base_url=os.getenv("VISUAL_MODEL_BASE_URL", os.getenv("ANALYSIS_MODEL_BASE_URL")),
             api_key=os.getenv("VISUAL_MODEL_API_KEY", os.getenv("ANALYSIS_MODEL_API_KEY")),
+            capabilities=ModelCapabilities.from_env("VISUAL_MODEL"),
         )
 
 
@@ -189,6 +202,7 @@ class VisualModelClient(AnalysisModelClient):
                 base_url=resolved.base_url,
                 api_key=resolved.api_key,
                 temperature=None,
+                capabilities=resolved.capabilities,
             ),
             http_client=http_client,
         )
