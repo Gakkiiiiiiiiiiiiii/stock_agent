@@ -246,25 +246,6 @@ class ClaudeToolRegistry:
                 },
                 lambda payload: industry_knowledge_server.rank_themes_by_score(**payload),
             ),
-            "get_market_regime": (
-                {
-                    "name": "get_market_regime",
-                    "description": "Infer current market regime, state transitions, and high-position retreat risk.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "as_of": {"type": "string"},
-                            "previous_regime": {"type": "string"},
-                            "force_refresh": {"type": "boolean"},
-                            "high_position_loss_ratio": {"type": "number"},
-                            "high_position_limit_down_ratio": {"type": "number"},
-                            "high_position_breakdown_ratio": {"type": "number"},
-                            "high_position_big_negative_count": {"type": "integer"},
-                        },
-                    },
-                },
-                lambda payload: market_regime_server.get_market_regime(**payload),
-            ),
             "route_strategy": (
                 {
                     "name": "route_strategy",

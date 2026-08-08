@@ -116,6 +116,12 @@ class AnalysisModelClient:
                         raise StructuredOutputError("STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA")
                     payload["messages"].append({"role": "system", "content": "Previous output was invalid JSON or did not match the requested schema. Retry with one valid JSON object matching every required field and type."})
                     data = self._post_chat_completion(payload)
+        elif output_model is not None:
+            content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
+            try:
+                validated_output = output_model.model_validate(json.loads(content))
+            except (json.JSONDecodeError, ValidationError) as exc:
+                raise StructuredOutputError("NATIVE_STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA") from exc
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         return {

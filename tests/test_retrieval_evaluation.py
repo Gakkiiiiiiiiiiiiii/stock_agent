@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
+import json
 
 from pydantic import BaseModel
 from engines.memory.memory_retriever import retrieve_memory
@@ -13,6 +15,7 @@ from engines.retrieval.evaluation.regression import compare_to_baseline
 from app.model_capabilities import ModelCapabilities
 from app.model_providers import AnalysisModelClient, AnalysisModelSettings, ModelCapabilityError, StructuredOutputError
 from engines.domain_result import DomainResultMeta
+from engines.retrieval.evaluation.fixture_corpus import build_fixture_hybrid_retriever, load_fixture_records
 
 
 class FakeRetriever:
@@ -123,6 +126,38 @@ def test_structured_output_fallback_rejects_schema_mismatch():
         client.complete("review", output_model=ReviewOutput)
 
 
+def test_native_json_schema_is_locally_validated():
+    import httpx
+
+    class ReviewOutput(BaseModel):
+        score: float
+
+    client = AnalysisModelClient(
+        settings=AnalysisModelSettings(
+            provider="openai_compatible", model="test", base_url="http://model", api_key="key", capabilities=ModelCapabilities(json_schema=True)
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"choices": [{"message": {"content": '{"score":0.8}'}}]}))),
+    )
+    result = client.complete("review", output_model=ReviewOutput)
+    assert result["structured_output"] == {"score": 0.8}
+
+
+def test_native_json_schema_rejects_provider_contract_violation():
+    import httpx
+
+    class ReviewOutput(BaseModel):
+        score: float
+
+    client = AnalysisModelClient(
+        settings=AnalysisModelSettings(
+            provider="openai_compatible", model="test", base_url="http://model", api_key="key", capabilities=ModelCapabilities(json_schema=True)
+        ),
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json={"choices": [{"message": {"content": '{"unexpected":true}'}}]}))),
+    )
+    with __import__("pytest").raises(StructuredOutputError, match="NATIVE_STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA"):
+        client.complete("review", output_model=ReviewOutput)
+
+
 def test_regression_gate_uses_relative_tolerance_and_zero_leakage_growth():
     baseline = {"recall_at_10": 0.9, "ndcg_at_10": 0.8, "expired_knowledge_leakage_rate": 0.0}
     assert compare_to_baseline({"recall_at_10": 0.88, "ndcg_at_10": 0.78, "expired_knowledge_leakage_rate": 0.0}, baseline) == []
@@ -138,3 +173,21 @@ def test_standard_ablation_variants_toggle_one_component_at_a_time():
     assert variants["with_bm25_score"].bm25_score_enabled is True
     assert variants["with_reranker"].reranker_enabled is True
     assert variants["with_conflict_resolution"].conflict_resolution_enabled is True
+
+
+def test_versioned_golden_dataset_and_fixture_corpus_are_deterministic():
+    root = Path("engines/retrieval/evaluation/datasets")
+    cases = RetrievalEvaluationRunner(build_fixture_hybrid_retriever()).load_dataset(root / "golden_v1.jsonl")
+    manifest = json.loads(Path("tests/fixtures/retrieval_eval/manifest.json").read_text(encoding="utf-8"))
+    assert len(cases) == 200
+    assert len(load_fixture_records()) == manifest["record_count"]
+    assert {case.case_id for case in cases} == {case.case_id for case in reversed(cases)}
+    assert all(not set(case.expected_ids) & set(case.retrieval_filters) for case in cases)
+
+
+def test_committed_baseline_is_generated_from_fixture_hybrid_path():
+    root = Path("engines/retrieval/evaluation/datasets")
+    cases = RetrievalEvaluationRunner(build_fixture_hybrid_retriever()).load_dataset(root / "golden_v1.jsonl")
+    current = RetrievalEvaluationRunner(build_fixture_hybrid_retriever()).run(cases)["summary"]
+    baseline = json.loads((root / "baseline_v1.json").read_text(encoding="utf-8"))["metrics"]
+    assert compare_to_baseline(current, baseline) == []

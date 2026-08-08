@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from qdrant_client.http import models
 
 from engines.retrieval.embedder import LocalChineseNgramEmbedder, build_embedder
+from engines.domain_result import DomainResultMeta
 from engines.retrieval.config import RetrievalConfig
 from engines.retrieval.filters import normalize_retrieval_filters
 from engines.retrieval.postgres_hydrator import PostgresHydrator
@@ -67,7 +68,16 @@ class HybridRetriever:
             embedding = {"provider": "unknown", "model": type(self.embedder).__name__, "dimension": len(query_vector)}
         else:
             embedding = metadata.__dict__
-        return {"plan": plan, "contexts": contexts, "embedding": embedding}
+        return {
+            "plan": plan,
+            "contexts": contexts,
+            "embedding": embedding,
+            "meta": DomainResultMeta(
+                data_source="hybrid_retriever",
+                calculation_version="retrieval_v1",
+                warnings=["NO_CONTEXTS"] if not contexts else [],
+            ).model_dump(mode="json"),
+        }
 
     def _build_filter(self, filters: dict) -> models.Filter | None:
         if not filters:
