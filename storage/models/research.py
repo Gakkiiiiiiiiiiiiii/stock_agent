@@ -85,6 +85,9 @@ class InvestmentDecision(Base):
     evaluation_status: Mapped[str] = mapped_column(String(32), default="PENDING")
     next_evaluation_date: Mapped[date | None] = mapped_column(Date)
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    decision_as_of: Mapped[datetime | None] = mapped_column(DateTime)
+    evaluation_anchor: Mapped[str] = mapped_column(String(32), default="NEXT_SESSION_OPEN")
+    benchmark_symbol: Mapped[str] = mapped_column(String(32), default="000001.SH")
 
 
 class InvestmentDecisionOutcome(Base):

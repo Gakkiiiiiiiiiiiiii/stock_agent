@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from agent.runtime_context import AgentRuntimeContext
-from engines.memory.memory_scorer import MemoryScorer
+from engines.memory.memory_retriever import retrieve_memory
 from storage.repositories.research_repository import MarketRegimeRepository
 from storage.repositories.vector_repository import MemoryRepository
 
@@ -20,21 +20,19 @@ class ContextBuilder:
         try:
             regime_state = self.regime_repository.get_state(market_code)
             regime = None if regime_state is None else {"market_code": market_code, "confirmed_regime": regime_state.confirmed_regime, "confidence": regime_state.confidence, "confirmed_since": regime_state.confirmed_since.isoformat()}
-            records = [item for item in self.memory_repository.list_all() if str(item.status).upper() in {"ACTIVE", "VALIDATED"} and not item.is_deleted]
+            records = []
         except Exception:  # Database bootstrap can legitimately precede this builder.
             regime, records = None, []
-        words = {part.lower() for part in query.split() if len(part) > 1}
-        memories = []
-        for item in records:
-            text = f"{item.title} {item.content}".lower()
-            semantic = 1.0 if words and any(word in text for word in words) else 0.0
-            memories.append({"record": {"id": item.id, "memory_type": item.memory_type, "content": item.content, "importance": item.importance, "confidence": item.confidence, "related_regime": item.related_regime, "source_date": item.source_date.isoformat() if item.source_date else None, "metadata_json": item.metadata_json or {}}, "final_score": semantic})
-        ranked = MemoryScorer().rank(memories, regime.get("confirmed_regime") if regime else None)[:5]
+        try:
+            strategy = retrieve_memory(query, memory_types=["STRATEGY_EXPERIENCE"], market_regime=regime.get("confirmed_regime") if regime else None, top_k=5).get("memories", [])
+            decisions = retrieve_memory(query, memory_types=["DECISION"], market_regime=regime.get("confirmed_regime") if regime else None, top_k=3).get("memories", [])
+            preferences = retrieve_memory(query, memory_types=["USER_PREFERENCE"], top_k=5).get("memories", [])
+        except Exception:
+            strategy, decisions, preferences = [], [], []
         runtime = AgentRuntimeContext(
             query=query, as_of=datetime.now(UTC), market_regime=regime,
-            strategy_memories=[item for item in ranked if item["record"]["memory_type"] == "STRATEGY_EXPERIENCE"],
-            decision_memories=[item for item in ranked if item["record"]["memory_type"] == "DECISION"],
-            user_preferences={item["record"]["content"]: item["record"] for item in ranked if item["record"]["memory_type"] == "USER_PREFERENCE"},
+            strategy_memories=strategy, decision_memories=decisions,
+            user_preferences={str((item.get("record") or {}).get("id")): item.get("record") for item in preferences},
             current_positions=list(provided.get("current_positions") or []),
             knowledge_contexts=list(provided.get("knowledge_contexts") or []),
             task_context={key: value for key, value in provided.items() if key not in {"current_positions", "knowledge_contexts"}},

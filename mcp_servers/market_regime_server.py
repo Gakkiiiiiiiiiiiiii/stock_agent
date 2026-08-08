@@ -226,3 +226,17 @@ def get_market_regime(
 
 def get_high_position_retreat() -> dict:
     return detect_high_position_retreat(0.4, 0.25, 0.3, 3)
+
+
+def get_market_regime_history(market_code: str = "CN_A", start_date: str | None = None, end_date: str | None = None, limit: int = 100) -> dict:
+    from datetime import date
+    from storage.bootstrap import create_all
+    from storage.repositories.research_repository import MarketRegimeRepository
+
+    create_all()
+    rows = MarketRegimeRepository().list_history(
+        market_code, limit=limit,
+        start_date=date.fromisoformat(start_date) if start_date else None,
+        end_date=date.fromisoformat(end_date) if end_date else None,
+    )
+    return {"market_code": market_code, "history": [{"regime": row.new_regime, "previous_regime": row.previous_regime, "start_date": row.started_at.isoformat(), "end_date": row.ended_at.isoformat() if row.ended_at else None, "confidence": row.confidence, "evidence": row.evidence} for row in rows]}

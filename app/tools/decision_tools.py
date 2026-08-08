@@ -18,6 +18,9 @@ class SaveInvestmentDecisionInput(BaseModel):
     candidates: list = Field(default_factory=list)
     portfolio_advice: dict = Field(default_factory=dict)
     confidence: float | None = None
+    decision_as_of: str | None = None
+    evaluation_anchor: str = "NEXT_SESSION_OPEN"
+    benchmark_symbol: str = "000001.SH"
     trigger_conditions: list = Field(default_factory=list)
     invalidation_conditions: list = Field(default_factory=list)
     evidence_refs: list = Field(default_factory=list)

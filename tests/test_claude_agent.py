@@ -18,7 +18,7 @@ class FakeClient:
         return self._responses.pop(0)
 
 
-def test_claude_agent_runs_tool_loop():
+def test_claude_agent_runs_tool_loop(isolated_database):
     fake_client = FakeClient(
         [
             {
@@ -40,6 +40,8 @@ def test_claude_agent_runs_tool_loop():
         ]
     )
     registry = ClaudeToolRegistry()
+    schema, _ = registry._tools["get_market_snapshot"]
+    registry._tools["get_market_snapshot"] = (schema, lambda _payload: {"snapshot": {"as_of": "2026-08-08T10:00:00+08:00"}})
     agent = ClaudeAgent(
         client=fake_client,
         tools=registry,
@@ -52,6 +54,7 @@ def test_claude_agent_runs_tool_loop():
     assert result.trace["steps"][0]["type"] == "skill_selection"
     assert any(step["type"] == "tool_call" for step in result.trace["steps"])
     assert "最终报告" in result.report
+    assert result.decision_id is not None
 
 
 def test_claude_agent_preselects_daily_market_decision_for_recent_opportunity_query():

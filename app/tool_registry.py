@@ -11,6 +11,7 @@ from app.model_providers import AnalysisModelClient
 from app.tools.decision_tools import build_decision_tools
 from app.tools.definitions import ToolDefinition
 from app.tools.memory_tools import build_memory_tools
+from app.tools.regime_tools import build_regime_tools
 from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
     content_server,
@@ -637,6 +638,7 @@ class ClaudeToolRegistry:
                 self._tools.pop(legacy_name, None)
         self.register_many(build_decision_tools())
         self.register_many(build_memory_tools())
+        self.register_many(build_regime_tools())
         self._policies: dict[str, ToolPolicy] = self._default_policies()
 
     def register(self, definition: ToolDefinition) -> None:
@@ -744,6 +746,7 @@ class ClaudeToolRegistry:
             "get_subject_history", "get_video_knowledge_units", "get_knowledge_unit", "list_knowledge_conflicts",
             "list_factor_library", "list_recent_alpha_candidates",
             "get_decision", "get_decision_outcome", "search_memory", "search_strategy_memory", "search_decision_memory", "search_user_preferences",
+            "get_market_regime_history",
         )}
         policies.update({name: ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120) for name in compute})
         policies.update({name: ToolPolicy(PermissionLevel.CONFIRMED_WRITE, requires_confirmation=True) for name in writes})

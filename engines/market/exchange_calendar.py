@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 from storage.repositories.exchange_calendar_repository import ExchangeCalendarRepository
@@ -9,7 +9,8 @@ from storage.repositories.exchange_calendar_repository import ExchangeCalendarRe
 class ExchangeTradingCalendar:
     """A-share session calendar backed by cached QMT index sessions with an explicit fallback."""
 
-    _remote_unavailable = False
+    _remote_unavailable_until: datetime | None = None
+    remote_retry_seconds = 600
 
     def __init__(self, market_code: str = "CN_A", repository: ExchangeCalendarRepository | None = None, bridge=None) -> None:
         self.market_code = market_code
@@ -48,7 +49,8 @@ class ExchangeTradingCalendar:
         return day
 
     def _sync_window(self, start: date, end: date) -> None:
-        if self._remote_unavailable:
+        unavailable_until = type(self)._remote_unavailable_until
+        if unavailable_until and unavailable_until > datetime.now(UTC):
             return
         try:
             rows = self.bridge.get_history(
@@ -59,10 +61,18 @@ class ExchangeTradingCalendar:
             open_days.discard(None)
             if not open_days:
                 raise QmtBridgeError("empty trading calendar response")
-            values = {start + timedelta(days=offset): start + timedelta(days=offset) in open_days for offset in range((end - start).days + 1)}
+            # QMT may return only data through the last completed session.  Do
+            # not turn dates beyond that coverage into cached holidays; doing
+            # so incorrectly normalizes a future Monday back to Friday.
+            first_covered, last_covered = min(open_days), max(open_days)
+            values = {
+                day: day in open_days
+                for offset in range((end - start).days + 1)
+                if first_covered <= (day := start + timedelta(days=offset)) <= last_covered
+            }
             self.repository.upsert_many(self.market_code, values, "qmt")
         except Exception:  # QMT may be unavailable in local/offline runs.
-            type(self)._remote_unavailable = True
+            type(self)._remote_unavailable_until = datetime.now(UTC) + timedelta(seconds=self.remote_retry_seconds)
 
     @staticmethod
     def _parse_day(row: dict) -> date | None:

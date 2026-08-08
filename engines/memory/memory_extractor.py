@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import warnings
 
 from engines.memory.models import MemoryCandidate, MemoryExtractionInput
 
@@ -71,6 +72,7 @@ class MemoryExtractor:
 
 def extract_memory(title: str, content: str, memory_type: str = "strategy_experience_memory") -> dict:
     """Compatibility adapter for existing knowledge ingestion callers."""
+    warnings.warn("extract_memory is deprecated; use MemoryService.ingest instead", DeprecationWarning, stacklevel=2)
     return {
         "memory_type": memory_type,
         "title": title,

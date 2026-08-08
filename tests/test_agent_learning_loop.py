@@ -1,24 +1,31 @@
 from __future__ import annotations
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
+
+import pytest
 
 from agent.executor import SkillExecutor
 from app.skill_contract import FreshnessPolicy, SkillContractValidator, SkillExecutionContract, SkillExecutionState, SkillOutputContract
 from app.skill_loader import SkillDefinition, load_skills
 from app.tool_registry import ClaudeToolRegistry
 from engines.decision.decision_service import DecisionService
+from engines.decision.outcome_evaluator import DecisionOutcomeEvaluator
+from engines.market.exchange_calendar import ExchangeTradingCalendar
 from engines.memory.service import MemoryService
+from engines.memory.lifecycle import MemoryLifecycleService
 from engines.regime.regime_state_machine import PersistentRegimeStateMachine
 from storage.bootstrap import create_all
 from storage.db import SessionLocal, get_engine
 from storage.repositories.vector_repository import MemoryRepository
+from storage.repositories.job_repository import JobTaskRepository
 
 
 def configure_test_database(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'learning_loop.db'}")
     get_engine.cache_clear()
     SessionLocal.configure(bind=get_engine())
+    JobTaskRepository._schema_ready = False
     create_all()
 
 
@@ -70,6 +77,41 @@ def test_required_tool_error_and_stale_market_data_do_not_satisfy_contract():
     violations = SkillContractValidator().validate(skill, state, "", now=date_to_datetime(2026, 8, 7, 10, 0))
     assert "REQUIRED_TOOL_FAILED:get_market_regime" in violations
     assert "MARKET_DATA_STALE" in violations
+
+
+def test_freshness_uses_shanghai_market_open_and_session_dates(monkeypatch):
+    # Friday close remains the active market session before Monday's opening.
+    monkeypatch.setattr("app.skill_contract.ExchangeTradingCalendar.normalize", lambda _self, value: value.date())
+    policy = FreshnessPolicy(require_same_trading_day=True, require_after_market_open=True)
+    before_open = SkillContractValidator._freshness_violations(
+        datetime(2026, 8, 10, 1, 29, tzinfo=UTC), policy, datetime(2026, 8, 10, 2, 0, tzinfo=UTC)
+    )
+    assert before_open == ["MARKET_DATA_BEFORE_MARKET_OPEN"]
+    friday_data = SkillContractValidator._freshness_violations(
+        datetime(2026, 8, 7, 8, 0, tzinfo=UTC), FreshnessPolicy(require_same_trading_day=True), datetime(2026, 8, 10, 2, 0, tzinfo=UTC)
+    )
+    assert friday_data == ["MARKET_DATA_NOT_SAME_TRADING_DAY"]
+
+
+def test_outcome_evaluator_uses_next_session_open_and_configurable_benchmark(monkeypatch):
+    monkeypatch.setattr("engines.decision.outcome_evaluator.advance_trading_days", lambda _day, _count: date(2026, 8, 10))
+
+    def fake_kline(symbol, **_kwargs):
+        prices = {
+            "600000.SH": [{"date": "2026-08-10", "open": 10}, {"date": "2026-08-14", "close": 12}],
+            "399001.SZ": [{"date": "2026-08-10", "open": 20}, {"date": "2026-08-14", "close": 21}],
+        }
+        return {"records": prices[symbol]}
+
+    monkeypatch.setattr("engines.decision.outcome_evaluator.get_kline", fake_kline)
+    result = DecisionOutcomeEvaluator().evaluate(
+        {"decision_as_of": datetime(2026, 8, 7, 15, 0, tzinfo=UTC), "candidates": [{"symbol": "600000.SH"}], "benchmark_symbol": "399001.SZ"},
+        date(2026, 8, 14),
+    )
+    assert result["portfolio_return"] == pytest.approx(0.2)
+    assert result["benchmark_return"] == pytest.approx(0.05)
+    assert result["realized_metrics"]["components"][0]["entry"]["price_type"] == "OPEN"
+    assert result["realized_metrics"]["benchmark"]["symbol"] == "399001.SZ"
 
 
 def test_knowledge_retrieval_does_not_satisfy_dedicated_memory_contract():
@@ -143,3 +185,59 @@ def test_memory_merge_and_decision_review_feed_long_term_memory(monkeypatch, tmp
     review = decisions.review(decision["decision_id"], {"decision_quality": 0.3, "lessons": ["高位退潮时主题动量必须降级"]}, outcome["outcome_id"])
     assert outcome["excess_return"] == -0.03
     assert review["memory_ids"]
+
+
+def test_review_job_waits_for_t5_outcome(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    monkeypatch.setattr("engines.decision.decision_service.advance_trading_days", lambda day, horizon: day + timedelta(days=horizon))
+    service = DecisionService(memory_service=object())
+    decision = service.save_decision(query="测试", decision_as_of=datetime(2026, 8, 7, 15, 0, tzinfo=UTC))
+    assert len(decision["evaluation_jobs"]) == 3
+    t1 = service.record_outcome(decision["decision_id"], date(2026, 8, 8), 1, benchmark_return=0.01, portfolio_return=0.02)
+    t5 = service.record_outcome(decision["decision_id"], date(2026, 8, 14), 5, benchmark_return=0.01, portfolio_return=0.02)
+    assert t1["review_job_id"] is None
+    assert t5["review_job_id"]
+    review_job = JobTaskRepository().get(t5["review_job_id"])
+    assert review_job and review_job["task_type"] == "decision_review"
+
+
+def test_strategy_memory_lifecycle_tracks_consecutive_outcomes(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    created = MemoryService().ingest(
+        "decision_review", "lifecycle-decision", "轮动市场等待确认", {"subject_key": "rotation/lifecycle", "lessons": ["等待确认"]}
+    )
+    memory_id = created[0]["memory_id"]
+    lifecycle = MemoryLifecycleService()
+    for _ in range(3):
+        state = lifecycle.record_outcome_evidence(memory_id, 0.01)
+    assert state["status"] == "VALIDATED"
+    assert state["outcome_support_count"] == 3
+    for _ in range(3):
+        state = lifecycle.record_outcome_evidence(memory_id, -0.01)
+    assert state["status"] == "REVALIDATION_REQUIRED"
+    assert state["outcome_failure_count"] == 3
+
+
+def test_exchange_calendar_keeps_future_sessions_out_of_partial_qmt_cache(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    monkeypatch.setattr(ExchangeTradingCalendar, "_remote_unavailable_until", None)
+
+    class PartialBridge:
+        def get_history(self, **_kwargs):
+            return [{"date": "2026-08-07"}]
+
+    calendar = ExchangeTradingCalendar(bridge=PartialBridge())
+    assert calendar.normalize(date(2026, 8, 10)) == date(2026, 8, 10)
+
+
+def test_exchange_calendar_skips_holiday_inside_qmt_coverage(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    monkeypatch.setattr(ExchangeTradingCalendar, "_remote_unavailable_until", None)
+
+    class HolidayBridge:
+        def get_history(self, **_kwargs):
+            return [{"date": "2026-09-30"}, {"date": "2026-10-09"}]
+
+    calendar = ExchangeTradingCalendar(bridge=HolidayBridge())
+    assert calendar.is_trading_day(date(2026, 10, 1)) is False
+    assert calendar.advance_sessions(date(2026, 9, 30), 1) == date(2026, 10, 9)

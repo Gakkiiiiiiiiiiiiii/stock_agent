@@ -5,15 +5,20 @@ execution:
   required_tools:
     - get_decision
     - get_decision_outcome
-    - get_market_regime
+    - get_market_regime_history
     - search_strategy_memory
     - review_investment_decision
   max_tool_rounds: 8
   require_memory_lookup: true
-  require_regime: true
 output:
   required_sections:
     - 决策回顾
+    - 当时市场状态
     - 结果评估
-    - 正确与错误
+    - 正确判断
+    - 错误判断
+    - 根因
+    - 未预期事件
     - 改进经验
+    - 适用市场环境
+    - 证伪条件修正

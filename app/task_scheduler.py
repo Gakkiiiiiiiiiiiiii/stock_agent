@@ -14,9 +14,9 @@ DEFAULT_TASKS = [
     ScheduledTask("pre_market_scan", "30 8 * * 1-5", "盘前市场扫描"),
     ScheduledTask("midday_scan", "45 11 * * 1-5", "午间市场扫描"),
     ScheduledTask("after_close_scan", "30 15 * * 1-5", "盘后市场扫描"),
+    ScheduledTask("memory_lifecycle_sweep", "15 16 * * 1-5", "长期记忆过期与再验证检查"),
 ]
 
 
 def list_scheduled_tasks() -> list[ScheduledTask]:
     return DEFAULT_TASKS
-

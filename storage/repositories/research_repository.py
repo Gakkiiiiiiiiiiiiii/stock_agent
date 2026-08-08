@@ -42,11 +42,14 @@ class MarketRegimeRepository:
                 active.ended_at = ended_at
                 session.add(active)
 
-    def list_history(self, market_code: str, limit: int = 30) -> list[MarketRegimeHistory]:
+    def list_history(self, market_code: str, limit: int = 30, start_date: date | None = None, end_date: date | None = None) -> list[MarketRegimeHistory]:
         with session_scope() as session:
-            return list(session.execute(
-                select(MarketRegimeHistory).where(MarketRegimeHistory.market_code == market_code).order_by(MarketRegimeHistory.started_at.desc()).limit(limit)
-            ).scalars())
+            query = select(MarketRegimeHistory).where(MarketRegimeHistory.market_code == market_code)
+            if start_date:
+                query = query.where((MarketRegimeHistory.ended_at.is_(None)) | (MarketRegimeHistory.ended_at >= start_date))
+            if end_date:
+                query = query.where(MarketRegimeHistory.started_at <= end_date)
+            return list(session.execute(query.order_by(MarketRegimeHistory.started_at.desc()).limit(limit)).scalars())
 
 
 class DecisionRepository:

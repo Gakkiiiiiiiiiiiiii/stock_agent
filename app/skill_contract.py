@@ -1,8 +1,14 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
+
+from engines.market.exchange_calendar import ExchangeTradingCalendar
+
+
+CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class SkillOutputContract(BaseModel):
@@ -150,14 +156,36 @@ class SkillContractValidator:
         reference = now or datetime.now(UTC)
         if reference.tzinfo is None:
             reference = reference.replace(tzinfo=UTC)
-        age_minutes = (reference - timestamp.astimezone(UTC)).total_seconds() / 60
+        timestamp_cn = timestamp.astimezone(CN_TZ)
+        reference_cn = reference.astimezone(CN_TZ)
+        age_minutes = (reference_cn - timestamp_cn).total_seconds() / 60
         if age_minutes < -5:
             return ["MARKET_DATA_TIMESTAMP_INVALID"]
         if policy.max_age_minutes is not None and age_minutes > policy.max_age_minutes:
             return ["MARKET_DATA_STALE"]
-        if policy.require_same_trading_day and timestamp.date() != reference.date():
+        calendar = ExchangeTradingCalendar()
+        try:
+            timestamp_session = calendar.normalize(timestamp_cn)
+            reference_session = calendar.normalize(reference_cn)
+        except Exception:
+            # Contract validation also runs in offline/unit-test contexts before the
+            # calendar table has been migrated.  Preserve China-time semantics with
+            # the calendar's documented weekday fallback instead of failing the
+            # entire agent run because the optional calendar cache is unavailable.
+            timestamp_session = SkillContractValidator._weekday_session(timestamp_cn)
+            reference_session = SkillContractValidator._weekday_session(reference_cn)
+        if policy.require_same_trading_day and timestamp_session != reference_session:
             return ["MARKET_DATA_NOT_SAME_TRADING_DAY"]
+        if policy.require_after_market_open and timestamp_cn < datetime.combine(timestamp_session, time(9, 30), tzinfo=CN_TZ):
+            return ["MARKET_DATA_BEFORE_MARKET_OPEN"]
         return []
+
+    @staticmethod
+    def _weekday_session(value: datetime) -> datetime.date:
+        day = value.date()
+        while day.weekday() >= 5:
+            day = day.fromordinal(day.toordinal() - 1)
+        return day
 
 
 # Imported only for type checking at runtime-free module initialization.
