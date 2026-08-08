@@ -63,7 +63,8 @@ def test_video_ingest_writes_v3_knowledge_without_video_memory():
             assert session.execute(select(VideoSummary)).scalars().all() == []
             assert session.execute(select(MemoryRecord).where(MemoryRecord.source_type.in_(["bilibili_video_summary", "bilibili_video_viewpoint", "bilibili_financial_event"]))).scalars().all() == []
             tasks = session.execute(select(VectorIndexTask).where(VectorIndexTask.postgres_table == "knowledge_unit")).scalars().all()
-            assert len(tasks) == len(detail["knowledge_units"])
+            indexable_units = [unit for unit in detail["knowledge_units"] if unit["support_status"] in {"SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED", "EXTERNALLY_VERIFIED", "VALIDATED"}]
+            assert len(tasks) == len(indexable_units)
             run = session.execute(select(KnowledgeExtractionRun).where(KnowledgeExtractionRun.video_id == detail["video"]["id"])).scalars().one()
             assert "accepted_count" in run.metrics_json
     finally:

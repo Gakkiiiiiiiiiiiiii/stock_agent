@@ -34,7 +34,8 @@ class TranscriptPostprocessor:
         normalized_segments = []
         text_parts: list[str] = []
         for segment in transcript.get("segments", []):
-            text = self._normalize_text(segment.get("text", ""))
+            raw_text = str(segment.get("text", ""))
+            text, corrections = self._normalize_text_with_trace(raw_text)
             entities = self._extract_entity_hints(text)
             time_expressions = self._extract_time_hints(text)
             numeric_hints = self._extract_numeric_hints(text)
@@ -44,6 +45,9 @@ class TranscriptPostprocessor:
                 dict(segment)
                 | {
                     "text": text,
+                    "raw_text": segment.get("raw_text", raw_text),
+                    "normalized_text": text,
+                    "correction_trace": corrections,
                     "entity_hints": entities,
                     "time_hints": time_expressions,
                     "numeric_hints": numeric_hints,
@@ -60,16 +64,22 @@ class TranscriptPostprocessor:
         }
 
     def _normalize_text(self, value: str) -> str:
+        return self._normalize_text_with_trace(value)[0]
+
+    def _normalize_text_with_trace(self, value: str) -> tuple[str, list[dict]]:
         compact = self._convert_traditional_to_simplified(value or "")
         compact = re.sub(r"\s+", " ", compact).strip()
         compact = compact.replace(" 呃 ", " ").replace(" 啊 ", " ")
+        corrections: list[dict] = []
         for wrong, correct in self.term_corrections.items():
-            compact = compact.replace(wrong, correct)
+            if wrong in compact:
+                compact = compact.replace(wrong, correct)
+                corrections.append({"from": wrong, "to": correct, "method": "term_dictionary", "confidence": 1.0})
         compact = re.sub(r"(\d)\s+(\d)", r"\1\2", compact)
         compact = re.sub(r"百分之\s*(\d+(?:\.\d+)?)", r"\1%", compact)
         compact = re.sub(r"(港|美|人) 元", r"\1元", compact)
         compact = re.sub(r"([上下中]) 证", r"\1证", compact)
-        return compact
+        return compact, corrections
 
     def _convert_traditional_to_simplified(self, value: str) -> str:
         if not value:

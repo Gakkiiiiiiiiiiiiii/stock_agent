@@ -126,7 +126,9 @@ def test_expire_due_units_marks_expired_and_enqueues_sync():
     assert result["expired_count"] == 1
     assert result["items"][0]["id"] == unit_id
     assert result["items"][0]["lifecycle_status"] == "EXPIRED"
-    assert result["vector_tasks"][0]["task_type"] == "upsert"
+    # An unverified claim is removed from vector retrieval once lifecycle sync
+    # runs; source location alone is not a retrieval entitlement.
+    assert result["vector_tasks"][0]["task_type"] == "delete"
     with SessionLocal() as session:
         unit = session.get(KnowledgeUnit, unit_id)
         audit = session.execute(select(KnowledgeLifecycleAudit).where(KnowledgeLifecycleAudit.knowledge_unit_id == unit_id)).scalars().one()

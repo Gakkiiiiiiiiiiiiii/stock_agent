@@ -66,6 +66,14 @@ class KnowledgeUnit(Base):
     invalidation_text: Mapped[str | None] = mapped_column(Text)
     lifecycle_status: Mapped[str] = mapped_column(String(32), default="EXTRACTED", index=True)
     verification_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED", index=True)
+    support_status: Mapped[str] = mapped_column(String(32), default="UNSUPPORTED", index=True)
+    support_probability: Mapped[float | None] = mapped_column(Float)
+    truth_status: Mapped[str] = mapped_column(String(32), default="NOT_EXTERNALLY_VERIFIED", index=True)
+    external_verification_status: Mapped[str] = mapped_column(String(32), default="NOT_RUN", index=True)
+    source_reliability_score: Mapped[float | None] = mapped_column(Float)
+    speaker_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    speaker_name: Mapped[str | None] = mapped_column(String(256))
+    attribution_confidence: Mapped[float | None] = mapped_column(Float)
     scope_type: Mapped[str | None] = mapped_column(String(32), index=True)
     scope_key: Mapped[str | None] = mapped_column(String(128), index=True)
     conflict_key: Mapped[str | None] = mapped_column(String(256), index=True)
@@ -111,8 +119,36 @@ class KnowledgeEvidence(Base):
     end_ms: Mapped[int | None] = mapped_column(Integer)
     frame_id: Mapped[int | None] = mapped_column(ForeignKey("video_frame.id"))
     confidence_score: Mapped[float | None] = mapped_column(Float)
+    raw_text: Mapped[str | None] = mapped_column(Text)
+    normalized_text: Mapped[str | None] = mapped_column(Text)
+    word_timestamps_json: Mapped[str] = mapped_column(Text, default="[]")
+    bbox_json: Mapped[str] = mapped_column(Text, default="[]")
+    asr_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    ocr_metrics_json: Mapped[str] = mapped_column(Text, default="{}")
+    correction_trace_json: Mapped[str] = mapped_column(Text, default="[]")
+    evidence_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    semantic_support_score: Mapped[float | None] = mapped_column(Float)
+    numeric_consistency_score: Mapped[float | None] = mapped_column(Float)
+    entity_consistency_score: Mapped[float | None] = mapped_column(Float)
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
+class KnowledgeVerification(Base):
+    __tablename__ = "knowledge_verification"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    knowledge_unit_id: Mapped[int] = mapped_column(ForeignKey("knowledge_unit.id"), index=True)
+    verifier_type: Mapped[str] = mapped_column(String(64), index=True)
+    verifier_provider: Mapped[str | None] = mapped_column(String(128))
+    verifier_model: Mapped[str | None] = mapped_column(String(128))
+    verifier_version: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(32), index=True)
+    score: Mapped[float | None] = mapped_column(Float)
+    checks_json: Mapped[str] = mapped_column(Text, default="{}")
+    reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), index=True)
 
 
 class KnowledgeEntityRelation(Base):

@@ -5,11 +5,13 @@ import re
 from datetime import UTC, datetime
 
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
+from engines.content.claim_evidence_verifier import ClaimEvidenceVerifier
 
 
 class KnowledgeUnitNormalizer:
-    def __init__(self, entity_normalizer: FinancialEntityNormalizer | None = None) -> None:
+    def __init__(self, entity_normalizer: FinancialEntityNormalizer | None = None, verifier: ClaimEvidenceVerifier | None = None) -> None:
         self.entity_normalizer = entity_normalizer or FinancialEntityNormalizer()
+        self.verifier = verifier or ClaimEvidenceVerifier()
 
     def normalize(self, units: list[dict], metadata: dict) -> list[dict]:
         source_date = self.parse_source_datetime(metadata.get("publish_time"))
@@ -44,9 +46,14 @@ class KnowledgeUnitNormalizer:
             semantic_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             uid_prefix = str(metadata.get("bvid") or metadata.get("platform_video_id") or metadata.get("platform") or "video")
             item = dict(unit)
-            verification_status = unit.get("verification_status") or "SOURCE_CONFIRMED"
+            verification_status = unit.get("verification_status") or "SOURCE_LOCATED"
+            verification = self.verifier.verify(unit)
+            support_status = verification["support_status"]
             if self._low_evidence_quality(unit.get("evidence") or []):
                 verification_status = "NEEDS_REVIEW"
+                support_status = "NEEDS_REVIEW"
+            elif support_status == "SOURCE_SUPPORTED":
+                verification_status = "SOURCE_SUPPORTED"
             item.update(
                 {
                     "knowledge_uid": f"ku_{uid_prefix}_{index:04d}_{content_hash[:10]}",
@@ -63,6 +70,14 @@ class KnowledgeUnitNormalizer:
                     "scope_type": unit.get("scope_type") or subject.get("subject_type"),
                     "scope_key": unit.get("scope_key") or subject.get("subject_key"),
                     "verification_status": verification_status,
+                    "support_status": support_status,
+                    "support_probability": verification["support_probability"],
+                    "truth_status": unit.get("truth_status") or "NOT_EXTERNALLY_VERIFIED",
+                    "external_verification_status": unit.get("external_verification_status") or "NOT_RUN",
+                    "speaker_id": unit.get("speaker_id") or self._speaker_id(unit.get("evidence") or []),
+                    "speaker_name": unit.get("speaker_name"),
+                    "attribution_confidence": unit.get("attribution_confidence"),
+                    "attributes": (unit.get("attributes") or {}) | {"verification": verification},
                     "extractor_version": unit.get("extractor_version") or "v3.2-k3-json-mode",
                     "schema_version": "v1",
                     "as_of_time": unit.get("as_of_time") or source_date,
@@ -70,6 +85,10 @@ class KnowledgeUnitNormalizer:
             )
             normalized.append(item)
         return normalized
+
+    @staticmethod
+    def _speaker_id(evidence: list[dict]) -> str | None:
+        return next((str(item.get("speaker_id")) for item in evidence if item.get("speaker_id")), None)
 
     @staticmethod
     def _low_evidence_quality(evidence: list[dict]) -> bool:

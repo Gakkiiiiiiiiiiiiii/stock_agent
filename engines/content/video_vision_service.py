@@ -39,7 +39,8 @@ class VideoVisionService:
         insights: list[dict] = []
         for frame in frames[: self.max_frames_per_run]:
             insight = dict(frame)
-            ocr_text = self._safe_extract_ocr(frame["image_path"])
+            ocr_evidence = self._safe_extract_ocr(frame["image_path"])
+            ocr_text = ocr_evidence["text"]
             related_text = self._collect_nearby_transcript(transcript.get("segments") or [], int(frame.get("timestamp_ms") or 0))
             visual_payload = self._safe_visual_analyze(
                 metadata=metadata,
@@ -59,6 +60,7 @@ class VideoVisionService:
                     ),
                 )
             insight["ocr_text"] = ocr_text
+            insight["ocr_evidence"] = ocr_evidence
             insight["related_text"] = related_text
             insight["visual_summary"] = str(visual_payload.get("visual_summary") or "").strip()
             insight["narration_aligned"] = self._coerce_narration_aligned(visual_payload.get("narration_aligned"))
@@ -86,12 +88,12 @@ class VideoVisionService:
                 insights.append(insight)
         return insights
 
-    def _safe_extract_ocr(self, image_path: str) -> str:
+    def _safe_extract_ocr(self, image_path: str) -> dict[str, Any]:
         try:
-            return self.ocr_service.extract_text(image_path)
+            return self.ocr_service.extract_evidence(image_path)
         except Exception:
             logger.warning("关键帧 OCR 提取失败（%s）", image_path, exc_info=True)
-            return ""
+            return {"text": "", "lines": [], "blocks": [], "table": [], "backend": "unavailable"}
 
     def _safe_visual_analyze(self, metadata: dict, image_path: str, timestamp_ms: int, ocr_text: str, related_text: str) -> dict[str, Any]:
         if self._image_input_supported is False:

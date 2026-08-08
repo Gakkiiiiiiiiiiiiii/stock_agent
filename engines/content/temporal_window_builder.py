@@ -72,6 +72,7 @@ class TemporalWindowBuilder:
         window_frames = [frame for frame in frames if start_ms <= int(frame.get("timestamp_ms") or 0) <= end_ms]
         transcript_text = " ".join(str(segment.get("text") or "").strip() for segment in segments if str(segment.get("text") or "").strip())
         ocr_lines = self._dedup_lines(str(frame.get("ocr_text") or "") for frame in window_frames)
+        ocr_blocks = [block for frame in window_frames for block in (frame.get("ocr_evidence") or {}).get("blocks", [])]
         visual_parts = [str(frame.get("visual_summary") or "").strip() for frame in window_frames if str(frame.get("visual_summary") or "").strip()]
         entities = sorted({entity for frame in window_frames for entity in self._frame_entities(frame)})
         return {
@@ -81,12 +82,25 @@ class TemporalWindowBuilder:
             "segments": segments,
             "transcript_text": transcript_text,
             "ocr_text": " | ".join(ocr_lines[:8]),
+            "ocr_blocks": ocr_blocks,
+            "ocr_confidence_score": self._ocr_confidence(ocr_blocks),
             "visual_summary": " | ".join(visual_parts[:6]),
             "frame_refs": window_frames,
             "entities": entities,
             "speaker_labels": sorted({str(segment.get("speaker_label") or segment.get("speaker") or "") for segment in segments if segment.get("speaker_label") or segment.get("speaker")}),
             "confidence_score": self._confidence(segments, window_frames),
         }
+
+    @staticmethod
+    def _ocr_confidence(blocks: list[dict]) -> float | None:
+        scores = []
+        for block in blocks:
+            try:
+                if block.get("score") is not None:
+                    scores.append(float(block["score"]))
+            except (TypeError, ValueError):
+                continue
+        return round(sum(scores) / len(scores), 4) if scores else None
 
     @staticmethod
     def _looks_like_boundary(text: str) -> bool:
@@ -117,7 +131,14 @@ class TemporalWindowBuilder:
         return entities
 
     @staticmethod
-    def _confidence(segments: list[dict], frames: list[dict]) -> float:
-        scores = [float(segment.get("confidence_score") or 0.7) for segment in segments]
-        scores.extend(float(frame.get("confidence_score") or 0.65) for frame in frames)
-        return round(sum(scores) / len(scores), 4) if scores else 0.5
+    def _confidence(segments: list[dict], frames: list[dict]) -> float | None:
+        """Return measured confidence only. Unknown must remain unknown."""
+        scores: list[float] = []
+        for item in [*segments, *frames]:
+            try:
+                value = item.get("confidence_score")
+                if value is not None:
+                    scores.append(float(value))
+            except (TypeError, ValueError):
+                continue
+        return round(sum(scores) / len(scores), 4) if scores else None

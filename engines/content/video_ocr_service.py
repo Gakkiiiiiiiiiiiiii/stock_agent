@@ -49,27 +49,32 @@ class VideoOcrService:
         return self._paddleocr_available()
 
     def extract_text(self, image_path: str | Path) -> str:
+        return self.extract_evidence(image_path)["text"]
+
+    def extract_evidence(self, image_path: str | Path) -> dict[str, Any]:
+        """Return immutable OCR blocks while retaining extract_text compatibility."""
         if self.backend == "none":
-            return ""
+            return {"text": "", "lines": [], "blocks": [], "table": [], "backend": self.backend}
         source = Path(image_path)
         if not source.exists():
             raise FileNotFoundError(source)
         if not self.available():
             raise RuntimeError("PaddleOCR runtime is not installed or failed to import.")
-        merged_lines: list[str] = []
+        payload = self._run_paddleocr(source)
         seen: set[str] = set()
-        text = self._run_paddleocr(source)
-        for line in self._clean_lines(text):
-            if line in seen:
+        lines = []
+        for line in payload["lines"]:
+            text = line["text"]
+            if text in seen or self._is_ui_noise_line(text):
                 continue
-            seen.add(line)
-            merged_lines.append(line)
-        return "\n".join(merged_lines).strip()
+            seen.add(text)
+            lines.append(line)
+        return payload | {"text": "\n".join(line["text"] for line in lines).strip(), "lines": lines, "table": self._table_structure(lines)}
 
     def _paddleocr_available(self) -> bool:
         return self._load_paddleocr_class() is not None
 
-    def _run_paddleocr(self, source: Path) -> str:
+    def _run_paddleocr(self, source: Path) -> dict[str, Any]:
         engine = self._get_paddleocr_engine()
         try:
             results = engine.predict(str(source))
@@ -77,7 +82,7 @@ class VideoOcrService:
             raise RuntimeError(f"PaddleOCR prediction failed for {source.name}: {exc}") from exc
         if not results:
             raise RuntimeError(f"PaddleOCR returned no result for {source.name}.")
-        return self._extract_paddleocr_text(results[0])
+        return self._extract_paddleocr_evidence(results[0])
 
     def _get_paddleocr_engine(self):
         if not self._paddleocr_available():
@@ -138,6 +143,9 @@ class VideoOcrService:
                     continue
 
     def _extract_paddleocr_text(self, result: Any) -> str:
+        return self._extract_paddleocr_evidence(result)["text"]
+
+    def _extract_paddleocr_evidence(self, result: Any) -> dict[str, Any]:
         rec_texts = list(result.get("rec_texts") or [])
         rec_scores = list(result.get("rec_scores") or [])
         raw_boxes = result.get("rec_boxes")
@@ -164,9 +172,15 @@ class VideoOcrService:
                 }
             )
         if not items:
-            return ""
-        lines = self._group_paddleocr_lines(items)
-        return "\n".join(lines).strip()
+            return {"text": "", "lines": [], "blocks": [], "table": [], "backend": "paddleocr"}
+        lines = self._group_paddleocr_line_items(items)
+        return {
+            "text": "\n".join(line["text"] for line in lines).strip(),
+            "lines": lines,
+            "blocks": [{key: value for key, value in item.items() if key != "height"} for item in items],
+            "table": self._table_structure(lines),
+            "backend": "paddleocr",
+        }
 
     @staticmethod
     def _normalize_box(box: Any) -> tuple[int, int, int, int] | None:
@@ -179,6 +193,9 @@ class VideoOcrService:
         return None
 
     def _group_paddleocr_lines(self, items: list[dict[str, Any]]) -> list[str]:
+        return [line["text"] for line in self._group_paddleocr_line_items(items)]
+
+    def _group_paddleocr_line_items(self, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
         items = sorted(items, key=lambda item: (item["y1"], item["x1"]))
         lines: list[dict[str, Any]] = []
         for item in items:
@@ -201,13 +218,19 @@ class VideoOcrService:
                         "items": [item],
                     }
                 )
-        rendered: list[str] = []
+        rendered: list[dict[str, Any]] = []
         for line in sorted(lines, key=lambda entry: entry["center_y"]):
-            parts = [segment["text"] for segment in sorted(line["items"], key=lambda segment: segment["x1"])]
+            ordered = sorted(line["items"], key=lambda segment: segment["x1"])
+            parts = [segment["text"] for segment in ordered]
             text = " ".join(parts).strip()
-            if text and text not in rendered:
-                rendered.append(text)
+            if text and not any(existing["text"] == text for existing in rendered):
+                rendered.append({"text": text, "score": round(sum(item["score"] for item in ordered) / len(ordered), 4), "bbox": [min(item["x1"] for item in ordered), min(item["y1"] for item in ordered), max(item["x2"] for item in ordered), max(item["y2"] for item in ordered)], "blocks": [{key: value for key, value in item.items() if key != "height"} for item in ordered]})
         return rendered
+
+    @staticmethod
+    def _table_structure(lines: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+        # Preserve visual rows/cells instead of guessing financial semantics.
+        return [[{"text": block["text"], "bbox": [block["x1"], block["y1"], block["x2"], block["y2"]], "score": block["score"]} for block in line.get("blocks", [])] for line in lines]
 
     def _resolve_paddle_device(self, configured: str | None) -> str:
         value = str(configured or "auto").strip().lower()

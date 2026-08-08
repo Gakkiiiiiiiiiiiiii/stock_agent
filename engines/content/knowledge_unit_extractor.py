@@ -341,8 +341,12 @@ class KnowledgeUnitExtractor:
                     "confidence_score": window.get("confidence_score"),
                     "is_primary": not grounded,
                 }
+                | self._evidence_metadata(window, str(item.get("source_type") or "ASR"))
             )
-        return grounded or self._evidence_for_sentence(statement, chapter)
+        # A claim without a precise evidence location is not silently bound to
+        # a chapter/window.  It will be persisted only as unsupported if a
+        # caller explicitly chooses to retain it; normal ingestion drops it.
+        return grounded
 
     @staticmethod
     def _source_evidence_excerpt(window: dict, hint: str) -> str:
@@ -373,7 +377,38 @@ class KnowledgeUnitExtractor:
                 transcript = re.sub(r"\s+", "", str(window.get("transcript_text") or ""))
                 if probe in transcript:
                     return window
-        return windows[0] if windows else None
+        return None
+
+    @staticmethod
+    def _evidence_metadata(window: dict, source_type: str = "ASR") -> dict:
+        if str(source_type).upper() in {"OCR", "VISION", "FRAME"}:
+            blocks = window.get("ocr_blocks") or []
+            return {
+                "raw_text": str(window.get("ocr_text") or "").strip() or None,
+                "normalized_text": str(window.get("ocr_text") or "").strip() or None,
+                "bbox": [block.get("bbox") or [block.get("x1"), block.get("y1"), block.get("x2"), block.get("y2")] for block in blocks],
+                "ocr_metrics": {"line_count": len(blocks), "scores": [block.get("score") for block in blocks], "mean_confidence": window.get("ocr_confidence_score")},
+                "word_timestamps": [],
+                "asr_metrics": {},
+                "correction_trace": [],
+            }
+        segments = window.get("segments") or []
+        raw_text = " ".join(str(segment.get("raw_text") or segment.get("text") or "").strip() for segment in segments).strip()
+        normalized_text = " ".join(str(segment.get("normalized_text") or segment.get("text") or "").strip() for segment in segments).strip()
+        correction_trace = [trace for segment in segments for trace in segment.get("correction_trace") or []]
+        word_timestamps = [word for segment in segments for word in segment.get("word_timestamps") or []]
+        metrics = [
+            {key: segment.get(key) for key in ("avg_logprob", "no_speech_prob", "compression_ratio", "confidence_score")}
+            for segment in segments
+        ]
+        return {
+            "raw_text": raw_text or None,
+            "normalized_text": normalized_text or None,
+            "speaker_id": next((segment.get("speaker_id") or segment.get("speaker_label") for segment in segments if segment.get("speaker_id") or segment.get("speaker_label")), None),
+            "word_timestamps": word_timestamps,
+            "asr_metrics": metrics,
+            "correction_trace": correction_trace,
+        }
 
     @staticmethod
     def _grounding_ok(unit: dict, chapter: dict) -> bool:

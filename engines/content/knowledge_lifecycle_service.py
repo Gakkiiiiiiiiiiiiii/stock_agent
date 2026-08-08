@@ -17,6 +17,11 @@ class KnowledgeLifecycleService:
     }
     VALID_VERIFICATION_STATUSES = {
         "UNVERIFIED",
+        "UNSUPPORTED",
+        "SOURCE_LOCATED",
+        "SOURCE_SUPPORTED",
+        "CROSS_MODAL_SUPPORTED",
+        "EXTERNALLY_VERIFIED",
         "SOURCE_CONFIRMED",
         "VERIFIED",
         "VALIDATED",

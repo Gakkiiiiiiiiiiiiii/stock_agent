@@ -8,7 +8,7 @@ from engines.retrieval.collection_manifest import validate_embedding_manifest
 from engines.retrieval.embedder import build_embedder
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from storage.bootstrap import create_all
-from storage.repositories.knowledge_repository import KnowledgeRepository
+from storage.repositories.knowledge_repository import KnowledgeRepository, KnowledgeVectorTaskService
 from storage.repositories.vector_repository import MemoryRepository, VectorMappingRepository, VectorTaskRepository
 
 
@@ -33,7 +33,7 @@ def process_one_task() -> bool:
                 task.target_collection,
                 {"postgres_table": "knowledge_unit", "postgres_id": unit["id"]},
             )
-            if task.task_type == "delete" or unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            if task.task_type == "delete" or not KnowledgeVectorTaskService.is_indexable(unit):
                 VectorMappingRepository().delete_for_record("knowledge_unit", unit["id"])
                 task_repo.mark_success(task.id)
                 return True
@@ -70,6 +70,9 @@ def process_one_task() -> bool:
                 "sentiment": unit.get("sentiment"),
                 "lifecycle_status": unit.get("lifecycle_status"),
                 "verification_status": unit.get("verification_status"),
+                "support_status": unit.get("support_status"),
+                "support_probability": unit.get("support_probability"),
+                "truth_status": unit.get("truth_status"),
                 "as_of_time": unit.get("as_of_time"),
                 "valid_from": unit.get("valid_from"),
                 "valid_to": unit.get("valid_to"),

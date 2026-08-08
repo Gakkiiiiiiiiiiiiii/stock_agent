@@ -30,7 +30,9 @@ class AsrService:
         condition_on_previous_text: bool | None = None,
         initial_prompt: str | None = None,
     ) -> None:
-        self.model_size = model_size or os.getenv("ASR_MODEL_SIZE", "small")
+        # Knowledge ingestion favours entity/number accuracy over throughput.  A
+        # caller may still deliberately select a smaller model for preview jobs.
+        self.model_size = model_size or os.getenv("ASR_MODEL_SIZE", "large-v3")
         requested_device = device or os.getenv("ASR_DEVICE", "auto")
         requested_compute_type = compute_type or os.getenv("ASR_COMPUTE_TYPE", "auto")
         self.device = self._resolve_device(requested_device)
@@ -72,6 +74,7 @@ class AsrService:
             "beam_size": self.beam_size,
             "best_of": self.best_of,
             "condition_on_previous_text": self.condition_on_previous_text,
+            "word_timestamps": True,
         }
         if self.initial_prompt:
             transcribe_kwargs["initial_prompt"] = self.initial_prompt
@@ -88,6 +91,19 @@ class AsrService:
         text_parts: list[str] = []
         for index, segment in enumerate(segments):
             segment_text = (segment.text or "").strip()
+            avg_logprob = self._optional_float(getattr(segment, "avg_logprob", None))
+            no_speech_prob = self._optional_float(getattr(segment, "no_speech_prob", None))
+            compression_ratio = self._optional_float(getattr(segment, "compression_ratio", None))
+            words = [
+                {
+                    "start_ms": int(float(word.start) * 1000),
+                    "end_ms": int(float(word.end) * 1000),
+                    "word": str(word.word or "").strip(),
+                    "probability": self._optional_float(getattr(word, "probability", None)),
+                }
+                for word in (getattr(segment, "words", None) or [])
+                if str(getattr(word, "word", "") or "").strip()
+            ]
             text_parts.append(segment_text)
             items.append(
                 {
@@ -96,10 +112,11 @@ class AsrService:
                     "end_ms": int(float(segment.end) * 1000),
                     "speaker_label": "speaker_0",
                     "text": segment_text,
-                    "avg_logprob": None,
-                    "no_speech_prob": None,
-                    "compression_ratio": None,
-                    "confidence_score": None,
+                    "avg_logprob": avg_logprob,
+                    "no_speech_prob": no_speech_prob,
+                    "compression_ratio": compression_ratio,
+                    "confidence_score": self._confidence_from_metrics(avg_logprob, no_speech_prob),
+                    "word_timestamps": words,
                 }
             )
         return {
@@ -116,6 +133,24 @@ class AsrService:
             "chunk_length_seconds": self.chunk_length_seconds,
             "beam_size": self.beam_size,
         }
+
+    @staticmethod
+    def _optional_float(value: Any) -> float | None:
+        try:
+            return float(value) if value is not None else None
+        except (TypeError, ValueError):
+            return None
+
+    @staticmethod
+    def _confidence_from_metrics(avg_logprob: float | None, no_speech_prob: float | None) -> float | None:
+        """A conservative, explicitly derived quality signal; never invent one."""
+        if avg_logprob is None and no_speech_prob is None:
+            return None
+        # Whisper log probabilities are normally non-positive.  This is a
+        # quality proxy, not a calibrated factual-confidence probability.
+        logprob_quality = 1.0 if avg_logprob is None else max(0.0, min(1.0, 1.0 + avg_logprob / 2.0))
+        speech_quality = 1.0 if no_speech_prob is None else max(0.0, min(1.0, 1.0 - no_speech_prob))
+        return round((logprob_quality * 0.7) + (speech_quality * 0.3), 4)
 
     def _ensure_runtime_paths(self) -> None:
         if self.device != "cuda":

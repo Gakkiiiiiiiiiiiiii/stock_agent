@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import UTC, datetime
 from typing import Any
 
@@ -14,6 +15,7 @@ from storage.models.knowledge import (
     KnowledgeLifecycleAudit,
     KnowledgeUnit,
     KnowledgeUnitRelation,
+    KnowledgeVerification,
     VideoAnalysisDocument,
     VideoChapter,
 )
@@ -60,6 +62,7 @@ class KnowledgeRepository:
                 session.execute(delete(KnowledgeUnitRelation).where(KnowledgeUnitRelation.target_unit_id.in_(existing_units)))
                 session.execute(delete(KnowledgeEntityRelation).where(KnowledgeEntityRelation.knowledge_unit_id.in_(existing_units)))
                 session.execute(delete(KnowledgeEvidence).where(KnowledgeEvidence.knowledge_unit_id.in_(existing_units)))
+                session.execute(delete(KnowledgeVerification).where(KnowledgeVerification.knowledge_unit_id.in_(existing_units)))
                 session.execute(delete(KnowledgeUnit).where(KnowledgeUnit.id.in_(existing_units)))
             existing_chapters = session.execute(select(VideoChapter.id).where(VideoChapter.video_id == video_id)).scalars().all()
             if existing_chapters:
@@ -123,7 +126,15 @@ class KnowledgeRepository:
                     condition_text=unit.get("condition_text"),
                     invalidation_text=unit.get("invalidation_text"),
                     lifecycle_status=str(unit.get("lifecycle_status") or "ACTIVE"),
-                    verification_status=str(unit.get("verification_status") or "SOURCE_CONFIRMED"),
+                    verification_status=str(unit.get("verification_status") or "SOURCE_LOCATED"),
+                    support_status=str(unit.get("support_status") or "UNSUPPORTED"),
+                    support_probability=unit.get("support_probability"),
+                    truth_status=str(unit.get("truth_status") or "NOT_EXTERNALLY_VERIFIED"),
+                    external_verification_status=str(unit.get("external_verification_status") or "NOT_RUN"),
+                    source_reliability_score=unit.get("source_reliability_score"),
+                    speaker_id=unit.get("speaker_id"),
+                    speaker_name=unit.get("speaker_name"),
+                    attribution_confidence=unit.get("attribution_confidence"),
                     scope_type=unit.get("scope_type"),
                     scope_key=unit.get("scope_key"),
                     conflict_key=unit.get("conflict_key"),
@@ -151,6 +162,17 @@ class KnowledgeRepository:
                             end_ms=evidence.get("end_ms"),
                             frame_id=evidence.get("frame_id"),
                             confidence_score=evidence.get("confidence_score"),
+                            raw_text=evidence.get("raw_text"),
+                            normalized_text=evidence.get("normalized_text"),
+                            word_timestamps_json=_dumps(evidence.get("word_timestamps") or []),
+                            bbox_json=_dumps(evidence.get("bbox") or []),
+                            asr_metrics_json=_dumps(evidence.get("asr_metrics") or {}),
+                            ocr_metrics_json=_dumps(evidence.get("ocr_metrics") or {}),
+                            correction_trace_json=_dumps(evidence.get("correction_trace") or []),
+                            evidence_hash=hashlib.sha256(str(evidence.get("raw_text") or evidence.get("evidence_text") or "").encode("utf-8")).hexdigest(),
+                            semantic_support_score=evidence.get("semantic_support_score"),
+                            numeric_consistency_score=evidence.get("numeric_consistency_score"),
+                            entity_consistency_score=evidence.get("entity_consistency_score"),
                             is_primary=bool(evidence.get("is_primary")),
                         )
                     )
@@ -164,6 +186,21 @@ class KnowledgeRepository:
                             ticker=entity.get("ticker"),
                             relation_role=str(entity.get("relation_role") or "RELATED"),
                             confidence_score=entity.get("confidence_score"),
+                        )
+                    )
+                verification = (unit.get("attributes") or {}).get("verification")
+                if isinstance(verification, dict):
+                    session.add(
+                        KnowledgeVerification(
+                            knowledge_unit_id=row.id,
+                            verifier_type="claim_evidence_semantic",
+                            verifier_provider="deterministic",
+                            verifier_version="v1",
+                            status=str(verification.get("support_status") or "UNSUPPORTED"),
+                            score=verification.get("support_probability"),
+                            checks_json=_dumps(verification.get("checks") or {}),
+                            reason_codes_json=_dumps(verification.get("reason_codes") or []),
+                            detail_json=_dumps(verification),
                         )
                     )
 
@@ -286,19 +323,7 @@ class KnowledgeRepository:
                 return None
             evidence_rows = list(session.execute(select(KnowledgeEvidence).where(KnowledgeEvidence.knowledge_unit_id == unit_id)).scalars())
             entity_rows = list(session.execute(select(KnowledgeEntityRelation).where(KnowledgeEntityRelation.knowledge_unit_id == unit_id)).scalars())
-            evidence = [
-                {
-                    "source_type": evidence.source_type,
-                    "source_ref": evidence.source_ref,
-                    "evidence_text": evidence.evidence_text,
-                    "start_ms": evidence.start_ms,
-                    "end_ms": evidence.end_ms,
-                    "frame_id": evidence.frame_id,
-                    "confidence_score": evidence.confidence_score,
-                    "is_primary": evidence.is_primary,
-                }
-                for evidence in evidence_rows
-            ]
+            evidence = [self._serialize_evidence(item) for item in evidence_rows]
             entities = [
                 {
                     "entity_type": entity.entity_type,
@@ -481,6 +506,7 @@ class KnowledgeRepository:
         filters = {
             "subject_key": subject_key,
             "lifecycle_status": ["ACTIVE", "VALIDATED"],
+            "support_status": ["SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED", "EXTERNALLY_VERIFIED", "VALIDATED"],
         }
         if domain:
             filters["primary_domain"] = domain
@@ -507,6 +533,8 @@ class KnowledgeRepository:
             "temporal_class": KnowledgeUnit.temporal_class,
             "lifecycle_status": KnowledgeUnit.lifecycle_status,
             "verification_status": KnowledgeUnit.verification_status,
+            "support_status": KnowledgeUnit.support_status,
+            "truth_status": KnowledgeUnit.truth_status,
             "subject_key": KnowledgeUnit.subject_key,
             "subject_type": KnowledgeUnit.subject_type,
             "predicate_key": KnowledgeUnit.predicate_key,
@@ -514,6 +542,12 @@ class KnowledgeRepository:
             "conflict_group_id": KnowledgeUnit.conflict_group_id,
         }
         for key, value in (filters or {}).items():
+            if key == "minimum_support_probability":
+                try:
+                    statement = statement.where(KnowledgeUnit.support_probability >= float(value))
+                except (TypeError, ValueError):
+                    pass
+                continue
             column = allowed.get(key)
             if column is None or value in (None, ""):
                 continue
@@ -552,6 +586,17 @@ class KnowledgeRepository:
             "end_ms": evidence.end_ms,
             "frame_id": evidence.frame_id,
             "confidence_score": evidence.confidence_score,
+            "raw_text": evidence.raw_text,
+            "normalized_text": evidence.normalized_text,
+            "word_timestamps": _loads(evidence.word_timestamps_json, []),
+            "bbox": _loads(evidence.bbox_json, []),
+            "asr_metrics": _loads(evidence.asr_metrics_json, {}),
+            "ocr_metrics": _loads(evidence.ocr_metrics_json, {}),
+            "correction_trace": _loads(evidence.correction_trace_json, []),
+            "evidence_hash": evidence.evidence_hash,
+            "semantic_support_score": evidence.semantic_support_score,
+            "numeric_consistency_score": evidence.numeric_consistency_score,
+            "entity_consistency_score": evidence.entity_consistency_score,
             "is_primary": evidence.is_primary,
         }
 
@@ -688,6 +733,14 @@ class KnowledgeRepository:
             "invalidation_text": row.invalidation_text,
             "lifecycle_status": row.lifecycle_status,
             "verification_status": row.verification_status,
+            "support_status": row.support_status,
+            "support_probability": row.support_probability,
+            "truth_status": row.truth_status,
+            "external_verification_status": row.external_verification_status,
+            "source_reliability_score": row.source_reliability_score,
+            "speaker_id": row.speaker_id,
+            "speaker_name": row.speaker_name,
+            "attribution_confidence": row.attribution_confidence,
             "scope_type": row.scope_type,
             "scope_key": row.scope_key,
             "conflict_key": row.conflict_key,
@@ -838,7 +891,7 @@ class KnowledgeVectorTaskService:
         repo = VectorTaskRepository()
         for unit in units:
             unit_id = unit.get("id")
-            if not unit_id or unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            if not unit_id or not self.is_indexable(unit):
                 continue
             collection = self.route_collection(unit)
             task = repo.enqueue("knowledge_unit", int(unit_id), collection)
@@ -852,7 +905,7 @@ class KnowledgeVectorTaskService:
         vector_status = unit.get("vector_status") or {}
         indexed_collections = vector_status.get("indexed_collections") or []
         routed_collection = self.route_collection(unit)
-        if delete or unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+        if delete or not self.is_indexable(unit):
             collections = list(dict.fromkeys([*indexed_collections, routed_collection]))
             task_type = "delete"
         else:
@@ -879,3 +932,11 @@ class KnowledgeVectorTaskService:
         if unit.get("temporal_class") == "DURABLE":
             return cls.COLLECTIONS["DURABLE"]
         return cls.COLLECTIONS["TIMED"]
+
+    @staticmethod
+    def is_indexable(unit: dict[str, Any]) -> bool:
+        if unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            return False
+        return str(unit.get("support_status") or unit.get("verification_status") or "").upper() in {
+            "SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED", "EXTERNALLY_VERIFIED", "VALIDATED"
+        }

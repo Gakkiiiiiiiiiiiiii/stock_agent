@@ -13,6 +13,7 @@ from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
 from engines.retrieval.reranker_client import RerankerClient
+from engines.retrieval.retrieval_policy import RetrievalPolicy
 from engines.retrieval.sparse_retriever import PostgresSparseRetriever, SparseBM25Scorer
 
 
@@ -37,6 +38,8 @@ class HybridRetriever:
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
         plan = build_retrieval_plan(query=query, task_type=task_type, filters=normalize_retrieval_filters(filters), top_k=top_k)
+        policy_filters = RetrievalPolicy.filters_for(plan["task_type"])
+        plan["filters"] = policy_filters | plan["filters"]
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
         dense_candidates: list[dict] = []
@@ -52,6 +55,7 @@ class HybridRetriever:
             limit=plan["top_n_retrieve"],
         ) if self.config.sparse_recall_enabled else []
         candidates = self._merge_recall_candidates(dense_candidates, sparse_candidates)
+        candidates = self._apply_quality_gate(candidates, plan["filters"])
         candidates = self.sparse_scorer.score_candidates(plan["query"], candidates) if self.config.bm25_score_enabled else [item | {"bm25_score": 0.0, "sparse_score_source": "disabled"} for item in candidates]
         reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"]) if self.config.reranker_enabled else candidates[: plan["top_k_rerank"]]
         reranked = self._merge_candidate_fields(candidates, reranked)
@@ -86,11 +90,42 @@ class HybridRetriever:
         for key, value in filters.items():
             if key == "valid_at":
                 continue
+            if key == "minimum_support_status":
+                allowed = RetrievalPolicy.allowed_statuses(str(value))
+                if allowed:
+                    must.append(models.FieldCondition(key="support_status", match=models.MatchAny(any=allowed)))
+                continue
+            if key == "minimum_support_probability":
+                must.append(models.FieldCondition(key="support_probability", range=models.Range(gte=float(value))))
+                continue
             if isinstance(value, list):
                 must.append(models.FieldCondition(key=key, match=models.MatchAny(any=value)))
             else:
                 must.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
         return models.Filter(must=must)
+
+    @staticmethod
+    def _apply_quality_gate(candidates: list[dict], filters: dict) -> list[dict]:
+        minimum_probability = filters.get("minimum_support_probability")
+        allowed = set(RetrievalPolicy.allowed_statuses(filters.get("minimum_support_status")))
+        truth_status = filters.get("truth_status")
+        result = []
+        for candidate in candidates:
+            payload = candidate.get("payload") or {}
+            if payload.get("postgres_table") != "knowledge_unit":
+                result.append(candidate)
+                continue
+            if allowed and str(payload.get("support_status") or "").upper() not in allowed:
+                continue
+            try:
+                if minimum_probability is not None and float(payload.get("support_probability")) < float(minimum_probability):
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if truth_status and payload.get("truth_status") != truth_status:
+                continue
+            result.append(candidate)
+        return result
 
     @classmethod
     def _resolve_viewpoint_conflicts(cls, contexts: list[dict]) -> list[dict]:
@@ -140,6 +175,7 @@ class HybridRetriever:
             source_quality = float(payload.get("source_quality") or 0.5)
             freshness = float(payload.get("freshness_score") or self._freshness_score(payload)) if self.config.freshness_score_enabled else 0.0
             status = self._status_score(payload.get("status"))
+            support = float(payload.get("support_probability") or 0.0) if payload.get("postgres_table") == "knowledge_unit" else 0.5
             if self._is_expired(payload):
                 status = 0.0
                 freshness = 0.0
@@ -149,7 +185,8 @@ class HybridRetriever:
                 + 0.30 * rerank
                 + 0.05 * source_quality
                 + (0.05 * freshness if self.config.freshness_score_enabled else 0.0)
-                + 0.05 * status,
+                + 0.05 * status
+                + (0.05 * support if payload.get("postgres_table") == "knowledge_unit" else 0.0),
                 6,
             )
         items.sort(key=lambda entry: entry.get("final_score", 0.0), reverse=True)

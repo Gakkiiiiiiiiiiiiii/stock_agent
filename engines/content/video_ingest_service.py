@@ -15,6 +15,8 @@ from engines.content.diarization_service import DiarizationService
 from engines.content.event_conflict_resolver import EventConflictResolver
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
 from engines.content.financial_event_extractor import FinancialEventExtractor
+from engines.content.external_fact_verifier import ExternalFactVerifier
+from engines.content.cross_video_corroboration import CrossVideoCorroboration
 from engines.content.chapter_segmenter import ChapterSegmenter
 from engines.content.knowledge_conflict_resolver import KnowledgeConflictResolver
 from engines.content.knowledge_deduplicator import KnowledgeDeduplicator
@@ -77,6 +79,7 @@ class VideoIngestService:
         summary_exporter: VideoSummaryMarkdownExporter | None = None,
         xiaoe_hls_client: XiaoeHlsAdapter | None = None,
         lifecycle_service: KnowledgeLifecycleService | None = None,
+        external_fact_verifier: ExternalFactVerifier | None = None,
     ) -> None:
         self.bilibili_client = bilibili_client or BilibiliClient()
         self.xiaoe_hls_client = xiaoe_hls_client or XiaoeHlsAdapter()
@@ -113,6 +116,8 @@ class VideoIngestService:
             repository=self.knowledge_repo,
             vector_task_service=self.knowledge_vector_task_service,
         )
+        self.external_fact_verifier = external_fact_verifier or ExternalFactVerifier()
+        self.cross_video_corroboration = CrossVideoCorroboration()
         self.task_repo = task_repo or ContentTaskRepository()
         self.query_repo = query_repo or ContentQueryRepository()
         self.memory_repo = MemoryRepository()
@@ -414,6 +419,8 @@ class VideoIngestService:
             self.task_repo.update(task_id, stage="knowledge_normalize", progress=86)
             units = self.knowledge_normalizer.normalize(units, metadata=metadata)
             logger.info("知识流水线 video_id=%s normalize=%s", video_id, len(units))
+            self.task_repo.update(task_id, stage="external_verify", progress=88)
+            units = self.external_fact_verifier.verify_many(units)
             source_date = self.knowledge_normalizer.parse_source_datetime(metadata.get("publish_time"))
             self.task_repo.update(task_id, stage="temporal_policy", progress=89)
             units = self.knowledge_temporal_policy.apply(units, source_date=source_date)
@@ -436,6 +443,8 @@ class VideoIngestService:
                 units=units,
                 relations=relations,
             )
+            persisted_units = self.knowledge_repo.list_units_for_video(video_id)
+            self._annotate_cross_video_corroboration(persisted_units)
             persisted_units = self.knowledge_repo.list_units_for_video(video_id)
             quality_metrics = self._knowledge_quality_metrics(extraction_validation, persisted_units)
             self.analysis_document_repo.upsert(video_id, analysis_payload)
@@ -507,6 +516,17 @@ class VideoIngestService:
             "low_evidence_unit_count": low_evidence_count,
             "knowledge_unit_count": len(persisted_units),
         }
+
+    def _annotate_cross_video_corroboration(self, units: list[dict]) -> None:
+        """Persist narrative-count metadata without changing truth/support state."""
+        for unit in units:
+            subject_key = unit.get("subject_key")
+            if not subject_key:
+                continue
+            history = self.knowledge_repo.get_subject_history(str(subject_key), limit=200).get("items") or []
+            annotated = self.cross_video_corroboration.annotate([unit], history)[0]
+            attributes = annotated.get("attributes") or {}
+            self.knowledge_repo.update_unit_lifecycle(int(unit["id"]), attributes_patch=attributes, reason="cross_video_narrative_corroboration", operator="pipeline")
 
     @staticmethod
     def _ensure_reparse_does_not_regress(existing_units: list[dict], replacement_units: list[dict]) -> None:

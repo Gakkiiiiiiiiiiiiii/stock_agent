@@ -182,6 +182,9 @@ def _postgres_knowledge_sparse_sql(collections: list[str], filters: dict | None)
             ku.temporal_class,
             ku.lifecycle_status,
             ku.verification_status,
+            ku.support_status,
+            ku.support_probability,
+            ku.truth_status,
             ku.subject_key,
             ku.subject_name,
             ku.canonical_statement,
@@ -219,6 +222,9 @@ def _sqlite_knowledge_sparse_sql(collections: list[str], filters: dict | None) -
             ku.temporal_class,
             ku.lifecycle_status,
             ku.verification_status,
+            ku.support_status,
+            ku.support_probability,
+            ku.truth_status,
             ku.subject_key,
             ku.subject_name,
             ku.canonical_statement,
@@ -255,6 +261,8 @@ def _knowledge_filter_clauses(filters: dict | None) -> list[str]:
         "temporal_class",
         "lifecycle_status",
         "verification_status",
+        "support_status",
+        "truth_status",
         "subject_key",
         "subject_type",
         "predicate_key",
@@ -262,6 +270,14 @@ def _knowledge_filter_clauses(filters: dict | None) -> list[str]:
     }
     clauses = []
     for key, value in (filters or {}).items():
+        if key == "minimum_support_probability":
+            clauses.append("ku.support_probability >= :filter_minimum_support_probability")
+            continue
+        if key == "minimum_support_status":
+            from engines.retrieval.retrieval_policy import RetrievalPolicy
+            statuses = RetrievalPolicy.allowed_statuses(str(value))
+            clauses.append("1 = 0" if not statuses else f"ku.support_status IN ({_placeholders('filter_support_status', statuses)})")
+            continue
         if key == "valid_only" and value:
             clauses.append("(ku.valid_to IS NULL OR ku.valid_to >= CURRENT_TIMESTAMP)")
             continue
@@ -306,6 +322,8 @@ def _sparse_params(query: str, collections: list[str], filters: dict | None, lim
             "temporal_class",
             "lifecycle_status",
             "verification_status",
+            "support_status",
+            "truth_status",
             "subject_key",
             "subject_type",
             "predicate_key",
@@ -316,6 +334,12 @@ def _sparse_params(query: str, collections: list[str], filters: dict | None, lim
                     params[f"filter_{key}_{index}"] = item
             else:
                 params[f"filter_{key}"] = value
+        elif key == "minimum_support_probability":
+            params["filter_minimum_support_probability"] = float(value)
+        elif key == "minimum_support_status":
+            from engines.retrieval.retrieval_policy import RetrievalPolicy
+            for index, status in enumerate(RetrievalPolicy.allowed_statuses(str(value))):
+                params[f"filter_support_status_{index}"] = status
     return params
 
 
@@ -367,6 +391,9 @@ def _candidate_from_knowledge_row(row) -> dict:
         "knowledge_kind": row["knowledge_kind"],
         "temporal_class": row["temporal_class"],
         "verification_status": row["verification_status"],
+        "support_status": row["support_status"],
+        "support_probability": row["support_probability"],
+        "truth_status": row["truth_status"],
         "subject_key": row["subject_key"],
         "source_date": _iso(row["as_of_time"]),
         "source_timestamp": _timestamp(row["as_of_time"]),
