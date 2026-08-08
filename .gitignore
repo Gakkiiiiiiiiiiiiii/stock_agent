@@ -2,7 +2,7 @@
 .venv/
 .idea/
 .pytest_cache/
-.pytest_tmp/
+.pytest_tmp*/
 .pytest-tmp/
 __pycache__/
 *.py[cod]

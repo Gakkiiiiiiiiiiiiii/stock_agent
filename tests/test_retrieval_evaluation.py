@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from pydantic import BaseModel
 from engines.memory.memory_retriever import retrieve_memory
 from engines.retrieval.evaluation.ablation_runner import RetrievalAblationRunner
 from engines.retrieval.evaluation.ablation_runner import build_standard_ablation_variants
@@ -10,7 +11,7 @@ from engines.retrieval.evaluation.runner import RetrievalEvaluationRunner
 from engines.retrieval.filters import RetrievalFilter, normalize_retrieval_filters
 from engines.retrieval.evaluation.regression import compare_to_baseline
 from app.model_capabilities import ModelCapabilities
-from app.model_providers import AnalysisModelClient, AnalysisModelSettings, ModelCapabilityError
+from app.model_providers import AnalysisModelClient, AnalysisModelSettings, ModelCapabilityError, StructuredOutputError
 from engines.domain_result import DomainResultMeta
 
 
@@ -100,6 +101,26 @@ def test_model_capabilities_gate_tools_and_fallback_structured_output():
     assert "response_format" not in received
     with __import__("pytest").raises(ModelCapabilityError, match="TOOL_CALLING_UNSUPPORTED"):
         client.create_chat_completion(messages=[], tools=[{"type": "function"}])
+
+
+def test_structured_output_fallback_rejects_schema_mismatch():
+    import httpx
+
+    class ReviewOutput(BaseModel):
+        score: float
+        reason: str
+
+    responses = iter([
+        {"choices": [{"message": {"content": '{"hello":"world"}'}}]},
+        {"choices": [{"message": {"content": '{"still":"wrong"}'}}]},
+    ])
+    client = AnalysisModelClient(
+        settings=AnalysisModelSettings(provider="openai_compatible", model="test", base_url="http://model", api_key="key", capabilities=ModelCapabilities()),
+        http_client=httpx.Client(transport=httpx.MockTransport(lambda _request: httpx.Response(200, json=next(responses)))),
+    )
+
+    with __import__("pytest").raises(StructuredOutputError, match="STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA"):
+        client.complete("review", output_model=ReviewOutput)
 
 
 def test_regression_gate_uses_relative_tolerance_and_zero_leakage_growth():

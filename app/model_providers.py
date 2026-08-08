@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from pydantic import BaseModel, ValidationError
 
 from app.model_capabilities import ModelCapabilities
 from app.model_capability_resolver import ModelCapabilityResolver
@@ -68,12 +69,22 @@ class AnalysisModelClient:
         temperature: float = 0.2,
         max_tokens: int = 2048,
         response_format: dict[str, Any] | None = None,
+        output_model: type[BaseModel] | None = None,
     ) -> dict[str, Any]:
         if not self.available():
             return {
                 "available": False,
                 "provider": self.settings.provider,
                 "message": "analysis model is not configured",
+            }
+        if output_model is not None and response_format is None:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": output_model.__name__,
+                    "schema": output_model.model_json_schema(),
+                    "strict": True,
+                },
             }
         payload = {
             "model": self.settings.model,
@@ -92,16 +103,18 @@ class AnalysisModelClient:
         if response_format is not None and native_structured:
             payload["response_format"] = response_format
         data = self._post_chat_completion(payload)
+        validated_output: BaseModel | None = None
         if structured_output_fallback:
             for attempt in range(2):
                 content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
                 try:
-                    json.loads(content)
+                    parsed = json.loads(content)
+                    validated_output = output_model.model_validate(parsed) if output_model is not None else None
                     break
-                except json.JSONDecodeError:
+                except (json.JSONDecodeError, ValidationError):
                     if attempt:
-                        raise StructuredOutputError("STRUCTURED_OUTPUT_INVALID_JSON")
-                    payload["messages"].append({"role": "system", "content": "Previous output was invalid JSON. Retry with one valid JSON object only."})
+                        raise StructuredOutputError("STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA")
+                    payload["messages"].append({"role": "system", "content": "Previous output was invalid JSON or did not match the requested schema. Retry with one valid JSON object matching every required field and type."})
                     data = self._post_chat_completion(payload)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
@@ -113,6 +126,7 @@ class AnalysisModelClient:
             "finish_reason": choice.get("finish_reason"),
             "raw": data,
             "structured_output_fallback": structured_output_fallback,
+            "structured_output": validated_output.model_dump(mode="json") if validated_output is not None else None,
         }
 
     def _effective_temperature(self, requested: float) -> float:

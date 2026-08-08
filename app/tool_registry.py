@@ -42,40 +42,6 @@ class ClaudeToolRegistry:
         self.proposals = ProposalStore()
         self.auditor = ToolAuditor()
         self._tools: dict[str, tuple[dict[str, Any], ToolExecutor]] = {
-            "get_kline": (
-                {
-                    "name": "get_kline",
-                    "description": "Get historical K-line data for a symbol.",
-                    "input_schema": {
-                        "type": "object",
-                        "properties": {
-                            "symbol": {"type": "string"},
-                            "start_date": {"type": "string"},
-                            "end_date": {"type": "string"},
-                            "freq": {"type": "string"},
-                            "adjust": {"type": "string"},
-                        },
-                        "required": ["symbol"],
-                    },
-                },
-                lambda payload: market_data_server.get_kline(**payload),
-            ),
-            "get_market_snapshot": (
-                {
-                    "name": "get_market_snapshot",
-                    "description": "Get a structured market snapshot for the current market regime.",
-                    "input_schema": {"type": "object", "properties": {}},
-                },
-                lambda payload: market_data_server.get_market_snapshot(),
-            ),
-            "get_sector_strength": (
-                {
-                    "name": "get_sector_strength",
-                    "description": "Get sector or theme strength ranking.",
-                    "input_schema": {"type": "object", "properties": {}},
-                },
-                lambda payload: market_data_server.get_sector_strength(),
-            ),
             "calc_technical_indicators": (
                 {
                     "name": "calc_technical_indicators",

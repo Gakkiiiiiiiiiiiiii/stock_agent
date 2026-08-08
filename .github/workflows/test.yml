@@ -19,7 +19,7 @@ jobs:
           pip install -e ".[test]"
       - name: Check runtime artifacts are not tracked
         run: |
-          if git ls-files | grep -E '(^|/)\.coverage$|storage/runtime/.*\.jsonl$|storage/runtime/.*\.log$'; then
+          if git ls-files | grep -E '(^|/)\.pytest_tmp[^/]*/|(^|/)\.coverage$|storage/runtime/.*\.(jsonl|log)$'; then
             echo "runtime artifacts are tracked"
             exit 1
           fi
@@ -47,12 +47,13 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -e ".[test]"
-      - name: Record architecture coverage baseline
+      - name: Enforce architecture coverage regression floor
         run: |
           pytest -q -m "not integration and not media and not qmt and not slow" \
             --cov=engines.decision --cov=engines.memory --cov=engines.retrieval \
             --cov=agent --cov=app.skill_contract --cov=app.scheduler_service \
-            --cov=app.model_providers --cov-report=term --cov-report=json:artifacts/architecture_coverage.json
+            --cov=app.model_providers --cov-report=term --cov-report=json:artifacts/architecture_coverage.json \
+            --cov-fail-under=78
       - uses: actions/upload-artifact@v4
         with:
           name: architecture-coverage
