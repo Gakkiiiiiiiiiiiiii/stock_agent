@@ -9,6 +9,10 @@ import httpx
 from app.model_capabilities import ModelCapabilities
 
 
+class ModelCapabilityError(RuntimeError):
+    pass
+
+
 @dataclass(frozen=True)
 class AnalysisModelSettings:
     provider: str = "none"
@@ -74,7 +78,8 @@ class AnalysisModelClient:
         if system:
             payload["messages"].append({"role": "system", "content": system})
         payload["messages"].append({"role": "user", "content": prompt})
-        if response_format is not None:
+        structured_output_fallback = response_format is not None and not self.supports("json_schema")
+        if response_format is not None and self.supports("json_schema"):
             payload["response_format"] = response_format
         data = self._post_chat_completion(payload)
         choice = (data.get("choices") or [{}])[0]
@@ -86,6 +91,7 @@ class AnalysisModelClient:
             "content": message.get("content", ""),
             "finish_reason": choice.get("finish_reason"),
             "raw": data,
+            "structured_output_fallback": structured_output_fallback,
         }
 
     def _effective_temperature(self, requested: float) -> float:
@@ -117,6 +123,8 @@ class AnalysisModelClient:
             "temperature": self._effective_temperature(temperature),
             "max_tokens": max_tokens,
         }
+        if tools and not self.supports("tool_calling"):
+            raise ModelCapabilityError("TOOL_CALLING_UNSUPPORTED")
         if tools:
             payload["tools"] = tools
         if tool_choice is not None:

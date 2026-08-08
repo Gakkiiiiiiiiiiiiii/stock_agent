@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from qdrant_client.http import models
 
 from engines.retrieval.embedder import LocalChineseNgramEmbedder, build_embedder
+from engines.retrieval.config import RetrievalConfig
 from engines.retrieval.filters import normalize_retrieval_filters
 from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
@@ -23,6 +24,7 @@ class HybridRetriever:
         hydrator: PostgresHydrator | None = None,
         sparse_scorer: SparseBM25Scorer | None = None,
         sparse_retriever: PostgresSparseRetriever | None = None,
+        config: RetrievalConfig | None = None,
     ) -> None:
         self.qdrant_client = qdrant_client or FinancialQdrantClient()
         self.reranker = reranker or RerankerClient()
@@ -30,41 +32,36 @@ class HybridRetriever:
         self.hydrator = hydrator or PostgresHydrator()
         self.sparse_scorer = sparse_scorer or SparseBM25Scorer()
         self.sparse_retriever = sparse_retriever or PostgresSparseRetriever()
+        self.config = config or RetrievalConfig()
 
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
         plan = build_retrieval_plan(query=query, task_type=task_type, filters=normalize_retrieval_filters(filters), top_k=top_k)
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
         dense_candidates: list[dict] = []
-        for collection in plan["collections"]:
-            hits = self.qdrant_client.search(collection=collection, vector=query_vector, limit=plan["top_n_retrieve"], query_filter=query_filter)
-            for hit in hits:
-                dense_candidates.append(
-                    {
-                        "chunk_id": hit.payload.get("chunk_id", str(hit.id)),
-                        "text": hit.payload.get("text", ""),
-                        "payload": hit.payload,
-                        "dense_score": hit.score,
-                        "score": hit.score,
-                        "recall_sources": ["dense"],
-                    }
-                )
+        if self.config.dense_enabled:
+            for collection in plan["collections"]:
+                hits = self.qdrant_client.search(collection=collection, vector=query_vector, limit=plan["top_n_retrieve"], query_filter=query_filter)
+                for hit in hits:
+                    dense_candidates.append({"chunk_id": hit.payload.get("chunk_id", str(hit.id)), "text": hit.payload.get("text", ""), "payload": hit.payload, "dense_score": hit.score, "score": hit.score, "recall_sources": ["dense"]})
         sparse_candidates = self.sparse_retriever.search(
             plan["query"],
             collections=plan["collections"],
             filters=plan["filters"],
             limit=plan["top_n_retrieve"],
-        )
+        ) if self.config.sparse_enabled else []
         candidates = self._merge_recall_candidates(dense_candidates, sparse_candidates)
         candidates = self.sparse_scorer.score_candidates(plan["query"], candidates)
-        reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"])
+        reranked = self.reranker.rerank(query=plan["query"], candidates=candidates, top_k=plan["top_k_rerank"]) if self.config.reranker_enabled else candidates[: plan["top_k_rerank"]]
         reranked = self._merge_candidate_fields(candidates, reranked)
         reranked = self._apply_hybrid_score(reranked)
         hydrated = self.hydrator.hydrate(reranked)
         contexts = self._filter_expired_contexts(hydrated, plan)
-        contexts = self._resolve_viewpoint_conflicts(contexts)
-        contexts = self._resolve_knowledge_conflicts(contexts)
-        contexts = self._apply_source_priority(contexts, plan.get("preferred_source_types") or [])
+        if self.config.conflict_resolution_enabled:
+            contexts = self._resolve_viewpoint_conflicts(contexts)
+            contexts = self._resolve_knowledge_conflicts(contexts)
+        if self.config.source_priority_enabled:
+            contexts = self._apply_source_priority(contexts, plan.get("preferred_source_types") or [])
         metadata = getattr(self.embedder, "metadata", None)
         if metadata is None:
             embedding = {"provider": "unknown", "model": type(self.embedder).__name__, "dimension": len(query_vector)}
@@ -124,17 +121,16 @@ class HybridRetriever:
         )
         return contexts
 
-    @classmethod
-    def _apply_hybrid_score(cls, items: list[dict]) -> list[dict]:
+    def _apply_hybrid_score(self, items: list[dict]) -> list[dict]:
         for item in items:
             payload = item.get("payload") or {}
             dense = float(item.get("dense_score") or item.get("score") or 0.0)
             bm25 = float(item.get("bm25_score") or 0.0)
             rerank = float(item.get("rerank_score") or 0.0)
             source_quality = float(payload.get("source_quality") or 0.5)
-            freshness = float(payload.get("freshness_score") or cls._freshness_score(payload))
-            status = cls._status_score(payload.get("status"))
-            if cls._is_expired(payload):
+            freshness = float(payload.get("freshness_score") or self._freshness_score(payload)) if self.config.freshness_enabled else 0.0
+            status = self._status_score(payload.get("status"))
+            if self._is_expired(payload):
                 status = 0.0
                 freshness = 0.0
             item["final_score"] = round(
@@ -142,7 +138,7 @@ class HybridRetriever:
                 + 0.20 * bm25
                 + 0.30 * rerank
                 + 0.05 * source_quality
-                + 0.05 * freshness
+                + (0.05 * freshness if self.config.freshness_enabled else 0.0)
                 + 0.05 * status,
                 6,
             )

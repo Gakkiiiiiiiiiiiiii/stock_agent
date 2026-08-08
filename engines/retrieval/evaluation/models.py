@@ -9,6 +9,7 @@ class RetrievalGoldenCase(BaseModel):
     case_id: str = Field(validation_alias=AliasChoices("case_id", "id"))
     query: str
     task_type: str | None = None
+    retrieval_filters: dict = Field(default_factory=dict)
     expected_ids: list[str] = Field(default_factory=list)
     expected_subjects: list[str] = Field(default_factory=list)
     expected_memory_types: list[str] = Field(default_factory=list)
