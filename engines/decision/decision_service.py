@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime
+import json
 from typing import Any
 
 from engines.memory.service import MemoryService
 from storage.bootstrap import create_all
 from storage.repositories.research_repository import DecisionRepository
 from storage.repositories.job_repository import JobTaskRepository
+from engines.decision.evaluation_clock import outcome_not_before
+from engines.market.market_clock import MarketClock
 from engines.market.trading_calendar import advance_trading_days
 
 
@@ -23,7 +26,7 @@ class DecisionService:
         payload.setdefault("evaluation_anchor", "NEXT_SESSION_OPEN")
         payload.setdefault("benchmark_symbol", "000001.SH")
         decision = self.repository.create(**payload)
-        jobs = self.schedule_evaluations(decision.id, (decision.decision_as_of or decision.created_at).date())
+        jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at))
         return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs}
 
     @staticmethod
@@ -32,7 +35,7 @@ class DecisionService:
         jobs = []
         for horizon in (1, 5, 20):
             due = advance_trading_days(decision_date, horizon)
-            job = repo.create("decision_outcome", {"decision_id": decision_id, "horizon_days": horizon, "evaluation_date": due.isoformat()}, idempotency_key=f"decision-outcome:{decision_id}:{horizon}", not_before=datetime.combine(due, datetime.min.time(), tzinfo=UTC))
+            job = repo.create("decision_outcome", {"decision_id": decision_id, "horizon_days": horizon, "evaluation_date": due.isoformat()}, idempotency_key=f"decision-outcome:{decision_id}:{horizon}", not_before=outcome_not_before(due))
             jobs.append(job["id"])
         return jobs
 
@@ -76,16 +79,38 @@ class DecisionService:
         if decision is None:
             return {"error": "DECISION_NOT_FOUND", "decision_id": decision_id}
         lessons = list(review.get("lessons") or [])
+        outcome = self.repository.get_outcome_by_id(outcome_id) if outcome_id is not None else None
         memory_ids: list[int] = []
         if lessons:
             memory_result = self.memory_service.ingest(
                 source_type="decision_review",
                 source_id=decision_id,
-                text="\n".join(lessons),
+                text=json.dumps(
+                    {
+                        "decision": {
+                            "skill_slug": decision.skill_slug,
+                            "market_regime": decision.market_regime,
+                            "thesis": decision.thesis,
+                            "trigger_conditions": decision.trigger_conditions,
+                            "invalidation_conditions": decision.invalidation_conditions,
+                        },
+                        "outcome": self._json_safe(self._dump(outcome)) if outcome else {},
+                        "review": review,
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                ),
                 metadata={
                     "memory_type": "STRATEGY_EXPERIENCE",
                     "subject_key": f"{decision.market_regime or 'UNKNOWN'}/{decision.skill_slug or 'research'}",
-                    "facts": {"market_regime": decision.market_regime, "strategy": decision.skill_slug},
+                    "facts": {
+                        "market_regime": decision.market_regime,
+                        "strategy": decision.skill_slug,
+                        "applicable_regimes": list(review.get("applicable_regimes") or review.get("applicable_regime") or []),
+                        "root_causes": list(review.get("root_causes") or []),
+                        "invalidation_conditions": list(review.get("invalidation_updates") or []),
+                        "outcome": self._json_safe(self._dump(outcome)) if outcome else {},
+                    },
                     "lessons": lessons,
                     "decision_impact": 0.85,
                     "confidence": review.get("decision_quality", decision.confidence or 0.6),
@@ -109,10 +134,24 @@ class DecisionService:
             unexpected_events=review.get("unexpected_events", []),
             lessons=lessons,
             memory_candidate_ids=memory_ids,
+            applicable_regimes=list(review.get("applicable_regimes") or review.get("applicable_regime") or []),
+            invalidation_updates=list(review.get("invalidation_updates") or []),
+            regime_path=list(review.get("regime_path") or []),
+            evidence_refs=list(review.get("evidence_refs") or []),
+            review_mode=review.get("review_mode") or "structured",
+            review_model=review.get("review_model"),
         )
         self.repository.update(decision_id, evaluation_status="REVIEWED", reviewed_at=datetime.now(UTC))
         return {"review_id": review_row.id, "decision_id": decision_id, "memory_ids": memory_ids, "memory_evidence_updates": evidence_updates}
 
+    def annotate_review(self, review_id: int, **payload: Any) -> dict:
+        review = self.repository.update_review(review_id, **payload)
+        return self._dump(review)
+
     @staticmethod
     def _dump(value: Any) -> dict:
         return {column.name: getattr(value, column.name) for column in value.__table__.columns}
+
+    @staticmethod
+    def _json_safe(value: Any) -> Any:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))

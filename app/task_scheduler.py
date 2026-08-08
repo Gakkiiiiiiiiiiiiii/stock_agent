@@ -20,3 +20,10 @@ DEFAULT_TASKS = [
 
 def list_scheduled_tasks() -> list[ScheduledTask]:
     return DEFAULT_TASKS
+
+
+def run_scheduled_tick(now=None) -> list[str]:
+    """Entrypoint for system cron, APScheduler, or a Kubernetes CronJob."""
+    from app.scheduler_service import SchedulerService
+
+    return SchedulerService().tick(now)

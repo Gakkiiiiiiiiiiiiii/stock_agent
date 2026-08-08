@@ -2,23 +2,29 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from agent.executor import SkillExecutor
 from app.skill_contract import FreshnessPolicy, SkillContractValidator, SkillExecutionContract, SkillExecutionState, SkillOutputContract
 from app.skill_loader import SkillDefinition, load_skills
+from app.scheduler_service import SchedulerService
 from app.tool_registry import ClaudeToolRegistry
 from engines.decision.decision_service import DecisionService
 from engines.decision.outcome_evaluator import DecisionOutcomeEvaluator
 from engines.market.exchange_calendar import ExchangeTradingCalendar
 from engines.memory.service import MemoryService
 from engines.memory.lifecycle import MemoryLifecycleService
+from engines.memory.llm_memory_extractor import LLMMemoryExtractor
+from engines.memory.models import MemoryExtractionInput
 from engines.regime.regime_state_machine import PersistentRegimeStateMachine
 from storage.bootstrap import create_all
 from storage.db import SessionLocal, get_engine
 from storage.repositories.vector_repository import MemoryRepository
 from storage.repositories.job_repository import JobTaskRepository
+from storage.models.research import DecisionReview
+from storage.db import session_scope
 
 
 def configure_test_database(monkeypatch, tmp_path):
@@ -114,6 +120,25 @@ def test_outcome_evaluator_uses_next_session_open_and_configurable_benchmark(mon
     assert result["realized_metrics"]["benchmark"]["symbol"] == "399001.SZ"
 
 
+def test_outcome_rejects_missing_entry_and_marks_suspended_exit(monkeypatch):
+    monkeypatch.setattr("engines.decision.outcome_evaluator.advance_trading_days", lambda _day, _count: date(2026, 8, 10))
+
+    monkeypatch.setattr("engines.decision.outcome_evaluator.get_kline", lambda *_args, **_kwargs: {"records": [{"date": "2026-08-11", "open": 10, "close": 11}]})
+    with pytest.raises(ValueError, match="ENTRY_NOT_TRADABLE"):
+        DecisionOutcomeEvaluator().evaluate({"decision_as_of": datetime(2026, 8, 7, 15, tzinfo=UTC), "candidates": [{"symbol": "600000.SH"}]}, date(2026, 8, 14))
+
+    def suspended_kline(symbol, **_kwargs):
+        rows = [{"date": "2026-08-10", "open": 10, "close": 10.2}, {"date": "2026-08-13", "close": 11}]
+        return {"records": rows if symbol == "600000.SH" else [{"date": "2026-08-10", "open": 20, "close": 20.2}, {"date": "2026-08-13", "close": 21}]}
+
+    monkeypatch.setattr("engines.decision.outcome_evaluator.get_kline", suspended_kline)
+    result = DecisionOutcomeEvaluator().evaluate({"decision_as_of": datetime(2026, 8, 7, 15, tzinfo=UTC), "candidates": [{"symbol": "600000.SH"}]}, date(2026, 8, 14))
+    exit_observation = result["realized_metrics"]["components"][0]["exit"]
+    assert exit_observation["actual_date"] == "2026-08-13"
+    assert exit_observation["quality_flags"] == ["EXIT_SESSION_NO_QUOTE", "MARK_TO_LAST_CLOSE"]
+    assert result["realized_metrics"]["benchmark"]["exit"]["actual_date"] == "2026-08-13"
+
+
 def test_knowledge_retrieval_does_not_satisfy_dedicated_memory_contract():
     skill = SkillDefinition(slug="memory", name="memory", description="", content="", execution=SkillExecutionContract(require_memory_lookup=True))
     state = SkillExecutionState(skill_slug=skill.slug)
@@ -199,6 +224,86 @@ def test_review_job_waits_for_t5_outcome(monkeypatch, tmp_path):
     assert t5["review_job_id"]
     review_job = JobTaskRepository().get(t5["review_job_id"])
     assert review_job and review_job["task_type"] == "decision_review"
+
+
+def test_decision_uses_cn_market_date_and_post_close_not_before(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    scheduled_from: list[date] = []
+
+    def fake_advance(day, horizon):
+        scheduled_from.append(day)
+        return day + timedelta(days=horizon)
+
+    monkeypatch.setattr("engines.decision.decision_service.advance_trading_days", fake_advance)
+    service = DecisionService(memory_service=object())
+    decision = service.save_decision(decision_as_of=datetime(2026, 8, 9, 16, 30, tzinfo=UTC))  # 00:30 Asia/Shanghai on Aug 10
+    assert scheduled_from == [date(2026, 8, 10)] * 3
+    first_job = JobTaskRepository().get(decision["evaluation_jobs"][0])
+    raw_not_before = first_job["not_before"]
+    not_before_utc = raw_not_before if isinstance(raw_not_before, datetime) else datetime.fromisoformat(str(raw_not_before))
+    not_before = not_before_utc.replace(tzinfo=UTC).astimezone(ZoneInfo("Asia/Shanghai"))
+    assert (not_before.hour, not_before.minute) == (16, 0)
+
+
+def test_scheduler_enqueues_memory_lifecycle_job_idempotently(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    now = datetime(2026, 8, 10, 8, 16, tzinfo=UTC)  # 16:16 Asia/Shanghai
+    scheduler = SchedulerService()
+    first = scheduler.tick(now)
+    second = scheduler.tick(now)
+    assert first == second
+    task = JobTaskRepository().get(first[0])
+    assert task and task["task_type"] == "memory_lifecycle_sweep"
+
+
+def test_llm_memory_extraction_rejects_ungrounded_market_facts():
+    class FakeModel:
+        settings = type("Settings", (), {"model": "fake"})()
+
+        def available(self):
+            return True
+
+        def complete(self, **_kwargs):
+            return {"content": '{"memory_type":"STRATEGY_EXPERIENCE","subject_key":"rotation","summary":"买入000001.SH","facts":{"market_regime":"rotation_market"},"lessons":[],"confidence":0.9,"importance":0.8}'}
+
+    candidate = LLMMemoryExtractor(client=FakeModel()).extract(MemoryExtractionInput(source_type="decision_review", source_id="d1", text="轮动市场应等待确认"))[0]
+    assert candidate.facts["_extraction"]["extraction_mode"] == "RULE_FALLBACK"
+    assert candidate.facts["_extraction"]["fallback_reason"] == "GROUNDING_FAILED"
+
+
+def test_review_persists_rich_learning_fields(monkeypatch, tmp_path):
+    configure_test_database(monkeypatch, tmp_path)
+    monkeypatch.setattr("engines.decision.decision_service.advance_trading_days", lambda day, horizon: day + timedelta(days=horizon))
+    service = DecisionService()
+    decision = service.save_decision(
+        skill_slug="theme_momentum",
+        market_regime="rotation_market",
+        thesis={"claim": "主题延续"},
+        invalidation_conditions=["成交额缩量"],
+        evidence_refs=["evidence://daily/1"],
+    )
+    outcome = service.record_outcome(decision["decision_id"], date(2026, 8, 14), 5, benchmark_return=0.01, portfolio_return=-0.02)
+    saved = service.review(
+        decision["decision_id"],
+        {
+            "lessons": ["等待确认"],
+            "root_causes": ["轮动速度加快"],
+            "applicable_regimes": ["rotation_market"],
+            "invalidation_updates": ["成交额缩量"],
+            "regime_path": [{"regime": "rotation_market"}],
+            "evidence_refs": ["evidence://daily/1"],
+            "review_mode": "deterministic_fallback",
+            "outcome_excess_return": -0.03,
+        },
+        outcome["outcome_id"],
+    )
+    with session_scope() as session:
+        row = session.get(DecisionReview, saved["review_id"])
+        assert row.applicable_regimes == ["rotation_market"]
+        assert row.regime_path == [{"regime": "rotation_market"}]
+        assert row.review_mode == "deterministic_fallback"
+    memory = MemoryRepository().get(saved["memory_ids"][0])
+    assert memory and memory.facts["outcome"]["excess_return"] == pytest.approx(-0.03)
 
 
 def test_strategy_memory_lifecycle_tracks_consecutive_outcomes(monkeypatch, tmp_path):

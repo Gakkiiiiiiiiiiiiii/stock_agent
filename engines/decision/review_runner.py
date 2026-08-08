@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 
 from engines.decision.decision_service import DecisionService
+from engines.market.market_clock import MarketClock
 from storage.repositories.research_repository import MarketRegimeRepository
 
 
@@ -36,10 +37,19 @@ class DecisionReviewRunner:
                 None,
             )
             if saved_call and saved_call.get("review_id"):
+                model = getattr(getattr(agent, "client", None), "settings", None)
+                self.service.annotate_review(
+                    int(saved_call["review_id"]),
+                    review_mode="skill",
+                    review_model=getattr(model, "model", None),
+                )
                 return saved_call | {"report": response.report, "historical_regimes": historical_regimes, "mode": "skill"}
 
         review = self._build_review(decision, outcome, history)
         review["outcome_excess_return"] = outcome.get("excess_return")
+        review["review_mode"] = "deterministic_fallback"
+        review["regime_path"] = historical_regimes
+        review["evidence_refs"] = list(decision.get("evidence_refs") or [])
         saved = self.service.review(decision_id, review, outcome["id"])
         return saved | {"review": review, "historical_regimes": historical_regimes, "mode": "deterministic_fallback"}
 
@@ -58,11 +68,14 @@ class DecisionReviewRunner:
         wrong = ["候选组合未取得相对基准超额收益"] if excess <= 0 else []
         regimes = [item.new_regime for item in history]
         lesson = "在该市场环境下应降低同类信号权重，并强化证伪条件。" if excess <= 0 else "该信号在此市场环境下有效，继续监控其证伪条件。"
-        return {"decision_quality": max(0.0, min(1.0, 0.5 + excess * 5)), "what_was_correct": correct, "what_was_wrong": wrong, "root_causes": ["市场状态路径：" + " → ".join(regimes)] if regimes else ["历史市场状态数据不足"], "unexpected_events": [], "lessons": [lesson], "applicable_regime": regimes, "invalidation_updates": list(decision.get("invalidation_conditions") or [])}
+        return {"decision_quality": max(0.0, min(1.0, 0.5 + excess * 5)), "what_was_correct": correct, "what_was_wrong": wrong, "root_causes": ["市场状态路径：" + " → ".join(regimes)] if regimes else ["历史市场状态数据不足"], "unexpected_events": [], "lessons": [lesson], "applicable_regimes": regimes, "invalidation_updates": list(decision.get("invalidation_conditions") or [])}
 
     @staticmethod
     def _as_date(value) -> date:
-        return value.date() if hasattr(value, "date") else date.fromisoformat(str(value)[:10])
+        if isinstance(value, date) and not hasattr(value, "hour"):
+            return value
+        parsed = value if hasattr(value, "tzinfo") else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return MarketClock().calendar_date(parsed)
 
     @staticmethod
     def _history_item(item) -> dict:

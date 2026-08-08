@@ -92,9 +92,25 @@ class DecisionRepository:
                 query = query.where(InvestmentDecisionOutcome.horizon_days == horizon_days)
             return session.execute(query.order_by(InvestmentDecisionOutcome.evaluation_date.desc())).scalars().first()
 
+    def get_outcome_by_id(self, outcome_id: int) -> InvestmentDecisionOutcome | None:
+        with session_scope() as session:
+            return session.get(InvestmentDecisionOutcome, outcome_id)
+
     def add_review(self, **payload) -> DecisionReview:
         with session_scope() as session:
             review = DecisionReview(**payload)
+            session.add(review)
+            session.flush()
+            session.refresh(review)
+            return review
+
+    def update_review(self, review_id: int, **payload) -> DecisionReview:
+        with session_scope() as session:
+            review = session.get(DecisionReview, review_id)
+            if review is None:
+                raise FileNotFoundError(review_id)
+            for key, value in payload.items():
+                setattr(review, key, value)
             session.add(review)
             session.flush()
             session.refresh(review)

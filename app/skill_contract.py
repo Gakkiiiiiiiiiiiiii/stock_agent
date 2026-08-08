@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, Field
 
 from engines.market.exchange_calendar import ExchangeTradingCalendar
+from engines.market.market_clock import MarketClock
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -156,17 +157,17 @@ class SkillContractValidator:
         reference = now or datetime.now(UTC)
         if reference.tzinfo is None:
             reference = reference.replace(tzinfo=UTC)
-        timestamp_cn = timestamp.astimezone(CN_TZ)
-        reference_cn = reference.astimezone(CN_TZ)
+        clock = MarketClock()
+        timestamp_cn = clock.localize(timestamp)
+        reference_cn = clock.localize(reference)
         age_minutes = (reference_cn - timestamp_cn).total_seconds() / 60
         if age_minutes < -5:
             return ["MARKET_DATA_TIMESTAMP_INVALID"]
         if policy.max_age_minutes is not None and age_minutes > policy.max_age_minutes:
             return ["MARKET_DATA_STALE"]
-        calendar = ExchangeTradingCalendar()
         try:
-            timestamp_session = calendar.normalize(timestamp_cn)
-            reference_session = calendar.normalize(reference_cn)
+            timestamp_session = clock.trading_session(timestamp_cn)
+            reference_session = clock.trading_session(reference_cn)
         except Exception:
             # Contract validation also runs in offline/unit-test contexts before the
             # calendar table has been migrated.  Preserve China-time semantics with
