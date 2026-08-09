@@ -321,3 +321,69 @@ def test_normalizer_keeps_llm_unit_with_own_subject_and_related_entities():
 
     assert len(units) == 1
     assert units[0]["subject_key"] == "市场流动性"
+
+
+class _EmptyEntityNormalizer:
+    def extract_entities(self, text, transcript, title):
+        return []
+
+
+def test_missing_llm_entity_confidence_remains_none():
+    """§16/§17：LLM 未给 confidence 时保持 UNKNOWN（None），不得伪造 0.7。"""
+    chapter = _chapter("券商板块偏强。")
+    entities = KnowledgeUnitExtractor._normalize_llm_entities(
+        [{"entity_name": "宁德时代", "entity_type": "SECURITY", "ticker": "300750"}, "券商"],
+        chapter,
+    )
+
+    assert [entity["entity_name"] for entity in entities] == ["宁德时代", "券商"]
+    assert all(entity["confidence_score"] is None for entity in entities)
+    # 无 LLM 实体时回退 chapter 实体，同样不得伪造默认值。
+    fallback = KnowledgeUnitExtractor._normalize_llm_entities([], chapter)
+    assert fallback
+    assert all(entity["confidence_score"] is None for entity in fallback)
+    # Normalizer dedup 路径同样保持 None。
+    normalized = KnowledgeUnitNormalizer(entity_normalizer=_EmptyEntityNormalizer())._normalize_entities(
+        {"statement": "宁德时代偏强", "entities": [{"entity_name": "宁德时代", "entity_type": "SECURITY"}]},
+        {"title": ""},
+    )
+    assert normalized[0]["confidence_score"] is None
+
+
+def test_chapter_inferred_entity_confidence_remains_none():
+    """§16/§17：SchemaValidator 从 chapter 推导实体时 confidence 保持 None，不再是 0.65。"""
+    result = KnowledgeUnitSchemaValidator().validate_one(
+        {
+            "primary_domain": "MARKET",
+            "knowledge_kind": "STATE",
+            "expression_type": "AUTHOR_EXPLICIT",
+            "predicate_key": "state",
+            "statement": "券商偏强",
+            "canonical_statement": "券商偏强",
+            "evidence": [{"evidence_text": "券商偏强"}],
+        },
+        chapter={"primary_domain": "MARKET", "entities": ["券商"]},
+    )
+
+    assert result["accepted"] is True
+    assert "copied_chapter_entities" in result["repairs"]
+    assert result["unit"]["entities"]
+    assert all(entity["confidence_score"] is None for entity in result["unit"]["entities"])
+
+
+def test_zero_entity_confidence_remains_zero():
+    """§16/§17：0.0 是合法测量值，必须原样保留，不得被 `or` 吞掉变成默认值或 None。"""
+    entities = KnowledgeUnitExtractor._normalize_llm_entities(
+        [{"entity_name": "宁德时代", "entity_type": "SECURITY", "confidence_score": 0.0}],
+        _chapter("券商板块偏强。"),
+    )
+    assert entities[0]["confidence_score"] == 0.0
+
+    normalized = KnowledgeUnitNormalizer(entity_normalizer=_EmptyEntityNormalizer())._normalize_entities(
+        {
+            "statement": "宁德时代偏强",
+            "entities": [{"entity_name": "宁德时代", "entity_type": "SECURITY", "confidence_score": 0.0}],
+        },
+        {"title": ""},
+    )
+    assert normalized[0]["confidence_score"] == 0.0

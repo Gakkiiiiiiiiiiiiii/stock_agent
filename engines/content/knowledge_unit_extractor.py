@@ -266,7 +266,8 @@ class KnowledgeUnitExtractor:
                     "entity_key": str(entity),
                     "entity_name": str(entity),
                     "relation_role": "SUBJECT" if str(entity) in sentence else "RELATED",
-                    "confidence_score": 0.7,
+                    # 无测量值：confidence 保持 UNKNOWN（None），不得伪造默认值。
+                    "confidence_score": None,
                 }
             )
         return entities
@@ -301,6 +302,10 @@ class KnowledgeUnitExtractor:
                 name = str(raw.get("entity_name") or raw.get("name") or raw.get("entity_key") or raw.get("ticker") or "").strip()
                 if not name:
                     continue
+                # Missing confidence 保持 UNKNOWN：显式 None 判断，0.0 是合法值不得被吞掉。
+                confidence = raw.get("confidence_score")
+                if confidence is not None:
+                    confidence = float(confidence)
                 entities.append(
                     {
                         "entity_type": str(raw.get("entity_type") or "THEME"),
@@ -308,7 +313,7 @@ class KnowledgeUnitExtractor:
                         "entity_name": name,
                         "ticker": raw.get("ticker"),
                         "relation_role": raw.get("relation_role") or "RELATED",
-                        "confidence_score": raw.get("confidence_score") or 0.7,
+                        "confidence_score": confidence,
                     }
                 )
                 continue
@@ -320,7 +325,7 @@ class KnowledgeUnitExtractor:
                         "entity_key": name,
                         "entity_name": name,
                         "relation_role": "RELATED",
-                        "confidence_score": 0.7,
+                        "confidence_score": None,
                     }
                 )
         return entities or KnowledgeUnitExtractor._entities_from_chapter(chapter, "")

@@ -84,6 +84,18 @@ def make_handler(bridge: QmtHttpBridge):
                     ],
                     timeout=300,
                 )
+            elif path == "/financial-data":
+                result = bridge.run(
+                    "financial-data",
+                    [
+                        "--symbols", ",".join(payload.get("symbols") or []),
+                        "--tables", ",".join(payload.get("tables") or []),
+                        "--start-time", str(payload.get("start_time") or ""),
+                        "--end-time", str(payload.get("end_time") or ""),
+                        "--report-type", str(payload.get("report_type") or "announce_time"),
+                    ],
+                    timeout=300,
+                )
             else:
                 result = {"ok": False, "error": "not found"}
             self._json(result, status=200 if result.get("ok") else 500)

@@ -28,9 +28,11 @@ from engines.content.financial_numeric import (
     parse_financial_numerics,
 )
 from engines.content.knowledge_enums import HIGH_RISK_KINDS
+from engines.content.semantic_entailment_judge import INFRA_FAILURE_REASONS
 
 # Stage B 语义裁判签名：输入 claim/evidence/structured_checks，
-# 输出 {"label": SUPPORTED|CONTRADICTED|NOT_ENOUGH_EVIDENCE, "score": float, "reason_codes": list}。
+# 输出 {"label": SUPPORTED|CONTRADICTED|NOT_ENOUGH_EVIDENCE, "score": float, "reason_codes": list}，
+# 可附带 provider/model/version 元数据（用于 Verification Ledger 入账）。
 JudgeFn = Callable[[dict[str, Any]], dict[str, Any]]
 
 HARD_CHECKS: tuple[str, ...] = (
@@ -137,8 +139,9 @@ class ClaimEvidenceVerifier:
         threshold = self.high_risk_threshold if high_risk else self.default_threshold
         status = "SOURCE_SUPPORTED" if not hard_failed and score >= threshold else "NEEDS_REVIEW"
 
+        judge_meta: dict[str, Any] | None = None
         if self.judge is not None:
-            status, reasons = self._apply_judge(
+            status, reasons, judge_meta = self._apply_judge(
                 claim=claim,
                 source=source,
                 checks=checks,
@@ -148,7 +151,11 @@ class ClaimEvidenceVerifier:
                 threshold=threshold,
             )
 
-        return self._result(status, score, reasons, checks)
+        result = self._result(status, score, reasons, checks)
+        if judge_meta is not None:
+            # judge 元数据随 verification 流出，供 Verification Ledger 入账（§4 验收）。
+            result["judge"] = judge_meta
+        return result
 
     # ------------------------------------------------------------------
     # Stage B
@@ -163,22 +170,33 @@ class ClaimEvidenceVerifier:
         reasons: list[str],
         hard_failed: bool,
         threshold: float,
-    ) -> tuple[str, list[str]]:
+    ) -> tuple[str, list[str], dict[str, Any]]:
         verdict = self.judge({"claim": claim, "evidence": source, "structured_checks": dict(checks)}) or {}
         label = str(verdict.get("label") or "").upper()
+        reason_codes = list(verdict.get("reason_codes") or [])
         checks["judge"] = {
             "label": label or None,
             "score": verdict.get("score"),
-            "reason_codes": list(verdict.get("reason_codes") or []),
+            "reason_codes": reason_codes,
+        }
+        judge_meta = {
+            "provider": verdict.get("provider"),
+            "model": verdict.get("model"),
+            "version": verdict.get("version"),
+            "label": label or None,
+            "score": verdict.get("score"),
         }
         if label == "CONTRADICTED":
             reasons.append("JUDGE_CONTRADICTED")
-            return ("NEEDS_REVIEW" if status == "SOURCE_SUPPORTED" else status), reasons
+            return ("NEEDS_REVIEW" if status == "SOURCE_SUPPORTED" else status), reasons, judge_meta
         if label == "NOT_ENOUGH_EVIDENCE":
+            if INFRA_FAILURE_REASONS & set(reason_codes):
+                # 裁判自身失效（不可用/调用异常/非法输出）不等于证据不足：弃权，不降级。
+                return status, reasons, judge_meta
             if status == "SOURCE_SUPPORTED":
                 reasons.append("JUDGE_NOT_ENOUGH_EVIDENCE")
-                return "NEEDS_REVIEW", reasons
-            return status, reasons
+                return "NEEDS_REVIEW", reasons, judge_meta
+            return status, reasons, judge_meta
         if label == "SUPPORTED" and not hard_failed and status != "SOURCE_SUPPORTED":
             # Stage A 无硬失败时才允许 judge 升级；硬失败不可被覆盖（§16.2）。
             try:
@@ -186,8 +204,8 @@ class ClaimEvidenceVerifier:
             except (TypeError, ValueError):
                 judge_score = 0.0
             if judge_score >= threshold:
-                return "SOURCE_SUPPORTED", reasons
-        return status, reasons
+                return "SOURCE_SUPPORTED", reasons, judge_meta
+        return status, reasons, judge_meta
 
     # ------------------------------------------------------------------
     # Stage A slot checks

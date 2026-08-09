@@ -18,8 +18,11 @@ FILING_PREDICATES = {
 class FilingVerificationProvider:
     """公告/披露事实验证 Provider（§26：FACT → predicate-based routing）。
 
-    占位实现：supports() 路由逻辑完整；verify() 暂返回 NOT_FOUND，
-    待接入公告数据源（交易所披露 / 巨潮）后填充。
+    项目当前没有公告/披露数据源（交易所披露 / 巨潮均未接入），按设计文档
+    §6.3 选项二明确标记为不支持：verify() 恒返回 NOT_FOUND +
+    reason=EXTERNAL_VERIFICATION_NOT_SUPPORTED。ExternalFactVerifier 因此只会把
+    公告类 unit 置为 truth_status=NOT_FOUND，永远不会进入 EXTERNALLY_VERIFIED，
+    factual_qa（要求 EXTERNALLY_VERIFIED）不会用视频知识回答此类事实。
     """
 
     def supports(self, unit: dict[str, Any]) -> bool:
@@ -33,5 +36,5 @@ class FilingVerificationProvider:
             source_type="OFFICIAL_FILING",
             provider="filing",
             source_id=extract_ticker(unit),
-            reason="DATA_SOURCE_NOT_CONNECTED",
+            reason="EXTERNAL_VERIFICATION_NOT_SUPPORTED",
         )

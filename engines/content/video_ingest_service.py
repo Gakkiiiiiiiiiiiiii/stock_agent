@@ -20,6 +20,7 @@ from engines.content.external_verification.factory import build_default_provider
 from engines.content.cross_modal_evidence_verifier import CrossModalEvidenceVerifier
 from engines.content.cross_video_corroboration import CrossVideoCorroboration
 from engines.content.chapter_segmenter import ChapterSegmenter
+from engines.content.claim_evidence_verifier import ClaimEvidenceVerifier
 from engines.content.knowledge_conflict_resolver import KnowledgeConflictResolver
 from engines.content.knowledge_deduplicator import KnowledgeDeduplicator
 from engines.content.knowledge_enums import HIGH_RISK_KINDS, SupportStatus, TruthStatus
@@ -29,6 +30,7 @@ from engines.content.knowledge_unit_extractor import KnowledgeUnitExtractor
 from engines.content.knowledge_unit_normalizer import KnowledgeUnitNormalizer
 from engines.content.multimodal_context_builder import MultimodalContextBuilder
 from engines.content.semantic_chunker import SemanticChunker
+from engines.content.semantic_entailment_judge import SemanticEntailmentJudge
 from engines.content.temporal_window_builder import TemporalWindowBuilder
 from engines.content.video_analysis_document_generator import VideoAnalysisDocumentGenerator
 from engines.content.video_frame_extractor import VideoFrameExtractor
@@ -103,7 +105,16 @@ class VideoIngestService:
         self.temporal_window_builder = TemporalWindowBuilder()
         self.chapter_segmenter = ChapterSegmenter()
         self.knowledge_extractor = KnowledgeUnitExtractor()
-        self.knowledge_normalizer = KnowledgeUnitNormalizer(entity_normalizer=self.entity_normalizer)
+        # §4 剩余项一：Stage B 语义裁判接入生产链路。VIDEO_SEMANTIC_JUDGE=0 时
+        # 退回无 judge 的纯 Stage A 模式（无 LLM 环境降级）；judge 自身在模型
+        # 不可用时也会安全降级为弃权，不伪报 SUPPORTED。
+        semantic_judge = None
+        if os.getenv("VIDEO_SEMANTIC_JUDGE", "1").strip().lower() not in {"0", "false", "off"}:
+            semantic_judge = SemanticEntailmentJudge(model_client=self.knowledge_extractor.model_client)
+        self.knowledge_normalizer = KnowledgeUnitNormalizer(
+            entity_normalizer=self.entity_normalizer,
+            verifier=ClaimEvidenceVerifier(judge=semantic_judge),
+        )
         self.knowledge_temporal_policy = KnowledgeTemporalPolicy()
         self.knowledge_deduplicator = KnowledgeDeduplicator()
         self.knowledge_conflict_resolver = KnowledgeConflictResolver()

@@ -17,6 +17,7 @@ DEFAULT_QUANT_ROOT = PROJECT_ROOT.parent / "quant"
 BRIDGE_TIMEOUT_SECONDS = 30
 HISTORY_TIMEOUT_SECONDS = 300
 INDUSTRY_MAP_TIMEOUT_SECONDS = 300
+FINANCIAL_DATA_TIMEOUT_SECONDS = 300
 
 logger = logging.getLogger(__name__)
 
@@ -153,6 +154,55 @@ class QmtBridgeClient:
             timeout_seconds=HISTORY_TIMEOUT_SECONDS,
         )
         return payload.get("rows", []) or []
+
+    def get_financial_data(
+        self,
+        symbols: list[str],
+        tables: list[str],
+        start_date: str | None = None,
+        end_date: str | None = None,
+        report_type: str = "announce_time",
+    ) -> dict[str, Any]:
+        """获取财务数据（对应桥脚本 financial-data 命令）。
+
+        返回 {symbol: {table: [row dict, ...]}}；表名如 PershareIndex/Income/
+        Balance/Capital，行内日期字段（m_anntime/m_timetag）为 %Y%m%d 字符串。
+        """
+        if not symbols or not tables:
+            return {}
+        if self.base_url:
+            try:
+                payload = self._http_post(
+                    "financial-data",
+                    {
+                        "symbols": symbols,
+                        "tables": tables,
+                        "start_time": start_date or "",
+                        "end_time": end_date or "",
+                        "report_type": report_type,
+                    },
+                    timeout_seconds=FINANCIAL_DATA_TIMEOUT_SECONDS,
+                )
+                return payload.get("data", {}) or {}
+            except QmtBridgeError as exc:
+                if not self._http_fallback_enabled():
+                    raise
+                logger.warning("QMT HTTP bridge financial-data failed; fallback to direct bridge: %s", exc)
+        payload = self._run(
+            "financial-data",
+            "--symbols",
+            ",".join(symbols),
+            "--tables",
+            ",".join(tables),
+            "--start-time",
+            start_date or "",
+            "--end-time",
+            end_date or "",
+            "--report-type",
+            report_type,
+            timeout_seconds=FINANCIAL_DATA_TIMEOUT_SECONDS,
+        )
+        return payload.get("data", {}) or {}
 
     def _http_get(self, path: str, timeout_seconds: int = BRIDGE_TIMEOUT_SECONDS) -> dict[str, Any]:
         try:

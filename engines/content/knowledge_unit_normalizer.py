@@ -252,6 +252,10 @@ class KnowledgeUnitNormalizer:
         raw_entities = list(unit.get("entities") or [])
         extracted = self.entity_normalizer.extract_entities(text, "", metadata.get("title") or "")
         for entity in extracted:
+            # Missing confidence 保持 UNKNOWN（None），0.0 原样保留。
+            confidence = entity.get("confidence_score")
+            if confidence is not None:
+                confidence = float(confidence)
             raw_entities.append(
                 {
                     "entity_type": entity.get("entity_type") or "UNKNOWN",
@@ -259,7 +263,7 @@ class KnowledgeUnitNormalizer:
                     "entity_name": entity.get("name") or entity.get("ticker") or "UNKNOWN",
                     "ticker": entity.get("ticker"),
                     "relation_role": "SUBJECT",
-                    "confidence_score": entity.get("confidence_score") or 0.7,
+                    "confidence_score": confidence,
                 }
             )
         deduped: dict[tuple[str, str], dict] = {}
@@ -269,13 +273,17 @@ class KnowledgeUnitNormalizer:
                 continue
             entity_type = str(entity.get("entity_type") or "UNKNOWN")
             key = str(entity.get("entity_key") or entity.get("ticker") or name)
+            confidence = entity.get("confidence_score")
+            if confidence is not None:
+                confidence = float(confidence)
             deduped[(entity_type, key)] = {
                 "entity_type": entity_type,
                 "entity_key": key,
                 "entity_name": name,
                 "ticker": entity.get("ticker"),
                 "relation_role": entity.get("relation_role") or "RELATED",
-                "confidence_score": entity.get("confidence_score") or 0.7,
+                # Missing confidence 保持 UNKNOWN（None），0.0 原样保留。
+                "confidence_score": confidence,
             }
         return list(deduped.values())[:12]
 

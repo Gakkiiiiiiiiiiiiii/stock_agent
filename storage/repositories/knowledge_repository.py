@@ -338,6 +338,17 @@ class KnowledgeRepository:
             score = result.get("score")
             if score is None:
                 score = result.get("support_probability")
+            provider = result.get("provider") or default_provider
+            model = result.get("model") or result.get("verifier_model")
+            version = result.get("version") or result.get("verifier_version") or default_version
+            if key == "verification":
+                # §4：注入 Semantic Entailment Judge 后，ledger 行记录真实 judge 的
+                # provider/model/version；无 judge 元数据时保持 deterministic/v1。
+                judge_meta = result.get("judge")
+                if isinstance(judge_meta, dict):
+                    provider = judge_meta.get("provider") or provider
+                    model = judge_meta.get("model") or model
+                    version = judge_meta.get("version") or version
             self.append_verification(
                 unit_id,
                 verifier_type,
@@ -346,9 +357,9 @@ class KnowledgeRepository:
                 checks=result.get("checks"),
                 reason_codes=result.get("reason_codes"),
                 detail=result,
-                provider=result.get("provider") or default_provider,
-                model=result.get("model") or result.get("verifier_model"),
-                version=result.get("version") or result.get("verifier_version") or default_version,
+                provider=provider,
+                model=model,
+                version=version,
                 evidence_id=result.get("evidence_id"),
                 provenance=self._verification_provenance(result),
                 session=session,

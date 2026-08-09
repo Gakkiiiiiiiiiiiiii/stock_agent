@@ -9,22 +9,24 @@ from engines.content.external_verification.base import claim_numbers, extract_ti
 
 logger = logging.getLogger(__name__)
 
-# 价格/估值类 predicate（§26：PRICE_LEVEL → market data；FACT → predicate 路由）。
+# 价格类 predicate（§26/§6.1：PRICE_LEVEL → market data；FACT → predicate 路由）。
+# 仅保留能用最新收盘价真实验证的谓词；target_price 是预测、market_cap 需要股本，
+# close 验证不了，交由其它 provider 或落 NOT_FOUND。
 PRICE_PREDICATES = {
     "price_level",
     "price",
     "latest_price",
     "close_price",
-    "target_price",
     "support_level",
     "resistance_level",
-    "market_cap",
 }
-MARKET_KINDS = {"PRICE_LEVEL", "VALUATION"}
+# §6.1：market provider 只处理真实行情字段，VALUATION 改由 fundamental provider 处理，
+# 避免 "PE 约 20 倍" 被拿去和 close（如 300 元）比对的误判。
+MARKET_KINDS = {"PRICE_LEVEL"}
 
 
 class MarketDataVerificationProvider:
-    """用项目现有行情设施（engines.market.data_provider）核对价格/估值类 claim。
+    """用项目现有行情设施（engines.market.data_provider）核对价格类 claim。
 
     - 行情客户端惰性加载：worker 环境若 QMT 桥不可用，verify() 返回 ERROR（不静默 MATCH）。
     - 测试可注入 fake 客户端（实现 get_kline(symbol) -> 带 records 的对象/dict）。

@@ -3,6 +3,11 @@ name: unit-tests
 on:
   push:
   pull_request:
+  # §14 真实 gate 不适合每个 PR 跑，改为手动 / nightly 触发
+  workflow_dispatch:
+  schedule:
+    # nightly 03:00 CST（19:00 UTC 前一天）
+    - cron: "0 19 * * *"
 
 jobs:
   pytest:
@@ -94,3 +99,36 @@ jobs:
         with:
           name: video-accuracy-report
           path: artifacts/video_accuracy/report.json
+
+  video-accuracy-real-gate:
+    # §14：真实 Golden Dataset accuracy gate，仅 workflow_dispatch / nightly 触发，不阻塞 PR。
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Check real golden inputs
+        id: golden
+        run: |
+          if [ -f evaluation/video_accuracy/golden_annotations.jsonl ] && [ -f artifacts/video_accuracy/real_system_export.json ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Skip when real golden data is not ready
+        if: steps.golden.outputs.available != 'true'
+        run: |
+          echo "::notice::golden_annotations.jsonl / real_system_export.json 尚不存在：真实 50 视频人工标注集未完成，跳过真实 accuracy gate（不视为失败）。"
+      - name: Run real accuracy benchmark gate
+        if: steps.golden.outputs.available == 'true'
+        run: python -m evaluation.video_accuracy.benchmark --dataset evaluation/video_accuracy/golden_annotations.jsonl --system artifacts/video_accuracy/real_system_export.json --output artifacts/video_accuracy/real_report.json
+      - uses: actions/upload-artifact@v4
+        if: steps.golden.outputs.available == 'true'
+        with:
+          name: video-accuracy-real-report
+          path: artifacts/video_accuracy/real_report.json

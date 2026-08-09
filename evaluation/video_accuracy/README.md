@@ -85,10 +85,48 @@ SOURCE_SUPPORTED precision ≥99%、unsupported rate <1%、critical 类 =0、ECE
 
 ## CI 接入
 
-`.github/workflows/test.yml` 的 `video-accuracy-gate` job 用合成样本跑冒烟评测并
-启用门禁（合成数据与导出完全对齐，应恒为 PASS；FAIL 说明 benchmark/门禁逻辑被破坏）。
-真实 50~100 视频标注集落地后，把 `--dataset` / `--system` 换成真实路径即可，
-门禁阈值无需改动。
+`.github/workflows/test.yml` 包含两个 video accuracy job：
+
+- `video-accuracy-gate`（每个 PR / push）：用合成样本跑冒烟评测并启用门禁
+  （合成数据与导出完全对齐，应恒为 PASS；FAIL 说明 benchmark/门禁逻辑被破坏）。
+- `video-accuracy-real-gate`（§14，真实 Gate）：只在 `workflow_dispatch`（手动）
+  或 nightly schedule 触发，不阻塞 PR。数据文件未就绪时 job 打印 notice 并
+  **明确 skip（不视为失败）**；文件存在时严格执行 §86 门禁，benchmark exit 非 0
+  即 job 失败。
+
+### 真实 Gate 数据放置路径
+
+| 文件 | 路径 | 来源 |
+|---|---|---|
+| 真实标注集 | `evaluation/video_accuracy/golden_annotations.jsonl` | 人工标注（50 个真实视频，§10 类型分配） |
+| 真实系统导出 | `artifacts/video_accuracy/real_system_export.json` | 导出脚本生成后提交仓库（该目录未被 gitignore） |
+| 真实评测报告 | `artifacts/video_accuracy/real_report.json` | CI 产出（artifact） |
+
+### 真实系统导出脚本（§11）
+
+`system_export` 禁止人工构造，必须由导出脚本从 KnowledgeRepository 读取真实
+pipeline 产物生成：
+
+```bash
+# video_id 为知识库整数 ID（与 golden_annotations.jsonl 中的 video_id 字符串一一对应）
+python -m scripts.export_video_accuracy_system_result \
+  --video-ids 101 102 103 \
+  --output artifacts/video_accuracy/real_system_export.json
+
+# 或用文件逐行提供 video_id（# 开头为注释）
+python -m scripts.export_video_accuracy_system_result \
+  --video-ids-file video_ids.txt
+
+# 本地复现真实 gate（与 CI 同一命令）
+python -m evaluation.video_accuracy.benchmark \
+  --dataset evaluation/video_accuracy/golden_annotations.jsonl \
+  --system artifacts/video_accuracy/real_system_export.json \
+  --output artifacts/video_accuracy/real_report.json
+```
+
+导出格式即 benchmark 消费契约：`{"videos": [{"video_id": "...", "units": [...]}]}`，
+unit 为 `KnowledgeRepository.list_units_for_video` 的序列化 dict。门禁阈值与
+synthetic smoke 完全一致，无需改动。
 
 ## Calibration（P2-3）
 

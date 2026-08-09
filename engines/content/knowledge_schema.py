@@ -121,7 +121,8 @@ class KnowledgeUnitSchemaValidator:
                     "entity_key": str(entity),
                     "entity_name": str(entity),
                     "relation_role": "SUBJECT",
-                    "confidence_score": 0.65,
+                    # chapter 推导实体无测量置信度：保持 UNKNOWN（None），禁止伪造 0.65。
+                    "confidence_score": None,
                 }
                 for entity in (chapter or {}).get("entities") or []
             ]
