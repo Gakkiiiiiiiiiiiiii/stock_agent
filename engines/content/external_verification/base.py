@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date, datetime
 from typing import Any, Protocol
 
 # ExternalVerificationResult dict 约定（§25）：
@@ -74,6 +75,35 @@ def extract_ticker(unit: dict[str, Any]) -> str | None:
     return match.group(0) if match else None
 
 
+def claim_as_of(unit: dict[str, Any]) -> date | None:
+    """解析 unit.as_of_time 为 date；无法解析返回 None（§6.1）。
+
+    支持 datetime / date / "%Y%m%d" / ISO 字符串（含 "Z" 后缀）。
+    """
+    value = unit.get("as_of_time")
+
+    if value is None:
+        return None
+
+    if isinstance(value, datetime):
+        return value.date()
+
+    if isinstance(value, date):
+        return value
+
+    text = str(value).strip()
+
+    if len(text) == 8 and text.isdigit():
+        return datetime.strptime(text, "%Y%m%d").date()
+
+    try:
+        return datetime.fromisoformat(
+            text.replace("Z", "+00:00")
+        ).date()
+    except ValueError:
+        return None
+
+
 def claim_numbers(text: str) -> list[float]:
     """解析 claim 中的数值；优先使用 financial_numeric（P1-1），缺失时退回 regex。"""
     try:
@@ -81,10 +111,15 @@ def claim_numbers(text: str) -> list[float]:
 
         values: list[float] = []
         for item in parse_financial_numerics(text):
-            if isinstance(item, dict) and item.get("value") is not None:
-                values.append(float(item["value"]))
-            elif isinstance(item, (int, float)):
-                values.append(float(item))
+            # §9：FinancialNumericValue dataclass 必须通过 .value 读取，
+            # 否则结构化结果被忽略、落 regex fallback（中文数字丢失、可能抓到 6 位代码）。
+            value = getattr(item, "value", None)
+            if value is None and isinstance(item, dict):
+                value = item.get("value")
+            elif value is None and isinstance(item, (int, float)):
+                value = item
+            if value is not None:
+                values.append(float(value))
         if values:
             return values
     except ImportError:

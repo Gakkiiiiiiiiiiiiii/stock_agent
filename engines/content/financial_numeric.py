@@ -196,14 +196,15 @@ def parse_financial_numerics(text: str) -> list[FinancialNumericValue]:
 
     def cn_point(number: float, suffix: str | None) -> FinancialNumericValue:
         if suffix == "成":
-            return FinancialNumericValue(raw_expression="", value=number / 10.0, unit="PERCENT")
+            # §8.2：与 "20%" -> 20.0 PERCENT 同尺度（percentage points），一成=10、两成=20。
+            return FinancialNumericValue(raw_expression="", value=number * 10.0, unit="PERCENT")
         return FinancialNumericValue(raw_expression="", value=number, unit=_UNIT_BY_SUFFIX.get(suffix or ""))
 
     def range_value(base: float, step: float, suffix: str | None) -> FinancialNumericValue:
         min_value, max_value = base, base + step - 1
         unit = _UNIT_BY_SUFFIX.get(suffix or "")
         if suffix == "成":
-            min_value, max_value, unit = min_value / 10.0, max_value / 10.0, "PERCENT"
+            min_value, max_value, unit = min_value * 10.0, max_value * 10.0, "PERCENT"
         return FinancialNumericValue(
             raw_expression="",
             min_value=min_value,

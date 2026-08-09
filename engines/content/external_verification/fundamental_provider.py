@@ -3,9 +3,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+from datetime import date
 from typing import Any
 
-from engines.content.external_verification.base import claim_numbers, extract_ticker, make_result
+from engines.content.external_verification.base import claim_as_of, claim_numbers, extract_ticker, make_result
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,17 @@ def _latest_with_field(rows: list[dict[str, Any]], candidates: tuple[str, ...]) 
     return None
 
 
+def _announced_by(rows: list[dict[str, Any]], as_of_tag: str) -> list[dict[str, Any]]:
+    """剔除公告日晚于 claim as_of 的报告（§6.4：视频发布后才披露的财报不得使用）。"""
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        announce = _announce_tag(row)
+        if len(announce) >= 8 and announce[:8] > as_of_tag:
+            continue
+        kept.append(row)
+    return kept
+
+
 def _prior_year_row(rows: list[dict[str, Any]], reference_tag: str, candidates: tuple[str, ...]) -> tuple[dict[str, Any], float] | None:
     """找上一年同报告期的行（如 20241231 → 20231231）。"""
     if len(reference_tag) < 8:
@@ -117,7 +129,9 @@ class FundamentalVerificationProvider:
     """基本面/财务指标验证 Provider（§26：FINANCIAL_METRIC/VALUATION → fundamental data）。
 
     数据源为项目现有 QMT 桥 financial-data 命令（xtquant 财务表）：
-    - PE/PB/PS 由最新收盘价 + 每股指标计算（close 经 QmtMarketDataProvider.get_kline）；
+    - 财报侧只使用公告日 <= claim as_of_time 的报告（end_date=as_of, report_type=announce_time）；
+    - PE/PB/PS 由 <= as_of 的收盘价 + <= as_of 公告的每股指标计算（close 经 get_kline 时点过滤），
+      任一侧拿不到即 NOT_FOUND，禁止「历史财报 + 当前股价」混搭；
     - EPS/REVENUE/PROFIT/GROSS_MARGIN/NET_MARGIN/ROE 直接取数或由报表字段计算；
     - 增长类 claim（净利润同比增长20%）按上一年同报告期算同比增速比对，
       拿不到上期数据返回 NOT_FOUND 并注明，绝不静默 MATCH。
@@ -161,6 +175,17 @@ class FundamentalVerificationProvider:
             return make_result(
                 "NOT_FOUND", source_type="FUNDAMENTAL", provider="fundamental", source_id=ticker, reason="METRIC_NOT_RECOGNIZED"
             )
+        # §6.3：VALUATION/FINANCIAL_METRIC 属时点敏感类型，缺失 as_of_time 时不得默认用今天。
+        as_of = claim_as_of(unit)
+        if as_of is None:
+            return make_result(
+                "NOT_FOUND",
+                source_type="FUNDAMENTAL",
+                provider="fundamental",
+                source_id=ticker,
+                reason="AS_OF_TIME_MISSING",
+                provenance={"metric": metric, "claim_as_of": None},
+            )
         claim = self._claim_value(unit, metric)
         if claim is None:
             return make_result(
@@ -175,7 +200,7 @@ class FundamentalVerificationProvider:
         )
 
         try:
-            tables_map = self._fetch_tables(ticker)
+            tables_map = self._fetch_tables(ticker, as_of=as_of)
         except Exception as exc:  # worker 环境优雅降级，绝不把不可用当 MATCH
             logger.warning("财务数据获取失败 ticker=%s metric=%s: %s", ticker, metric, exc)
             return make_result(
@@ -190,17 +215,20 @@ class FundamentalVerificationProvider:
             return make_result(
                 "NOT_FOUND", source_type="FUNDAMENTAL", provider="fundamental", source_id=ticker, reason="NO_FUNDAMENTAL_DATA"
             )
+        # §6.4：公告日晚于 claim as_of 的报告一律剔除（增长类两期同样受限）。
+        as_of_tag = as_of.strftime("%Y%m%d")
+        tables_map = {table: _announced_by(rows, as_of_tag) for table, rows in tables_map.items()}
 
-        observed, result_unit, as_of, miss_reason, extra = self._compute_observed(ticker, metric, tables_map, is_growth)
+        observed, result_unit, result_as_of, miss_reason, extra = self._compute_observed(ticker, metric, tables_map, is_growth, as_of)
         if observed is None:
             return make_result(
                 "NOT_FOUND",
                 source_type="FUNDAMENTAL",
                 provider="fundamental",
                 source_id=ticker,
-                as_of=as_of,
+                as_of=result_as_of,
                 reason=miss_reason or "METRIC_NOT_COMPUTABLE",
-                provenance={"metric": metric, **extra},
+                provenance={"metric": metric, "claim_as_of": as_of.isoformat(), **extra},
             )
 
         # 金额类 claim 按 claim 单位换算观测值（元 → 亿/万）。
@@ -216,7 +244,7 @@ class FundamentalVerificationProvider:
             source_type="FUNDAMENTAL",
             provider="fundamental",
             source_id=ticker,
-            as_of=as_of,
+            as_of=result_as_of,
             observed_value=round(observed, 6),
             unit=result_unit,
             provenance={
@@ -225,6 +253,8 @@ class FundamentalVerificationProvider:
                 "claim_unit": claim_unit,
                 "is_growth": is_growth,
                 "tolerance": self.tolerance,
+                "claim_as_of": as_of.isoformat(),
+                "external_data_as_of": result_as_of,
                 **extra,
             },
         )
@@ -297,11 +327,16 @@ class FundamentalVerificationProvider:
         self._market_client = get_market_data_provider()
         return self._market_client
 
-    def _fetch_tables(self, ticker: str) -> dict[str, list[dict[str, Any]]]:
+    def _fetch_tables(self, ticker: str, as_of: date | None = None) -> dict[str, list[dict[str, Any]]]:
         from engines.market.data_provider import to_qmt_symbol
 
         symbol = to_qmt_symbol(ticker)
-        data = self._bridge().get_financial_data([symbol], list(FINANCIAL_TABLES)) or {}
+        data = self._bridge().get_financial_data(
+            [symbol],
+            list(FINANCIAL_TABLES),
+            end_date=as_of.strftime("%Y%m%d") if as_of is not None else None,
+            report_type="announce_time",
+        ) or {}
         table_map = data.get(symbol) or data.get(ticker) or {}
         return {str(table): list(rows or []) for table, rows in table_map.items()}
 
@@ -311,10 +346,11 @@ class FundamentalVerificationProvider:
                 return rows
         return []
 
-    def _latest_close(self, ticker: str) -> tuple[float | None, str | None]:
+    def _latest_close(self, ticker: str, as_of: date | None = None) -> tuple[float | None, str | None]:
         from engines.content.external_verification.market_data_provider import MarketDataVerificationProvider
 
-        return MarketDataVerificationProvider._latest_close(self._market(), ticker)
+        # §6.5：PE/PB/PS 价格侧必须使用 <= as_of 的收盘价，禁止「历史财报 + 当前股价」混搭。
+        return MarketDataVerificationProvider._latest_close(self._market(), ticker, as_of=as_of)
 
     def _compute_observed(
         self,
@@ -322,6 +358,7 @@ class FundamentalVerificationProvider:
         metric: str,
         tables_map: dict[str, list[dict[str, Any]]],
         is_growth: bool,
+        as_of: date | None = None,
     ) -> tuple[float | None, str | None, str | None, str | None, dict[str, Any]]:
         """返回 (observed, unit, as_of, miss_reason, extra_provenance)。"""
         income_rows = self._table(tables_map, "Income")
@@ -351,7 +388,7 @@ class FundamentalVerificationProvider:
             return eps, "CNY", _announce_tag(row) or _report_tag(row) or None, None, {}
 
         if metric in {"PE", "PB", "PS"}:
-            close, close_as_of = self._latest_close(ticker)
+            close, close_as_of = self._latest_close(ticker, as_of=as_of)
             if close is None or close <= 0:
                 return None, None, None, "NO_MARKET_DATA", {}
             if metric == "PE":

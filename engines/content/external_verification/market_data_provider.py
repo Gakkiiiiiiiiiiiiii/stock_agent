@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timedelta
 from typing import Any
 
-from engines.content.external_verification.base import claim_numbers, extract_ticker, make_result
+from engines.content.external_verification.base import claim_as_of, extract_ticker, make_result
 
 logger = logging.getLogger(__name__)
 
@@ -57,28 +57,66 @@ class MarketDataVerificationProvider:
         ticker = extract_ticker(unit)
         if ticker is None:
             return make_result("NOT_FOUND", source_type="MARKET_DATA", provider="market_data", reason="NO_TICKER")
-        numbers = claim_numbers(str(unit.get("statement") or ""))
+        # §6.3：PRICE_LEVEL 属时点敏感类型，缺失 as_of_time 时不得默认用今天。
+        as_of = claim_as_of(unit)
+        if as_of is None:
+            return make_result(
+                "NOT_FOUND",
+                source_type="MARKET_DATA",
+                provider="market_data",
+                source_id=ticker,
+                reason="AS_OF_TIME_MISSING",
+                provenance={"claim_as_of": None},
+            )
+        # §9.2：价格验证只比较结构化解析中单位为元（CNY）的数值，
+        # 股票代码 / PE / 百分比不会被误当成股价。
+        numbers = self._price_values(str(unit.get("statement") or ""))
         if not numbers:
             return make_result("NOT_FOUND", source_type="MARKET_DATA", provider="market_data", source_id=ticker, reason="NO_CLAIM_NUMBER")
         try:
             client = self._client()
-            close, as_of = self._latest_close(client, ticker)
+            close, observed_as_of = self._latest_close(client, ticker, as_of=as_of)
         except Exception as exc:  # worker 环境优雅降级，绝不把不可用当 MATCH
             logger.warning("行情数据获取失败 ticker=%s: %s", ticker, exc)
             return make_result("ERROR", source_type="MARKET_DATA", provider="market_data", source_id=ticker, reason="MARKET_DATA_UNAVAILABLE", provenance={"error": str(exc)})
         if close is None or close <= 0:
-            return make_result("NOT_FOUND", source_type="MARKET_DATA", provider="market_data", source_id=ticker, reason="NO_MARKET_DATA")
+            return make_result(
+                "NOT_FOUND",
+                source_type="MARKET_DATA",
+                provider="market_data",
+                source_id=ticker,
+                reason="NO_MARKET_DATA",
+                provenance={"claim_as_of": as_of.isoformat()},
+            )
         matched = any(abs(number - close) <= self.tolerance * close for number in numbers)
         return make_result(
             "MATCH" if matched else "CONFLICT",
             source_type="MARKET_DATA",
             provider="market_data",
             source_id=ticker,
-            as_of=as_of,
+            as_of=observed_as_of,
             observed_value=close,
             unit="CNY",
-            provenance={"claim_values": numbers, "tolerance": self.tolerance},
+            provenance={
+                "claim_values": numbers,
+                "tolerance": self.tolerance,
+                "claim_as_of": as_of.isoformat(),
+                "external_data_as_of": observed_as_of,
+            },
         )
+
+    @staticmethod
+    def _price_values(statement: str) -> list[float]:
+        """statement 中单位为元的价格数值（"三十元" -> 30.0 CNY）。"""
+        try:
+            from engines.content.financial_numeric import parse_financial_numerics
+        except ImportError:
+            return []
+        return [
+            float(item.value)
+            for item in parse_financial_numerics(statement)
+            if item.value is not None and item.unit == "CNY"
+        ]
 
     def _client(self) -> Any:
         if self._market_client is not None:
@@ -90,12 +128,20 @@ class MarketDataVerificationProvider:
         return self._market_client
 
     @staticmethod
-    def _latest_close(client: Any, ticker: str) -> tuple[float | None, str | None]:
-        response = client.get_kline(ticker)
+    def _latest_close(client: Any, ticker: str, as_of: date | None = None) -> tuple[float | None, str | None]:
+        """取不晚于 as_of 的最后一个交易日收盘价；as_of 为 None 时取最新记录。"""
+        start = as_of - timedelta(days=10) if as_of is not None else None
+        response = client.get_kline(ticker, start_date=start, end_date=as_of)
         records = response.get("records") if isinstance(response, dict) else getattr(response, "records", [])
         records = list(records or [])
         if not records:
             return None, None
+        if as_of is not None:
+            # §6.2：只使用 record.date <= as_of 的交易日，未来行情不得参与核验。
+            records = [record for record in records if (day := _record_date(record)) is not None and day <= as_of]
+            if not records:
+                return None, None
+            records.sort(key=_record_date)
         last = records[-1]
         if isinstance(last, dict):
             close = last.get("close")
@@ -105,5 +151,25 @@ class MarketDataVerificationProvider:
             day = getattr(last, "date", None)
         if close is None:
             return None, None
-        as_of = day.isoformat() if isinstance(day, date) else (str(day) if day else None)
-        return float(close), as_of
+        as_of_str = day.isoformat() if isinstance(day, date) else (str(day) if day else None)
+        return float(close), as_of_str
+
+
+def _record_date(record: Any) -> date | None:
+    if isinstance(record, dict):
+        raw = record.get("date") or record.get("trading_date")
+    else:
+        raw = getattr(record, "date", None)
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    text = str(raw).strip()
+    try:
+        if len(text) == 8 and text.isdigit():
+            return datetime.strptime(text, "%Y%m%d").date()
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
+    except ValueError:
+        return None

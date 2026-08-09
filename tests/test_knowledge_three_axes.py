@@ -179,7 +179,7 @@ class _FakeMarketClient:
     def __init__(self, records) -> None:
         self._records = records
 
-    def get_kline(self, symbol: str):
+    def get_kline(self, symbol: str, start_date=None, end_date=None, **kwargs):
         return {"records": self._records}
 
 
@@ -188,6 +188,7 @@ def _price_unit() -> dict:
         "knowledge_kind": "PRICE_LEVEL",
         "predicate_key": "price_level",
         "statement": "中信证券现价21.5元附近。",
+        "as_of_time": "2026-08-02",
         "entities": [{"entity_type": "SECURITY", "entity_key": "600030", "entity_name": "中信证券", "ticker": "600030"}],
     }
 
@@ -219,7 +220,7 @@ def test_market_data_provider_not_found_when_no_data():
 
 def test_market_data_provider_error_when_client_fails():
     class _BrokenClient:
-        def get_kline(self, symbol: str):
+        def get_kline(self, symbol: str, **kwargs):
             raise RuntimeError("bridge down")
 
     provider = MarketDataVerificationProvider(market_client=_BrokenClient())
@@ -314,6 +315,44 @@ def test_cross_modal_accepts_external_ocr_list():
     ocr = [{"source_type": "OCR", "text": "亿纬锂能 净利润同比 +120%", "score": 0.96, "start_ms": 0, "end_ms": 1000}]
     result = CrossModalEvidenceVerifier().verify_many([unit], ocr_evidence=ocr)[0]
     assert result["support_status"] == "CROSS_MODAL_SUPPORTED"
+
+
+# ---------- §12：Cross-Modal 结构化数字 Gate ----------
+
+def test_cross_modal_preserves_unit():
+    """20% vs 20倍：单位不同既不得判一致也不得判冲突（§12.4）。"""
+    unit = _cross_modal_unit(statement="亿纬锂能净利润20%。")
+    unit["evidence"] = unit["evidence"] + [_ocr_evidence("亿纬锂能 净利润20倍", 0.97)]
+    result = CrossModalEvidenceVerifier().verify_many([unit])[0]
+    assert result["support_status"] == "SOURCE_SUPPORTED"
+    assert "cross_modal_verification" not in (result.get("attributes") or {})
+
+
+def test_cross_modal_rejects_metric_mismatch():
+    """净利润增长20% vs 营收增长20%：metric 冲突，不得升级也不得判冲突。"""
+    unit = _cross_modal_unit(statement="亿纬锂能净利润增长20%。")
+    unit["evidence"] = unit["evidence"] + [_ocr_evidence("亿纬锂能 营收增长20%", 0.97)]
+    result = CrossModalEvidenceVerifier().verify_many([unit])[0]
+    assert result["support_status"] == "SOURCE_SUPPORTED"
+    assert "cross_modal_verification" not in (result.get("attributes") or {})
+
+
+def test_cross_modal_subject_only_does_not_promote():
+    """无数字 claim 仅凭主体命中不得升级 CROSS_MODAL_SUPPORTED（§11/§12.3）。"""
+    unit = _cross_modal_unit(statement="亿纬锂能盈利能力明显改善。")
+    unit["evidence"] = unit["evidence"] + [_ocr_evidence("亿纬锂能", 0.97)]
+    result = CrossModalEvidenceVerifier().verify_many([unit])[0]
+    assert result["support_status"] == "SOURCE_SUPPORTED"
+    assert "cross_modal_verification" not in (result.get("attributes") or {})
+
+
+def test_cross_modal_direction_mismatch_does_not_promote():
+    """claim 含方向词（增长）时 OCR 方向不一致（下降）不得升级（§12.3）。"""
+    unit = _cross_modal_unit(statement="亿纬锂能净利润增长20%。")
+    unit["evidence"] = unit["evidence"] + [_ocr_evidence("亿纬锂能 净利润下降20%", 0.97)]
+    result = CrossModalEvidenceVerifier().verify_many([unit])[0]
+    assert result["support_status"] == "SOURCE_SUPPORTED"
+    assert "cross_modal_verification" not in (result.get("attributes") or {})
 
 
 # ---------- P1-2：EntityResolutionTrace ----------

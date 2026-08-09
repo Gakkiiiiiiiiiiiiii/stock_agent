@@ -20,10 +20,13 @@ from engines.retrieval.knowledge_access_policy import KnowledgeAccessPolicy
 
 
 class _FakeMarketClient:
-    def __init__(self, close: float | None, as_of: str = "2026-08-08") -> None:
-        self._records = [] if close is None else [{"close": close, "date": as_of}]
+    def __init__(self, close: float | None = None, as_of: str = "2026-08-08", records: list | None = None) -> None:
+        if records is not None:
+            self._records = list(records)
+        else:
+            self._records = [] if close is None else [{"close": close, "date": as_of}]
 
-    def get_kline(self, symbol: str):
+    def get_kline(self, symbol: str, start_date=None, end_date=None, **kwargs):
         return {"records": self._records}
 
 
@@ -31,8 +34,10 @@ class _FakeBridge:
     def __init__(self, data: dict | None = None, error: Exception | None = None) -> None:
         self._data = data or {}
         self._error = error
+        self.calls: list[dict] = []
 
     def get_financial_data(self, symbols, tables, start_date=None, end_date=None, report_type="announce_time"):
+        self.calls.append({"symbols": symbols, "tables": tables, "start_date": start_date, "end_date": end_date, "report_type": report_type})
         if self._error is not None:
             raise self._error
         return self._data
@@ -46,10 +51,18 @@ def _unit(**overrides) -> dict:
         "support_status": "SOURCE_SUPPORTED",
         "verification_status": "SOURCE_SUPPORTED",
         "truth_status": "NOT_CHECKED",
+        "as_of_time": "2026-08-09",
         "entities": [{"entity_type": "SECURITY", "ticker": "300750", "entity_name": "宁德时代"}],
     }
     unit.update(overrides)
     return unit
+
+
+def _day_digits(value) -> str:
+    """把 as_of（ISO / %Y%m%d）归一成 YYYYMMDD 便于硬断言比较。"""
+    import re
+
+    return re.sub(r"\D", "", str(value or ""))[:8]
 
 
 def _pe_unit() -> dict:
@@ -245,3 +258,113 @@ def test_policy_and_filing_never_reach_externally_verified(monkeypatch):
     assert allowed == frozenset({"EXTERNALLY_VERIFIED"})
     assert policy_result["truth_status"] not in allowed
     assert filing_result["truth_status"] not in allowed
+
+
+# ---------- as_of_time 时点核验（§6.7） ----------
+
+def test_historical_price_uses_claim_as_of():
+    """历史视频（2025-01-10）必须用当时行情核验，不得拿 2026 最新价判 CONFLICT。"""
+    provider = MarketDataVerificationProvider(
+        market_client=_FakeMarketClient(records=[
+            {"close": 300.0, "date": "2026-08-08"},
+            {"close": 200.5, "date": "2025-01-09"},
+        ])
+    )
+    unit = _unit(as_of_time="2025-01-10", statement="宁德时代当前价格200元。")
+    result = provider.verify(unit)
+    assert result["status"] == "MATCH"
+    assert result["observed_value"] == 200.5
+    # 硬验收：external result.as_of <= unit.as_of_time
+    assert _day_digits(result["as_of"]) <= _day_digits(unit["as_of_time"])
+    assert result["provenance"]["claim_as_of"] == "2025-01-10"
+    assert result["provenance"]["external_data_as_of"] == "2025-01-09"
+
+
+def test_future_market_record_is_excluded():
+    """as_of 之后（未来）的 K 线记录一律排除，拿不到时点数据 -> NOT_FOUND。"""
+    provider = MarketDataVerificationProvider(
+        market_client=_FakeMarketClient(records=[{"close": 300.0, "date": "2026-08-08"}])
+    )
+    unit = _unit(as_of_time="2025-01-10", statement="宁德时代当前价格200元。")
+    result = provider.verify(unit)
+    assert result["status"] == "NOT_FOUND"
+    assert result["reason"] == "NO_MARKET_DATA"
+    assert result["status"] != "MATCH"
+
+
+def test_financial_report_announced_after_claim_as_of_is_excluded():
+    """视频发布日（2025-02-01）之后才披露的 2024 年报不得用于核验。"""
+    bridge = _FakeBridge({"300750.SZ": {"Income": [
+        {"m_timetag": "20241231", "m_anntime": "20250301", "parentnetprofit": 1.201e10},
+        {"m_timetag": "20231231", "m_anntime": "20240301", "parentnetprofit": 1.0e10},
+    ]}})
+    provider = FundamentalVerificationProvider(bridge_client=bridge)
+    unit = _unit(
+        knowledge_kind="FINANCIAL_METRIC",
+        predicate_key="profit",
+        statement="宁德时代净利润同比增长20%",
+        as_of_time="2025-02-01",
+    )
+    result = provider.verify(unit)
+    assert result["status"] == "NOT_FOUND"
+    # 2024 年报被剔除后，最新可用报告为 20231231，其上年同期缺失
+    assert result["reason"] == "NO_PRIOR_PERIOD_DATA"
+    # QMT 调用必须带 end_date=as_of + announce_time 口径
+    assert bridge.calls[0]["end_date"] == "20250201"
+    assert bridge.calls[0]["report_type"] == "announce_time"
+
+
+def test_historical_valuation_uses_same_as_of_price_and_fundamental():
+    """PE 核验：价格侧与财报侧都不得晚于 claim as_of（禁止历史财报+当前股价混搭）。"""
+    bridge_data = {"300750.SZ": {"PershareIndex": [
+        {"m_timetag": "20251231", "m_anntime": "20260315", "s_fa_eps_basic": 300.0 / 20.4},
+        {"m_timetag": "20260630", "m_anntime": "20260801", "s_fa_eps_basic": 1.0},  # as_of 后披露，必须剔除
+    ]}}
+    market_client = _FakeMarketClient(records=[
+        {"close": 300.0, "date": "2026-03-31"},
+        {"close": 600.0, "date": "2026-08-08"},  # as_of 之后的行情，必须剔除
+    ])
+    provider = FundamentalVerificationProvider(bridge_client=_FakeBridge(bridge_data), market_client=market_client)
+    unit = _pe_unit()
+    unit["as_of_time"] = "2026-04-01"
+    result = provider.verify(unit)
+    assert result["status"] == "MATCH"  # 300 / (300/20.4) = 20.4，而非 600 或 eps=1.0
+    assert result["observed_value"] == pytest.approx(20.4, abs=1e-3)
+    assert result["provenance"]["close"] == 300.0
+    assert result["provenance"]["claim_as_of"] == "2026-04-01"
+    # 硬验收：external result.as_of <= unit.as_of_time
+    assert _day_digits(result["as_of"]) <= _day_digits(unit["as_of_time"])
+
+
+def test_as_of_time_missing_returns_not_found():
+    """时点敏感类型缺失 as_of_time -> NOT_FOUND + AS_OF_TIME_MISSING，不得默认用今天。"""
+    market_result = MarketDataVerificationProvider(market_client=_FakeMarketClient(30.1)).verify(
+        _unit(as_of_time=None)
+    )
+    assert market_result["status"] == "NOT_FOUND"
+    assert market_result["reason"] == "AS_OF_TIME_MISSING"
+
+    fundamental_result = FundamentalVerificationProvider(
+        bridge_client=_FakeBridge(_pe_bridge_data()),
+        market_client=_FakeMarketClient(300.0),
+    ).verify(_pe_unit() | {"as_of_time": None})
+    assert fundamental_result["status"] == "NOT_FOUND"
+    assert fundamental_result["reason"] == "AS_OF_TIME_MISSING"
+
+
+# ---------- 价格只比较结构化 CNY 数值（§9.2） ----------
+
+def test_market_price_parses_chinese_number():
+    provider = MarketDataVerificationProvider(market_client=_FakeMarketClient(30.1))
+    result = provider.verify(_unit(statement="宁德时代当前股价三十元"))
+    assert result["status"] == "MATCH"
+    assert result["observed_value"] == 30.1
+
+
+def test_ticker_not_used_as_price_number():
+    """statement 里的 6 位代码绝不能被当成股价参与比较（300750 vs 30.1 不得出现）。"""
+    provider = MarketDataVerificationProvider(market_client=_FakeMarketClient(30.1))
+    result = provider.verify(_unit(statement="300750 当前股价三十元"))
+    assert result["status"] == "MATCH"
+    assert result["observed_value"] == 30.1
+    assert result["provenance"]["claim_values"] == [30.0]

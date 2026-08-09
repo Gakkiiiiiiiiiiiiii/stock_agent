@@ -4,11 +4,14 @@
 CROSS_MODAL_SUPPORTED / CROSS_MODAL_CONFLICT，结果写入
 unit.attributes["cross_modal_verification"]（repository 按 CROSS_MODAL 入账）。
 
-规则（§47 OCR Numeric Gate）：
+规则（§47 OCR Numeric Gate + §12 收敛修复）：
 - OCR block score >= 0.95 -> HIGH；0.85~0.95 -> MEDIUM；< 0.85 不足以作 strong support。
-- ASR 已 SOURCE_SUPPORTED 且 OCR HIGH/MEDIUM 且数字 + 主体双匹配
-  -> 升级 CROSS_MODAL_SUPPORTED。
-- ASR 数字与 OCR 数字双高置信冲突 -> NEEDS_REVIEW + reason CROSS_MODAL_CONFLICT。
+- 升级 CROSS_MODAL_SUPPORTED 最低条件（§12.3）：ASR 已 SOURCE_SUPPORTED
+  且 OCR HIGH/MEDIUM 且 subject 命中且 claim 有结构化数字
+  且数字值/单位匹配且 metric 不冲突；claim 含方向词时 OCR 须含一致方向。
+  无数字 claim 保持 SOURCE_SUPPORTED，subject-only 命中不得升级。
+- ASR 与 OCR 数字可比较（metric/unit 一致）且双高置信冲突 -> NEEDS_REVIEW + CROSS_MODAL_CONFLICT；
+  不可比较（PE 20倍 vs 股价30元）既不一致也不冲突（§12.4）。
 - 无 OCR 证据 -> 不动。
 """
 
@@ -44,7 +47,8 @@ class CrossModalEvidenceVerifier:
             return item
 
         statement = str(item.get("statement") or "")
-        claim_numbers = self._numbers(statement)
+        claim_values = self._numbers(statement)
+        claim_direction = self._direction(statement)
         subject_tokens = self._subject_tokens(item)
 
         qualified: list[dict] = []  # (ocr_item, level, text, numbers, subject_hit)
@@ -64,11 +68,12 @@ class CrossModalEvidenceVerifier:
         if asr_score is None:
             asr_score = item.get("support_probability")
 
-        # 数字冲突门：主体命中 + OCR HIGH + 双侧都有数字但不一致 -> 双高置信冲突。
+        # 数字冲突门：主体命中 + OCR HIGH + 双侧数字可比较（metric/unit 一致）但不一致
+        # -> 双高置信冲突（§12.4：PE 20倍 vs 股价30元 既不一致也不冲突）。
         for entry in qualified:
             if entry["level"] != "HIGH" or not entry["subject_hit"]:
                 continue
-            if claim_numbers and entry["numbers"] and not self._numbers_match(claim_numbers, entry["numbers"]):
+            if claim_values and entry["numbers"] and self._numbers_conflict(claim_values, entry["numbers"]):
                 return item | {
                     "support_status": "NEEDS_REVIEW",
                     "verification_status": "NEEDS_REVIEW",
@@ -79,21 +84,26 @@ class CrossModalEvidenceVerifier:
                             "ocr_support_score": self._ocr_score(entry["ocr"]),
                             "matched_blocks": [self._block_ref(entry["ocr"])],
                             "reason_codes": ["CROSS_MODAL_CONFLICT"],
-                            "claim_values": claim_numbers,
-                            "ocr_values": entry["numbers"],
+                            "claim_values": [self._number_ref(v) for v in claim_values],
+                            "ocr_values": [self._number_ref(v) for v in entry["numbers"]],
                         }
                     },
                 }
 
-        # 升级门：ASR SOURCE_SUPPORTED + OCR HIGH/MEDIUM + 数字/主体双匹配。
-        if asr_support != SupportStatus.SOURCE_SUPPORTED.value:
+        # 升级门（§12.3）：ASR SOURCE_SUPPORTED + OCR HIGH/MEDIUM + 主体命中
+        # + claim 有结构化数字 + 数字值/单位匹配 + metric 不冲突 + 方向一致。
+        # 无数字 claim 保持 SOURCE_SUPPORTED，subject-only 命中不得升级（§11）。
+        if asr_support != SupportStatus.SOURCE_SUPPORTED.value or not claim_values:
             return item
         for entry in qualified:
             if entry["level"] not in {"HIGH", "MEDIUM"} or not entry["subject_hit"]:
                 continue
-            if claim_numbers and not entry["numbers"]:
+            if not entry["numbers"]:
                 continue
-            if claim_numbers and not self._numbers_match(claim_numbers, entry["numbers"]):
+            if not self._numbers_match(claim_values, entry["numbers"]):
+                continue
+            # claim 含方向词（增长/下降/上涨/下跌…）时 OCR 也须含一致方向，否则不升级。
+            if claim_direction is not None and self._direction(entry["text"]) != claim_direction:
                 continue
             return item | {
                 "support_status": SupportStatus.CROSS_MODAL_SUPPORTED.value,
@@ -172,23 +182,66 @@ class CrossModalEvidenceVerifier:
         }
 
     @staticmethod
-    def _numbers(text: str) -> list[float]:
-        from engines.content.external_verification.base import claim_numbers
+    def _numbers(text: str) -> list:
+        """§12.1：返回结构化 FinancialNumericValue（保留 value/unit/metric/comparator）。"""
+        from engines.content.financial_numeric import parse_financial_numerics
 
-        return claim_numbers(text)
+        return parse_financial_numerics(text)
 
     @staticmethod
-    def _numbers_match(claim_values: list[float], ocr_values: list[float], tolerance: float = 0.02) -> bool:
-        try:
-            from engines.content.financial_numeric import numeric_values_match
+    def _number_ref(value) -> dict:
+        return {"value": value.value, "unit": value.unit, "metric": value.metric}
 
-            return bool(numeric_values_match(claim_values, ocr_values))
-        except ImportError:
-            pass
-        except Exception:
-            pass
-        # fallback：每个 claim 数字都需有容差内的 OCR 数字对应。
-        for value in claim_values:
-            if not any(abs(value - other) <= tolerance * max(abs(value), 1.0) for other in ocr_values):
+    @staticmethod
+    def _comparable(claim, ocr) -> bool:
+        """metric 双方都非空且不同、或 unit 双方都非空且不同 -> 不可比较（§12.4）。"""
+        if claim.metric and ocr.metric and claim.metric != ocr.metric:
+            return False
+        if claim.unit and ocr.unit and claim.unit != ocr.unit:
+            return False
+        return True
+
+    @staticmethod
+    def _numbers_match(claim_values: list, ocr_values: list) -> bool:
+        """§12.2：metric 不冲突 + numeric_values_match 逐项配对。"""
+        from engines.content.financial_numeric import numeric_values_match
+
+        for claim in claim_values:
+            matched = False
+            for ocr in ocr_values:
+                if (
+                    claim.metric
+                    and ocr.metric
+                    and claim.metric != ocr.metric
+                ):
+                    continue
+                if numeric_values_match(claim, ocr):
+                    matched = True
+                    break
+            if not matched:
                 return False
         return True
+
+    @classmethod
+    def _numbers_conflict(cls, claim_values: list, ocr_values: list) -> bool:
+        """存在可比较（metric/unit 一致）的数字对且全部不匹配 -> 冲突；
+        完全不可比较（PE 对股价）-> 既不一致也不冲突（§12.4）。"""
+        if not any(cls._comparable(claim, ocr) for claim in claim_values for ocr in ocr_values):
+            return False
+        return not cls._numbers_match(claim_values, ocr_values)
+
+    _UP_WORDS = ("增长", "上涨", "上升", "提升", "提高", "增加", "走高")
+    _DOWN_WORDS = ("下降", "下跌", "下滑", "降低", "减少", "回落", "走低")
+
+    @classmethod
+    def _direction(cls, text: str) -> str | None:
+        """方向词（增长/下降…）或带符号数字（+120% / -5%）推断 UP/DOWN。"""
+        if any(word in text for word in cls._UP_WORDS):
+            return "UP"
+        if any(word in text for word in cls._DOWN_WORDS):
+            return "DOWN"
+        if re.search(r"[+＋]\s*\d", text):
+            return "UP"
+        if re.search(r"[-−－]\s*\d", text):
+            return "DOWN"
+        return None

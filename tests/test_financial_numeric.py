@@ -47,9 +47,26 @@ def test_approximate_ranges_keep_interval_no_pseudo_precision():
 
 def test_comparators():
     lt = _one("不到两成")
-    assert lt.comparator == "LT" and lt.value == 0.2 and lt.unit == "PERCENT"
+    assert lt.comparator == "LT" and lt.value == 20 and lt.unit == "PERCENT"
     gt = _one("超过三成")
-    assert gt.comparator == "GT" and gt.value == 0.3 and gt.unit == "PERCENT"
+    assert gt.comparator == "GT" and gt.value == 30 and gt.unit == "PERCENT"
+
+
+def test_cn_cheng_uses_percent_points():
+    # §8.2：与 "20%" -> 20.0 PERCENT 同尺度（percentage points）
+    cheng = _one("两成")
+    assert cheng.value == 20 and cheng.unit == "PERCENT"
+    assert _one("一成").value == 10
+    assert _one("三成").value == 30
+    assert _one("不到两成").value == 20
+
+
+def test_cn_cheng_matches_arabic_percent():
+    assert numeric_values_match(_one("不到两成"), _one("15%"))
+    assert not numeric_values_match(_one("不到两成"), _one("25%"))
+    # 无单位的 0.15 不被自动解释成 15%（保持 unit=None，不与 PERCENT 点值混淆）
+    bare = _one("0.15")
+    assert bare.unit is None
 
 
 def test_metric_inference():
@@ -65,7 +82,7 @@ def test_numeric_values_match():
     assert numeric_values_match(_one("百分之一百五"), _one("150%"))
     # 单位不一致（% 对 倍）直接失败
     assert not numeric_values_match(_one("20%"), _one("20倍"))
-    # 比较器方向语义
-    assert numeric_values_match(_one("不到两成"), _one("0.1"))
-    assert not numeric_values_match(_one("不到两成"), _one("0.5"))
-    assert numeric_values_match(_one("超过三成"), _one("0.45"))
+    # 比较器方向语义（「成」与阿拉伯百分比同一 percentage points 尺度）
+    assert numeric_values_match(_one("不到两成"), _one("10%"))
+    assert not numeric_values_match(_one("不到两成"), _one("50%"))
+    assert numeric_values_match(_one("超过三成"), _one("45%"))
