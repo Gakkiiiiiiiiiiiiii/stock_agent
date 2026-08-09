@@ -77,3 +77,20 @@ jobs:
         with:
           name: retrieval-evaluation
           path: artifacts/retrieval_eval/current
+
+  video-accuracy-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Run golden accuracy smoke benchmark (synthetic samples)
+        run: python -m evaluation.video_accuracy.benchmark --dataset evaluation/video_accuracy/sample_annotations.jsonl --system evaluation/video_accuracy/fixtures/sample_system_export.json --output artifacts/video_accuracy/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: video-accuracy-report
+          path: artifacts/video_accuracy/report.json

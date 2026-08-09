@@ -68,6 +68,11 @@ class KnowledgeUnit(Base):
     verification_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED", index=True)
     support_status: Mapped[str] = mapped_column(String(32), default="UNSUPPORTED", index=True)
     support_probability: Mapped[float | None] = mapped_column(Float)
+    # support_score 为未校准的 verifier 原始分数；support_probability 仅在 calibration 后填充。
+    support_score: Mapped[float | None] = mapped_column(Float)
+    # 三轴状态模型（设计文档 §22/§79）：review 轴默认 UNREVIEWED，证据质量默认 UNKNOWN。
+    review_status: Mapped[str] = mapped_column(String(32), default="UNREVIEWED", index=True)
+    evidence_quality_status: Mapped[str] = mapped_column(String(32), default="UNKNOWN", index=True)
     truth_status: Mapped[str] = mapped_column(String(32), default="NOT_EXTERNALLY_VERIFIED", index=True)
     external_verification_status: Mapped[str] = mapped_column(String(32), default="NOT_RUN", index=True)
     source_reliability_score: Mapped[float | None] = mapped_column(Float)
@@ -148,6 +153,9 @@ class KnowledgeVerification(Base):
     checks_json: Mapped[str] = mapped_column(Text, default="{}")
     reason_codes_json: Mapped[str] = mapped_column(Text, default="[]")
     detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    # Verification Ledger（设计文档 §59/§81）：可选关联证据与外部验证 provenance。
+    evidence_id: Mapped[int | None] = mapped_column(Integer)
+    provenance_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), index=True)
 
 
@@ -195,6 +203,8 @@ class VideoAnalysisDocument(Base):
     action_count: Mapped[int] = mapped_column(Integer, default=0)
     risk_count: Mapped[int] = mapped_column(Integer, default=0)
     confidence_score: Mapped[float | None] = mapped_column(Float)
+    # P0-14（§44）：质量摘要，替代旧 confidence 语义；confidence_score 保留仅为兼容。
+    quality_summary_json: Mapped[str] = mapped_column(Text, default="{}")
     generator_provider: Mapped[str | None] = mapped_column(String(64))
     generator_model: Mapped[str | None] = mapped_column(String(128))
     generator_version: Mapped[str] = mapped_column(String(64))

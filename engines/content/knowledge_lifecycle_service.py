@@ -2,32 +2,20 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from engines.content.knowledge_enums import (
+    LifecycleStatus,
+    ReviewStatus,
+    VerificationStatus,
+)
 from storage.repositories.knowledge_repository import KnowledgeRepository, KnowledgeVectorTaskService
 
 
 class KnowledgeLifecycleService:
-    VALID_LIFECYCLE_STATUSES = {
-        "EXTRACTED",
-        "ACTIVE",
-        "VALIDATED",
-        "SUPERSEDED",
-        "EXPIRED",
-        "REJECTED",
-        "RETIRED",
-    }
-    VALID_VERIFICATION_STATUSES = {
-        "UNVERIFIED",
-        "UNSUPPORTED",
-        "SOURCE_LOCATED",
-        "SOURCE_SUPPORTED",
-        "CROSS_MODAL_SUPPORTED",
-        "EXTERNALLY_VERIFIED",
-        "SOURCE_CONFIRMED",
-        "VERIFIED",
-        "VALIDATED",
-        "REJECTED",
-        "NEEDS_REVIEW",
-    }
+    # 枚举统一（P0-11 / 设计文档 §36）：全部从 knowledge_enums 派生，禁止本地另写一份 set。
+    VALID_LIFECYCLE_STATUSES = LifecycleStatus.values()
+    # verification_status 为 deprecated 兼容字段（见 knowledge_enums.VerificationStatus）。
+    VALID_VERIFICATION_STATUSES = VerificationStatus.values()
+    VALID_REVIEW_STATUSES = ReviewStatus.values()
     TERMINAL_STATUSES = {"REJECTED", "RETIRED"}
 
     def __init__(
@@ -44,25 +32,87 @@ class KnowledgeLifecycleService:
         *,
         lifecycle_status: str | None = None,
         verification_status: str | None = None,
+        review_status: str | None = None,
         valid_to: datetime | None = None,
         reason: str | None = None,
         operator: str | None = None,
     ) -> dict | None:
+        """人工生命周期/审核 transition（P0-12 状态机，设计文档 §37-39）。
+
+        联动规则：
+        - lifecycle 进入终态（REJECTED/RETIRED）→ enqueue vector delete（现状保留）。
+        - review_status=REJECTED（即使 lifecycle 不变）→ 必须 enqueue vector delete，
+          主动从 Qdrant 删除旧向量（is_indexable 的 review gate 只挡新写入）。
+        - review_status=APPROVED/OVERRIDDEN 只记录，不改 support_status：
+          人工不能伪造机器证据判断（§39）。OVERRIDDEN 必须带 operator + reason。
+        - 每次 transition 写入一条 MANUAL_REVIEW verification ledger 记录。
+        - verification_status 参数 deprecated，仅为兼容保留。
+        """
         lifecycle_status = self._normalize_status(lifecycle_status, self.VALID_LIFECYCLE_STATUSES, "lifecycle_status")
         verification_status = self._normalize_status(verification_status, self.VALID_VERIFICATION_STATUSES, "verification_status")
+        review_status = self._normalize_status(review_status, self.VALID_REVIEW_STATUSES, "review_status")
+        if review_status == "OVERRIDDEN" and (not operator or not reason):
+            raise ValueError("review_status=OVERRIDDEN requires operator and reason")
+        before = self.repository.get_unit(unit_id)
+        if before is None:
+            return None
         unit = self.repository.update_unit_lifecycle(
             unit_id,
             lifecycle_status=lifecycle_status,
             verification_status=verification_status,
+            review_status=review_status,
             valid_to=valid_to,
             reason=reason,
             operator=operator or "manual",
         )
         if unit is None:
             return None
-        vector_tasks = self.vector_task_service.enqueue_unit_sync(unit, delete=unit.get("lifecycle_status") in self.TERMINAL_STATUSES)
+        review_rejected = str(unit.get("review_status") or "").upper() == "REJECTED"
+        delete = unit.get("lifecycle_status") in self.TERMINAL_STATUSES or review_rejected
+        vector_tasks = self.vector_task_service.enqueue_unit_sync(unit, delete=delete)
         self._record_vector_tasks(unit, vector_tasks)
+        self._record_manual_review(
+            unit,
+            review_status=review_status,
+            transition_status=review_status or lifecycle_status or verification_status,
+            before=before,
+            reason=reason,
+            operator=operator or "manual",
+        )
         return unit | {"vector_tasks": vector_tasks}
+
+    def _record_manual_review(
+        self,
+        unit: dict,
+        *,
+        review_status: str | None,
+        transition_status: str | None,
+        before: dict,
+        reason: str | None,
+        operator: str,
+    ) -> None:
+        """把每次人工 transition 写入 verification ledger（P0-12 / §38-39）。"""
+        detail = {
+            "operator": operator,
+            "reason": reason,
+            "from": {
+                "lifecycle_status": before.get("lifecycle_status"),
+                "verification_status": before.get("verification_status"),
+                "review_status": before.get("review_status"),
+            },
+            "to": {
+                "lifecycle_status": unit.get("lifecycle_status"),
+                "verification_status": unit.get("verification_status"),
+                "review_status": unit.get("review_status"),
+            },
+        }
+        self.repository.append_verification(
+            int(unit["id"]),
+            verifier_type="MANUAL_REVIEW",
+            status=str(review_status or transition_status or "TRANSITION"),
+            detail=detail,
+            provider="manual",
+        )
 
     def expire_due_units(self, now: datetime | None = None, limit: int = 500) -> dict:
         now = now or datetime.now(UTC)

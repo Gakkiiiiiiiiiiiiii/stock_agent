@@ -52,7 +52,7 @@ def test_ocr_evidence_preserves_blocks_and_bbox(monkeypatch, tmp_path):
 
 
 def test_external_verifier_never_promotes_without_provider():
-    assert ExternalFactVerifier().verify_many([{"knowledge_kind": "FACT"}])[0]["truth_status"] == "NOT_EXTERNALLY_VERIFIED"
+    assert ExternalFactVerifier().verify_many([{"knowledge_kind": "FACT"}])[0]["truth_status"] == "NOT_CHECKED"
 
 
 def test_cross_video_corroboration_is_narrative_not_truth():

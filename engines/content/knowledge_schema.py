@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from engines.content.knowledge_enums import KnowledgeKind
+
 
 REQUIRED_FIELDS = {
     "primary_domain",
@@ -14,6 +16,30 @@ REQUIRED_FIELDS = {
 }
 
 DOMAIN_LEVEL_KINDS = {"METHOD", "CONCEPT", "CAUSAL_THESIS"}
+
+# P0-1：SchemaValidator 不得再重建"缩减版 Evidence"，按白名单透传全部字段。
+EVIDENCE_FIELDS = {
+    "source_type",
+    "source_ref",
+    "evidence_text",
+    "start_ms",
+    "end_ms",
+    "frame_id",
+    "confidence_score",
+    "is_primary",
+    "raw_text",
+    "normalized_text",
+    "speaker_id",
+    "speaker_attribution_confidence",
+    "word_timestamps",
+    "bbox",
+    "asr_metrics",
+    "ocr_metrics",
+    "correction_trace",
+    "semantic_support_score",
+    "numeric_consistency_score",
+    "entity_consistency_score",
+}
 
 
 @dataclass
@@ -58,6 +84,9 @@ class KnowledgeUnitSchemaValidator:
                     repairs.append(f"filled_{field_name}")
                 else:
                     return self._reject(item, f"missing_{field_name}")
+        # P1-7 / §61：normalize（含 fallback 回填）后 knowledge_kind 必须属于统一枚举。
+        if str(item.get("knowledge_kind") or "") not in KnowledgeKind.values():
+            return self._reject(item, "unknown_knowledge_kind")
         evidence = item.get("evidence")
         if not isinstance(evidence, list) or not evidence:
             return self._reject(item, "missing_evidence")
@@ -68,18 +97,20 @@ class KnowledgeUnitSchemaValidator:
             text = str(evidence_item.get("evidence_text") or evidence_item.get("text") or "").strip()
             if not text:
                 continue
-            normalized_evidence.append(
-                {
-                    "source_type": str(evidence_item.get("source_type") or evidence_item.get("evidence_type") or "ASR"),
-                    "source_ref": evidence_item.get("source_ref"),
-                    "evidence_text": text,
-                    "start_ms": evidence_item.get("start_ms"),
-                    "end_ms": evidence_item.get("end_ms"),
-                    "frame_id": evidence_item.get("frame_id"),
-                    "confidence_score": evidence_item.get("confidence_score") or evidence_item.get("confidence"),
-                    "is_primary": bool(evidence_item.get("is_primary", len(normalized_evidence) == 0)),
-                }
-            )
+            # P0-2：禁止 `or` 取值，0.0 是合法置信度，必须原样保留。
+            confidence = evidence_item.get("confidence_score")
+            if confidence is None:
+                confidence = evidence_item.get("confidence")
+            normalized = {
+                key: evidence_item.get(key)
+                for key in EVIDENCE_FIELDS
+                if key in evidence_item
+            }
+            normalized["source_type"] = str(evidence_item.get("source_type") or evidence_item.get("evidence_type") or "ASR")
+            normalized["evidence_text"] = text
+            normalized["confidence_score"] = confidence
+            normalized["is_primary"] = bool(evidence_item.get("is_primary", len(normalized_evidence) == 0))
+            normalized_evidence.append(normalized)
         if not normalized_evidence:
             return self._reject(item, "empty_evidence_text")
         item["evidence"] = normalized_evidence

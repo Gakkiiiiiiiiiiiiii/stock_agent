@@ -22,7 +22,7 @@ class FakeContentService:
         assert video_id == 9
         return {"video_id": 9, "segments": [{"text": "片段"}]}
 
-    def search_video_knowledge(self, query, filters=None, limit=5):
+    def search_video_knowledge(self, query, filters=None, limit=5, intent=None):
         return {"query": query, "filters": filters or {}, "limit": limit, "items": [{"statement": "黄金观点"}]}
 
     def list_video_knowledge_units(self, video_id, filters=None, limit=None):

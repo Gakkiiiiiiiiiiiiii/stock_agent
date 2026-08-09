@@ -29,8 +29,37 @@ def build_retrieval_plan(query: str, task_type: str | None = None, filters: dict
     }
 
 
+_FACTUAL_INDICATORS = ("pe", "pb", "ps", "eps", "营收", "净利润", "毛利率", "股价", "市值", "涨跌幅", "目标价", "公告", "财报", "政策", "利率", "cpi", "gdp")
+_FACTUAL_QUESTION_WORDS = ("是多少", "多少", "几个", "几", "吗", "呢", "?")
+_AUTHOR_VIEWPOINT_MARKERS = ("视频里怎么看", "博主怎么看", "作者认为", "主播认为", "up主", "说了什么", "怎么看")
+
+
+def _is_factual_qa(query: str) -> bool:
+    """Financial fact lookup: an indicator/metric plus a question word (§30).
+
+    e.g. "宁德时代当前 PE 是多少" must be factual_qa, not current_state.
+    """
+    lowered = query.lower()
+    has_indicator = any(token in lowered for token in _FACTUAL_INDICATORS)
+    has_question = any(token in query for token in _FACTUAL_QUESTION_WORDS)
+    return has_indicator and has_question
+
+
+def _is_author_viewpoint(query: str) -> bool:
+    """Asking what the video/author said or thinks (§30).
+
+    When a query hits both factual indicators + question words and "怎么看",
+    factual_qa takes precedence because it is checked first.
+    """
+    return any(token in query for token in _AUTHOR_VIEWPOINT_MARKERS)
+
+
 def _infer_task_type(query: str) -> str:
     lowered = query.lower()
+    if _is_factual_qa(query):
+        return "factual_qa"
+    if _is_author_viewpoint(query):
+        return "author_viewpoint"
     if "b1" in lowered or "b2" in lowered or "b3" in lowered:
         return "strategy_question"
     if any(token in query for token in ("当前", "现在", "最新", "今天", "眼下", "还有效", "怎么看")):

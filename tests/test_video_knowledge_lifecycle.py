@@ -4,6 +4,7 @@ import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine, select
 
 import storage.models.content  # noqa: F401
@@ -12,7 +13,7 @@ import storage.models.vector  # noqa: F401
 from engines.content.knowledge_lifecycle_service import KnowledgeLifecycleService
 from storage.db import Base, SessionLocal
 from storage.models.content import VideoAsset
-from storage.models.knowledge import KnowledgeLifecycleAudit, KnowledgeUnit, VideoChapter
+from storage.models.knowledge import KnowledgeLifecycleAudit, KnowledgeUnit, KnowledgeVerification, VideoChapter
 from storage.models.vector import VectorIndexMapping, VectorIndexTask
 
 
@@ -26,7 +27,14 @@ def configure_test_db(tmp_path: Path) -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def seed_unit(*, lifecycle_status: str = "ACTIVE", valid_to: datetime | None = None, uid: str | None = None) -> int:
+def seed_unit(
+    *,
+    lifecycle_status: str = "ACTIVE",
+    valid_to: datetime | None = None,
+    uid: str | None = None,
+    support_status: str = "UNSUPPORTED",
+    review_status: str = "UNREVIEWED",
+) -> int:
     with SessionLocal() as session:
         suffix = uid or lifecycle_status.lower()
         video = VideoAsset(platform="bilibili", platform_video_id=f"BVLC{suffix}", bvid=f"BVLC{suffix}", url=f"https://example.com/{suffix}", title="生命周期测试")
@@ -64,6 +72,8 @@ def seed_unit(*, lifecycle_status: str = "ACTIVE", valid_to: datetime | None = N
             valid_to=valid_to,
             lifecycle_status=lifecycle_status,
             verification_status="UNVERIFIED",
+            support_status=support_status,
+            review_status=review_status,
             conflict_key="theme:券商:state",
             conflict_group_id="cg1",
             content_hash=f"unit-hash-{suffix}",
@@ -186,3 +196,60 @@ def test_expired_unit_hidden_from_current_state_but_kept_in_history():
 
     assert current["items"] == []
     assert [item["lifecycle_status"] for item in history["items"]] == ["EXPIRED"]
+
+
+def test_verification_only_reject_enqueues_vector_delete():
+    """P0-12 / §39：只改 review_status=REJECTED（lifecycle 不变）也必须 enqueue vector delete。"""
+    temp_root = Path("D:/project/stock_agent/.pytest-tmp")
+    temp_root.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mkdtemp(prefix="video-knowledge-review-reject-", dir=temp_root))
+    configure_test_db(tmp_path)
+    unit_id = seed_unit(uid="review-reject", support_status="SOURCE_SUPPORTED")
+
+    result = KnowledgeLifecycleService().transition_unit(unit_id, review_status="REJECTED", reason="人工驳回", operator="admin")
+
+    assert result is not None
+    assert result["lifecycle_status"] == "ACTIVE"
+    assert result["review_status"] == "REJECTED"
+    assert result["vector_tasks"][0]["task_type"] == "delete"
+    with SessionLocal() as session:
+        unit = session.get(KnowledgeUnit, unit_id)
+        task = session.execute(select(VectorIndexTask).where(VectorIndexTask.postgres_id == unit_id)).scalars().one()
+        ledger = session.execute(
+            select(KnowledgeVerification).where(
+                KnowledgeVerification.knowledge_unit_id == unit_id,
+                KnowledgeVerification.verifier_type == "MANUAL_REVIEW",
+            )
+        ).scalars().one()
+        assert unit.review_status == "REJECTED"
+        assert task.task_type == "delete"
+        assert ledger.status == "REJECTED"
+
+
+def test_manual_approval_does_not_forge_source_support():
+    """P0-12 / §39：APPROVED 不改 support_status；OVERRIDDEN 缺 operator/reason 报 ValueError。"""
+    temp_root = Path("D:/project/stock_agent/.pytest-tmp")
+    temp_root.mkdir(parents=True, exist_ok=True)
+    tmp_path = Path(tempfile.mkdtemp(prefix="video-knowledge-manual-approve-", dir=temp_root))
+    configure_test_db(tmp_path)
+    unit_id = seed_unit(uid="manual-approve", support_status="SOURCE_LOCATED")
+
+    service = KnowledgeLifecycleService()
+    result = service.transition_unit(unit_id, review_status="APPROVED", reason="人工确认", operator="admin")
+
+    assert result is not None
+    assert result["review_status"] == "APPROVED"
+    assert result["support_status"] == "SOURCE_LOCATED"
+    with SessionLocal() as session:
+        unit = session.get(KnowledgeUnit, unit_id)
+        assert unit.support_status == "SOURCE_LOCATED"
+
+    with pytest.raises(ValueError, match="OVERRIDDEN"):
+        service.transition_unit(unit_id, review_status="OVERRIDDEN", operator="admin")
+    with pytest.raises(ValueError, match="OVERRIDDEN"):
+        service.transition_unit(unit_id, review_status="OVERRIDDEN", reason="覆盖")
+
+    overridden = service.transition_unit(unit_id, review_status="OVERRIDDEN", reason="人工覆盖", operator="admin")
+    assert overridden is not None
+    assert overridden["review_status"] == "OVERRIDDEN"
+    assert overridden["support_status"] == "SOURCE_LOCATED"

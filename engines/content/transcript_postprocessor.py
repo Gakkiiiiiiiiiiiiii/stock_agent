@@ -13,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 ASR_TERM_CORRECTIONS_PATH = Path("config") / "asr_term_corrections.yaml"
 
+# correction_trace 类型（设计文档 P1-3 / §53）：所有文本变换必须可审计。
+TRACE_TYPE_FORMAT_NORMALIZATION = "FORMAT_NORMALIZATION"
+TRACE_TYPE_SCRIPT_CONVERSION = "SCRIPT_CONVERSION"
+TRACE_TYPE_DICTIONARY_CORRECTION = "DICTIONARY_CORRECTION"
+
 # 内置最小纠错表：config/asr_term_corrections.yaml 缺失或解析失败时使用。
 DEFAULT_TERM_CORRECTIONS = {
     "K 线": "K线",
@@ -67,19 +72,85 @@ class TranscriptPostprocessor:
         return self._normalize_text_with_trace(value)[0]
 
     def _normalize_text_with_trace(self, value: str) -> tuple[str, list[dict]]:
-        compact = self._convert_traditional_to_simplified(value or "")
-        compact = re.sub(r"\s+", " ", compact).strip()
-        compact = compact.replace(" 呃 ", " ").replace(" 啊 ", " ")
         corrections: list[dict] = []
+        original = value or ""
+        compact = self._convert_traditional_to_simplified(original)
+        if compact != original:
+            corrections.append(
+                {
+                    "type": TRACE_TYPE_SCRIPT_CONVERSION,
+                    "from": original,
+                    "to": compact,
+                    "method": "opencc_t2s",
+                    "confidence": 1.0,
+                }
+            )
+        compact = self._apply_regex(compact, r"\s+", " ", corrections, "whitespace_collapse")
+        stripped = compact.strip()
+        if stripped != compact:
+            corrections.append(
+                {
+                    "type": TRACE_TYPE_FORMAT_NORMALIZATION,
+                    "from": compact,
+                    "to": stripped,
+                    "method": "whitespace_strip",
+                    "confidence": 1.0,
+                }
+            )
+        compact = stripped
+        for filler in (" 呃 ", " 啊 "):
+            compact = self._apply_replace(compact, filler, " ", corrections, "filler_word_removal")
         for wrong, correct in self.term_corrections.items():
             if wrong in compact:
                 compact = compact.replace(wrong, correct)
-                corrections.append({"from": wrong, "to": correct, "method": "term_dictionary", "confidence": 1.0})
-        compact = re.sub(r"(\d)\s+(\d)", r"\1\2", compact)
-        compact = re.sub(r"百分之\s*(\d+(?:\.\d+)?)", r"\1%", compact)
-        compact = re.sub(r"(港|美|人) 元", r"\1元", compact)
-        compact = re.sub(r"([上下中]) 证", r"\1证", compact)
+                corrections.append(
+                    {
+                        "type": TRACE_TYPE_DICTIONARY_CORRECTION,
+                        "from": wrong,
+                        "to": correct,
+                        "method": "term_dictionary",
+                        "confidence": 1.0,
+                    }
+                )
+        compact = self._apply_regex(compact, r"(\d)\s+(\d)", r"\1\2", corrections, "numeric_space_merge")
+        compact = self._apply_regex(compact, r"百分之\s*(\d+(?:\.\d+)?)", r"\1%", corrections, "percent_wording")
+        compact = self._apply_regex(compact, r"(港|美|人) 元", r"\1元", corrections, "currency_wording")
+        compact = self._apply_regex(compact, r"([上下中]) 证", r"\1证", corrections, "index_wording")
         return compact, corrections
+
+    @staticmethod
+    def _apply_regex(value: str, pattern: str, repl: str, corrections: list[dict], method: str) -> str:
+        def _sub(match: re.Match) -> str:
+            original = match.group(0)
+            replaced = match.expand(repl)
+            if replaced != original:
+                corrections.append(
+                    {
+                        "type": TRACE_TYPE_FORMAT_NORMALIZATION,
+                        "from": original,
+                        "to": replaced,
+                        "method": method,
+                        "confidence": 1.0,
+                    }
+                )
+            return replaced
+
+        return re.sub(pattern, _sub, value)
+
+    @staticmethod
+    def _apply_replace(value: str, old: str, new: str, corrections: list[dict], method: str) -> str:
+        if old not in value:
+            return value
+        corrections.append(
+            {
+                "type": TRACE_TYPE_FORMAT_NORMALIZATION,
+                "from": old,
+                "to": new,
+                "method": method,
+                "confidence": 1.0,
+            }
+        )
+        return value.replace(old, new)
 
     def _convert_traditional_to_simplified(self, value: str) -> str:
         if not value:

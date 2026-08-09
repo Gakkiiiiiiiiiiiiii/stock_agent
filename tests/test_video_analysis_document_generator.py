@@ -29,8 +29,8 @@ def test_generator_uses_curated_llm_summary_and_chapter_brief():
         metadata={"title": "市场复盘", "publish_time": "20260729"},
         chapters=[{"chapter_index": 0, "title": "市场状态", "primary_domain": "MARKET"}],
         units=[
-            {"knowledge_kind": "STATE", "statement": "融资余额持续回落", "extraction_confidence": 0.9},
-            {"knowledge_kind": "RISK_CONDITION", "statement": "高杠杆方向调整应控制仓位", "extraction_confidence": 0.9},
+            {"knowledge_kind": "STATE", "statement": "融资余额持续回落", "extraction_confidence": 0.9, "support_status": "SOURCE_SUPPORTED"},
+            {"knowledge_kind": "RISK_CONDITION", "statement": "高杠杆方向调整应控制仓位", "extraction_confidence": 0.9, "support_status": "SOURCE_SUPPORTED"},
         ],
     )
 
@@ -94,7 +94,7 @@ def test_generator_rejects_non_json_output_instead_of_rule_fallback():
                 {"chapter_index": 0, "title": "半导体", "primary_domain": "INDUSTRY"},
                 {"chapter_index": 1, "title": "美联储", "primary_domain": "MACRO"},
             ],
-            units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声", "chapter_index": 0, "extraction_confidence": 0.9}],
+            units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声", "chapter_index": 0, "extraction_confidence": 0.9, "support_status": "SOURCE_SUPPORTED"}],
         )
 
 
@@ -119,5 +119,5 @@ def test_generator_rejects_partial_curated_summaries_instead_of_unit_fallback():
                 {"chapter_index": 0, "title": "指数", "primary_domain": "MARKET", "summary": "大家晚上好欢迎收看"},
                 {"chapter_index": 1, "title": "半导体", "primary_domain": "INDUSTRY", "summary": "这个呢比之前来的好为什么呢"},
             ],
-            units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声，量能萎缩。", "chapter_index": 1}],
+            units=[{"knowledge_kind": "STATE", "statement": "半导体出清接近尾声，量能萎缩。", "chapter_index": 1, "support_status": "SOURCE_SUPPORTED"}],
         )

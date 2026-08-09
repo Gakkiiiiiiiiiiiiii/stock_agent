@@ -71,8 +71,8 @@ class ShortAudioPipeline(FakeAudioPipeline):
 
 
 class FakeAsrService:
-    def transcribe(self, audio_path, language_hint=None):
-        _ = (audio_path, language_hint)
+    def transcribe(self, audio_path, language_hint=None, speaker_mode="UNKNOWN"):
+        _ = (audio_path, language_hint, speaker_mode)
         return {
             "language": "zh",
             "provider": "fake_asr",

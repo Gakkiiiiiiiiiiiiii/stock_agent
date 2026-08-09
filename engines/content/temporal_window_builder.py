@@ -88,7 +88,8 @@ class TemporalWindowBuilder:
             "frame_refs": window_frames,
             "entities": entities,
             "speaker_labels": sorted({str(segment.get("speaker_label") or segment.get("speaker") or "") for segment in segments if segment.get("speaker_label") or segment.get("speaker")}),
-            "confidence_score": self._confidence(segments, window_frames),
+            "confidence_score": self._confidence(segments),
+            "vision_confidence_score": self._confidence(window_frames),
         }
 
     @staticmethod
@@ -131,10 +132,15 @@ class TemporalWindowBuilder:
         return entities
 
     @staticmethod
-    def _confidence(segments: list[dict], frames: list[dict]) -> float | None:
-        """Return measured confidence only. Unknown must remain unknown."""
+    def _confidence(items: list[dict]) -> float | None:
+        """Aggregate one modality's measured confidence only.
+
+        ASR quality and vision confidence are deliberately kept separate:
+        ``confidence_score`` aggregates ASR segments, ``vision_confidence_score``
+        aggregates vision frames.  Unknown must remain unknown.
+        """
         scores: list[float] = []
-        for item in [*segments, *frames]:
+        for item in items:
             try:
                 value = item.get("confidence_score")
                 if value is not None:

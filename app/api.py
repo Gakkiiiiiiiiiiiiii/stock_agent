@@ -19,6 +19,12 @@ from app.agent_orchestrator import AgentOrchestrator
 from app.chat_history_service import ChatHistoryService
 from app.dependencies import init_application
 from app.security import render_metrics, security_and_trace_middleware
+from engines.content.knowledge_enums import (
+    KnowledgeKind,
+    LifecycleStatus,
+    TemporalClass,
+    VerificationStatus,
+)
 from engines.content.video_ingest_service import VideoIngestService
 from engines.market.qmt_bridge_client import QmtBridgeClient
 from engines.risk.portfolio_risk import evaluate_portfolio_risk
@@ -27,6 +33,7 @@ from mcp_servers.knowledge_server import upsert_theme_logic as upsert_theme_logi
 from sqlalchemy import text
 from storage.db import session_scope
 from storage.repositories.job_repository import JobTaskRepository
+from storage.repositories.knowledge_repository import KnowledgeRepository
 
 logger = logging.getLogger(__name__)
 
@@ -43,43 +50,14 @@ orchestrator = AgentOrchestrator()
 admin_service = AdminContentService()
 chat_history_service = ChatHistoryService()
 content_ingest_service = VideoIngestService()
+knowledge_repository = KnowledgeRepository()
 
 MAX_API_LIST_LIMIT = 200
-VALID_KNOWLEDGE_KINDS = {
-    "METHOD",
-    "CONCEPT",
-    "CAUSAL_THESIS",
-    "FACT",
-    "STATE",
-    "FORECAST",
-    "TECHNICAL_SIGNAL",
-    "ACTION",
-    "RISK_CONDITION",
-    "MODEL_INFERENCE",
-}
-VALID_TEMPORAL_CLASSES = {"DURABLE", "CYCLICAL", "SNAPSHOT", "EVENT_BOUND"}
-VALID_LIFECYCLE_STATUSES = {
-    "EXTRACTED",
-    "ACTIVE",
-    "VALIDATED",
-    "SUPERSEDED",
-    "EXPIRED",
-    "REJECTED",
-    "RETIRED",
-}
-VALID_VERIFICATION_STATUSES = {
-    "UNVERIFIED",
-    "UNSUPPORTED",
-    "SOURCE_LOCATED",
-    "SOURCE_SUPPORTED",
-    "CROSS_MODAL_SUPPORTED",
-    "EXTERNALLY_VERIFIED",
-    "SOURCE_CONFIRMED",
-    "VERIFIED",
-    "VALIDATED",
-    "REJECTED",
-    "NEEDS_REVIEW",
-}
+# 枚举统一（P0-11 / 设计文档 §36）：与 MCP / Lifecycle 共用 knowledge_enums 单一事实来源。
+VALID_KNOWLEDGE_KINDS = KnowledgeKind.values()
+VALID_TEMPORAL_CLASSES = TemporalClass.values()
+VALID_LIFECYCLE_STATUSES = LifecycleStatus.values()
+VALID_VERIFICATION_STATUSES = VerificationStatus.values()
 
 
 class StockAnalyzeRequest(BaseModel):
@@ -142,13 +120,15 @@ class KnowledgeDocUpdateRequest(BaseModel):
 
 class KnowledgeSearchRequest(BaseModel):
     query: str
+    intent: str | None = None
     filters: dict | None = None
     limit: int = 20
 
 
 class KnowledgeLifecycleUpdateRequest(BaseModel):
     lifecycle_status: str | None = None
-    verification_status: str | None = None
+    verification_status: str | None = None  # deprecated 兼容字段，见 knowledge_enums.VerificationStatus
+    review_status: str | None = None
     valid_to: datetime | None = None
     note: str | None = None
     operator: str | None = None
@@ -722,7 +702,7 @@ def list_content_video_knowledge_alias(
 @app.post("/api/v1/content/knowledge/search")
 def search_content_video_knowledge(request: KnowledgeSearchRequest) -> dict:
     filters = _validate_knowledge_filters(request.filters or {})
-    return content_ingest_service.search_video_knowledge(request.query, filters=filters, limit=request.limit)
+    return content_ingest_service.search_video_knowledge(request.query, filters=filters, limit=request.limit, intent=request.intent)
 
 
 @app.get("/api/v1/content/knowledge/conflicts")
@@ -783,6 +763,30 @@ def reparse_content_video_knowledge(video_id: int, request: VideoReparseRequest)
     return payload
 
 
+@app.get("/api/v1/content/knowledge/{unit_id}/verifications")
+def list_content_knowledge_verifications(unit_id: int, limit: int = 100) -> dict:
+    """Admin 只读：verification ledger（含 provenance），设计文档 §90 P2。"""
+    if content_ingest_service.get_knowledge_unit(unit_id) is None:
+        raise HTTPException(status_code=404, detail="knowledge unit not found")
+    safe_limit, warnings = _safe_api_limit(limit, default=100)
+    return {
+        "knowledge_unit_id": unit_id,
+        "items": knowledge_repository.list_verifications(unit_id, limit=safe_limit),
+        "limit": safe_limit,
+        "next_cursor": None,
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/v1/content/knowledge/{unit_id}/evidence")
+def get_content_knowledge_evidence(unit_id: int) -> dict:
+    """Admin 只读：raw evidence（raw_text/word_timestamps/correction_trace/bbox 等），§90 P2。"""
+    payload = content_ingest_service.get_knowledge_unit(unit_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="knowledge unit not found")
+    return {"knowledge_unit_id": unit_id, "items": payload.get("evidence") or []}
+
+
 @app.patch("/api/v1/content/knowledge/{unit_id}/lifecycle")
 def update_content_knowledge_lifecycle(unit_id: int, request: KnowledgeLifecycleUpdateRequest) -> dict:
     payload = _update_content_knowledge_lifecycle(unit_id, request)
@@ -807,6 +811,7 @@ def _update_content_knowledge_lifecycle(unit_id: int, request: KnowledgeLifecycl
             unit_id,
             lifecycle_status=request.lifecycle_status,
             verification_status=request.verification_status,
+            review_status=request.review_status,
             valid_to=request.valid_to,
             note=request.note,
             operator=request.operator,

@@ -228,7 +228,7 @@ def test_low_evidence_quality_marks_needs_review():
                 "statement": "券商偏强",
                 "canonical_statement": "券商偏强",
                 "entities": [{"entity_type": "THEME", "entity_key": "券商", "entity_name": "券商", "relation_role": "SUBJECT"}],
-                "evidence": [{"source_type": "ASR", "evidence_text": "券商偏强", "confidence_score": 0.2}],
+                "evidence": [{"source_type": "ASR", "evidence_text": "券商偏强", "start_ms": 0, "end_ms": 1000, "confidence_score": 0.2}],
             }
         ],
         metadata={"platform_video_id": "BVTEST"},

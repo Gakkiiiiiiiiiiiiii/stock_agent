@@ -6,6 +6,27 @@ from datetime import UTC, datetime
 
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
 from engines.content.claim_evidence_verifier import ClaimEvidenceVerifier
+from engines.content.knowledge_enums import (
+    EvidenceQualityStatus,
+    LEGACY_TRUTH_ALIASES,
+    ReviewStatus,
+    SupportStatus,
+    TruthStatus,
+)
+
+# verification_status（旧字段）仅做兼容映射，不再承载新逻辑（§22 三轴）。
+_SUPPORT_TO_LEGACY_STATUS: dict[str, str] = {
+    SupportStatus.UNSUPPORTED.value: "UNSUPPORTED",
+    SupportStatus.SOURCE_LOCATED.value: "SOURCE_LOCATED",
+    SupportStatus.SOURCE_SUPPORTED.value: "SOURCE_SUPPORTED",
+    SupportStatus.CROSS_MODAL_SUPPORTED.value: "CROSS_MODAL_SUPPORTED",
+    "NEEDS_REVIEW": "NEEDS_REVIEW",
+}
+
+# 高风险实体类型（股票/公司/指数/基金/机构）：纠错必须有非 LLM 证据（§51）。
+_HIGH_RISK_ENTITY_TYPES = {"SECURITY", "STOCK", "COMPANY", "INDEX", "FUND", "INSTITUTION", "ETF"}
+# 非 LLM 的实体解析证据来源。
+_NON_LLM_RESOLUTION_METHODS = {"entity_dictionary", "ticker", "nearby_ocr"}
 
 
 class KnowledgeUnitNormalizer:
@@ -46,14 +67,63 @@ class KnowledgeUnitNormalizer:
             semantic_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
             uid_prefix = str(metadata.get("bvid") or metadata.get("platform_video_id") or metadata.get("platform") or "video")
             item = dict(unit)
-            verification_status = unit.get("verification_status") or "SOURCE_LOCATED"
-            verification = self.verifier.verify(unit)
-            support_status = verification["support_status"]
-            if self._low_evidence_quality(unit.get("evidence") or []):
+            legacy_status = unit.get("verification_status") or "SOURCE_LOCATED"
+            # P0-5（§19）：实体规范化与主体推断之后，verifier 必须看到规范化后的候选单元。
+            candidate = dict(unit)
+            candidate.update(
+                {
+                    "statement": statement,
+                    "entities": entities,
+                    "subject_type": subject["subject_type"],
+                    "subject_key": subject["subject_key"],
+                    "subject_name": subject["subject_name"],
+                }
+            )
+            verification = self.verifier.verify(candidate)
+            support_status = str(verification.get("support_status") or SupportStatus.UNSUPPORTED.value)
+            support_score = verification.get("support_score")
+            if support_score is None:
+                support_score = verification.get("support_probability")
+            reasons = list(verification.get("reason_codes") or [])
+
+            # P0-3（§9）：证据质量独立于语义支持，Unknown 不等于 Good。
+            evidence_quality = self._evidence_quality(unit.get("evidence") or [])
+
+            # P1-2（§51）：实体纠错 trace 入账；高风险实体仅有 LLM 自述时降质量上限。
+            entity_resolution = self._entity_resolution_trace(unit, entities)
+            if entity_resolution is not None and entity_resolution.get("status") == "UNVERIFIED":
+                if evidence_quality == EvidenceQualityStatus.HIGH.value:
+                    evidence_quality = EvidenceQualityStatus.MEDIUM.value
+                reasons.append("ENTITY_RESOLUTION_UNVERIFIED")
+
+            if support_status == SupportStatus.UNSUPPORTED.value:
+                # UNSUPPORTED 原样流出，不被质量门改写（设计文档要求可查询）。
+                verification_status = "UNSUPPORTED"
+            elif evidence_quality == EvidenceQualityStatus.LOW.value:
                 verification_status = "NEEDS_REVIEW"
                 support_status = "NEEDS_REVIEW"
-            elif support_status == "SOURCE_SUPPORTED":
-                verification_status = "SOURCE_SUPPORTED"
+                reasons.append("EVIDENCE_QUALITY_LOW")
+            elif evidence_quality == EvidenceQualityStatus.UNKNOWN.value:
+                if self._ocr_high_confidence(unit.get("evidence") or []):
+                    # 例外预留给 CROSS_MODAL：本次只记录 reason，不放行（§9）。
+                    reasons.append("UNKNOWN_ASR_QUALITY_HIGH_CONFIDENCE_OCR")
+                if support_status in {SupportStatus.SOURCE_SUPPORTED.value, SupportStatus.CROSS_MODAL_SUPPORTED.value}:
+                    reasons.append("EVIDENCE_QUALITY_UNKNOWN_CAP")
+                    support_status = SupportStatus.SOURCE_LOCATED.value
+                verification_status = _SUPPORT_TO_LEGACY_STATUS.get(support_status, legacy_status)
+            else:
+                verification_status = _SUPPORT_TO_LEGACY_STATUS.get(support_status, legacy_status)
+
+            if set(reasons) != set(verification.get("reason_codes") or []):
+                # 质量门新增的 reason 一并写入 verification，随 ledger 入账可审计。
+                verification = verification | {"reason_codes": reasons}
+            attributes = (unit.get("attributes") or {}) | {"verification": verification}
+            if entity_resolution is not None:
+                attributes = attributes | {"entity_resolution": entity_resolution}
+            truth_status = LEGACY_TRUTH_ALIASES.get(
+                str(unit.get("truth_status") or "").strip().upper(),
+                str(unit.get("truth_status") or "").strip().upper(),
+            ) or TruthStatus.NOT_CHECKED.value
             item.update(
                 {
                     "knowledge_uid": f"ku_{uid_prefix}_{index:04d}_{content_hash[:10]}",
@@ -71,13 +141,16 @@ class KnowledgeUnitNormalizer:
                     "scope_key": unit.get("scope_key") or subject.get("subject_key"),
                     "verification_status": verification_status,
                     "support_status": support_status,
-                    "support_probability": verification["support_probability"],
-                    "truth_status": unit.get("truth_status") or "NOT_EXTERNALLY_VERIFIED",
+                    "support_probability": verification.get("support_probability", support_score),
+                    "support_score": support_score,
+                    "evidence_quality_status": evidence_quality,
+                    "truth_status": truth_status,
+                    "review_status": str(unit.get("review_status") or ReviewStatus.UNREVIEWED.value),
                     "external_verification_status": unit.get("external_verification_status") or "NOT_RUN",
                     "speaker_id": unit.get("speaker_id") or self._speaker_id(unit.get("evidence") or []),
                     "speaker_name": unit.get("speaker_name"),
                     "attribution_confidence": unit.get("attribution_confidence"),
-                    "attributes": (unit.get("attributes") or {}) | {"verification": verification},
+                    "attributes": attributes,
                     "extractor_version": unit.get("extractor_version") or "v3.2-k3-json-mode",
                     "schema_version": "v1",
                     "as_of_time": unit.get("as_of_time") or source_date,
@@ -91,17 +164,88 @@ class KnowledgeUnitNormalizer:
         return next((str(item.get("speaker_id")) for item in evidence if item.get("speaker_id")), None)
 
     @staticmethod
-    def _low_evidence_quality(evidence: list[dict]) -> bool:
+    def _evidence_quality(evidence: list[dict]) -> str:
+        """P0-3（§9）EvidenceQualityStatus。
+
+        无 evidence / 无时间窗 -> LOW；confidence 未测量 -> UNKNOWN；
+        < 0.45 LOW，< 0.7 MEDIUM，否则 HIGH。Unknown 不等于 Good。
+        """
         if not evidence:
-            return True
-        primary = evidence[0]
+            return EvidenceQualityStatus.LOW.value
+        primary = next((item for item in evidence if item.get("is_primary")), evidence[0])
         has_time_range = primary.get("start_ms") is not None and primary.get("end_ms") is not None
+        if not has_time_range:
+            return EvidenceQualityStatus.LOW.value
         confidence = primary.get("confidence_score")
+        if confidence is None:
+            return EvidenceQualityStatus.UNKNOWN.value
         try:
-            low_confidence = confidence is not None and float(confidence) < 0.45
+            value = float(confidence)
         except (TypeError, ValueError):
-            low_confidence = False
-        return (not has_time_range) or low_confidence
+            return EvidenceQualityStatus.UNKNOWN.value
+        if value < 0.45:
+            return EvidenceQualityStatus.LOW.value
+        if value < 0.7:
+            return EvidenceQualityStatus.MEDIUM.value
+        return EvidenceQualityStatus.HIGH.value
+
+    @staticmethod
+    def _ocr_high_confidence(evidence: list[dict]) -> bool:
+        """OCR 证据 mean_confidence >= 0.95（§9 例外，仅记录 reason 用）。"""
+        for item in evidence:
+            if str(item.get("source_type") or "").upper() not in {"OCR", "VISION", "FRAME"}:
+                continue
+            metrics = item.get("ocr_metrics") or {}
+            score = metrics.get("mean_confidence")
+            if score is None:
+                score = item.get("confidence_score")
+            try:
+                if score is not None and float(score) >= 0.95:
+                    return True
+            except (TypeError, ValueError):
+                continue
+        return False
+
+    @staticmethod
+    def _entity_resolution_trace(unit: dict, entities: list[dict]) -> dict | None:
+        """P1-2（§51）：LLM 自述的实体纠错写入 entity_resolution，供 ledger 入账。
+
+        高风险实体（股票/公司/指数/基金/机构）若仅有 LLM 自述、缺少
+        entity_dictionary / ticker / nearby_ocr 任一非 LLM 证据，则标 UNVERIFIED。
+        """
+        corrections = unit.get("entity_corrections")
+        if not isinstance(corrections, list) or not corrections:
+            return None
+        entity_type_by_name = {
+            str(entity.get("entity_name") or ""): str(entity.get("entity_type") or "")
+            for entity in entities
+        }
+        items: list[dict] = []
+        unverified = False
+        for raw in corrections:
+            if not isinstance(raw, dict):
+                continue
+            canonical_name = str(raw.get("canonical_name") or "").strip()
+            methods = [str(method).strip().lower() for method in raw.get("resolution_method") or []]
+            entity_type = entity_type_by_name.get(canonical_name, "")
+            high_risk = entity_type in _HIGH_RISK_ENTITY_TYPES or bool(raw.get("ticker"))
+            verified = bool(set(methods) & _NON_LLM_RESOLUTION_METHODS)
+            if high_risk and not verified:
+                unverified = True
+            items.append(
+                {
+                    "raw_expression": str(raw.get("raw_expression") or "").strip(),
+                    "canonical_name": canonical_name,
+                    "ticker": raw.get("ticker"),
+                    "resolution_method": methods,
+                    "confidence": raw.get("confidence"),
+                    "high_risk": high_risk,
+                    "non_llm_evidence": verified,
+                }
+            )
+        if not items:
+            return None
+        return {"status": "UNVERIFIED" if unverified else "RESOLVED", "items": items}
 
     def _normalize_entities(self, unit: dict, metadata: dict) -> list[dict]:
         text = f"{unit.get('statement') or ''} {unit.get('evidence_text') or ''}"

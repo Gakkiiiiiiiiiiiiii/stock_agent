@@ -90,7 +90,12 @@ class VideoVisionService:
 
     def _safe_extract_ocr(self, image_path: str) -> dict[str, Any]:
         try:
-            return self.ocr_service.extract_evidence(image_path)
+            extractor = getattr(self.ocr_service, "extract_evidence", None)
+            if extractor is None:
+                # 仅支持纯文本的 OCR 服务：退化为 text-only 证据结构
+                text = self.ocr_service.extract_text(image_path)
+                return {"text": text or "", "lines": [], "blocks": [], "table": [], "backend": "text_only"}
+            return extractor(image_path)
         except Exception:
             logger.warning("关键帧 OCR 提取失败（%s）", image_path, exc_info=True)
             return {"text": "", "lines": [], "blocks": [], "table": [], "backend": "unavailable"}

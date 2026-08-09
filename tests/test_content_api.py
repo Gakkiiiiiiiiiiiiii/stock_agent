@@ -97,19 +97,20 @@ class FakeContentService:
         assert unit_id == 99
         return {"id": 99, "canonical_statement": "知识"}
 
-    def search_video_knowledge(self, query, filters=None, limit=20):
-        return {"query": query, "filters": filters or {}, "items": [{"id": 99}], "limit": limit, "next_cursor": None, "warnings": []}
+    def search_video_knowledge(self, query, filters=None, limit=20, intent=None):
+        return {"query": query, "intent": intent, "filters": filters or {}, "items": [{"id": 99}], "limit": limit, "next_cursor": None, "warnings": []}
 
     def reparse_video_knowledge(self, video_id, index_knowledge=True):
         assert video_id == 2
         return {"task": {"task_id": 8}, "knowledge_result": {"vector_tasks": [] if not index_knowledge else [1]}}
 
-    def update_knowledge_unit_lifecycle(self, unit_id, lifecycle_status=None, verification_status=None, valid_to=None, note=None, operator=None):
+    def update_knowledge_unit_lifecycle(self, unit_id, lifecycle_status=None, verification_status=None, review_status=None, valid_to=None, note=None, operator=None):
         assert unit_id == 99
         return {
             "id": 99,
             "lifecycle_status": lifecycle_status,
             "verification_status": verification_status,
+            "review_status": review_status,
             "valid_to": valid_to.isoformat() if valid_to else None,
             "note": note,
             "operator": operator,

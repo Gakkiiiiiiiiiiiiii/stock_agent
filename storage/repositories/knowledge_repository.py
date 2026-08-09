@@ -45,6 +45,51 @@ def _parse_dt(value: str | None) -> datetime | None:
     return parsed.astimezone(UTC)
 
 
+# support_status 等级语义以 engines/content/knowledge_enums.support_rank 为单一事实来源；
+# 该文件由并行任务创建，暂缺时使用内联等价定义。
+try:
+    from engines.content.knowledge_enums import VerifierType, support_rank
+except ImportError:  # pragma: no cover
+    VerifierType = None  # type: ignore[assignment]
+
+    _INLINE_SUPPORT_RANK = {
+        "UNSUPPORTED": 0,
+        "SOURCE_LOCATED": 1,
+        "NEEDS_REVIEW": 2,
+        "SOURCE_SUPPORTED": 3,
+        "CROSS_MODAL_SUPPORTED": 4,
+        "EXTERNALLY_VERIFIED": 5,
+        "VALIDATED": 5,
+    }
+
+    def support_rank(status: str | None) -> int:  # type: ignore[misc]
+        if not status:
+            return 0
+        return _INLINE_SUPPORT_RANK.get(str(status).strip().upper(), 0)
+
+
+# minimum_support_status 过滤参与比较的完整状态集合（含遗留值）。
+# rank >= SOURCE_SUPPORTED 的子集即 {"SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED",
+# "EXTERNALLY_VERIFIED", "VALIDATED"}。
+_FILTER_SUPPORT_STATUSES = (
+    "UNSUPPORTED",
+    "SOURCE_LOCATED",
+    "NEEDS_REVIEW",
+    "SOURCE_SUPPORTED",
+    "CROSS_MODAL_SUPPORTED",
+    "EXTERNALLY_VERIFIED",
+    "VALIDATED",
+)
+
+# 外部验证 provenance 可审计字段（设计文档 §81：provider / source ID / as_of / observed value）。
+_PROVENANCE_KEYS = ("provider", "source_id", "as_of", "observed_value")
+
+# VerifierType 字面量（engines/content/knowledge_enums.VerifierType，暂缺时用等价字符串）。
+_VERIFIER_TYPE_EXTERNAL_FACT = VerifierType.EXTERNAL_FACT.value if VerifierType is not None else "EXTERNAL_FACT"
+_VERIFIER_TYPE_CROSS_MODAL = VerifierType.CROSS_MODAL.value if VerifierType is not None else "CROSS_MODAL"
+_VERIFIER_TYPE_ENTITY_RESOLUTION = VerifierType.ENTITY_RESOLUTION.value if VerifierType is not None else "ENTITY_RESOLUTION"
+
+
 class KnowledgeRepository:
     def replace_video_knowledge(
         self,
@@ -129,6 +174,9 @@ class KnowledgeRepository:
                     verification_status=str(unit.get("verification_status") or "SOURCE_LOCATED"),
                     support_status=str(unit.get("support_status") or "UNSUPPORTED"),
                     support_probability=unit.get("support_probability"),
+                    support_score=unit.get("support_score"),
+                    review_status=str(unit.get("review_status") or "UNREVIEWED"),
+                    evidence_quality_status=str(unit.get("evidence_quality_status") or "UNKNOWN"),
                     truth_status=str(unit.get("truth_status") or "NOT_EXTERNALLY_VERIFIED"),
                     external_verification_status=str(unit.get("external_verification_status") or "NOT_RUN"),
                     source_reliability_score=unit.get("source_reliability_score"),
@@ -188,21 +236,7 @@ class KnowledgeRepository:
                             confidence_score=entity.get("confidence_score"),
                         )
                     )
-                verification = (unit.get("attributes") or {}).get("verification")
-                if isinstance(verification, dict):
-                    session.add(
-                        KnowledgeVerification(
-                            knowledge_unit_id=row.id,
-                            verifier_type="claim_evidence_semantic",
-                            verifier_provider="deterministic",
-                            verifier_version="v1",
-                            status=str(verification.get("support_status") or "UNSUPPORTED"),
-                            score=verification.get("support_probability"),
-                            checks_json=_dumps(verification.get("checks") or {}),
-                            reason_codes_json=_dumps(verification.get("reason_codes") or []),
-                            detail_json=_dumps(verification),
-                        )
-                    )
+                self._append_attribute_verifications(session, row.id, unit.get("attributes") or {})
 
             for relation in relations:
                 source_id = unit_id_by_uid.get(str(relation.get("source_uid") or ""))
@@ -230,6 +264,125 @@ class KnowledgeRepository:
                 "knowledge_unit_count": len(unit_id_by_uid),
                 "knowledge_unit_ids": list(unit_id_by_uid.values()),
             }
+
+    # Verification Ledger（设计文档 §58/§59）：unit.attributes 中的各类验证结果统一入账。
+    # verifier_type 与 engines/content/knowledge_enums.VerifierType 对齐；
+    # attributes["verification"] 保留历史字符串 "claim_evidence_semantic"
+    # （即 VerifierType.SEMANTIC_ENTAILMENT），以兼容既有数据。
+    _ATTRIBUTE_VERIFIER_KEYS = (
+        # (attributes key, verifier_type, default provider, default version, default status)
+        ("verification", "claim_evidence_semantic", "deterministic", "v1", "UNSUPPORTED"),
+        ("external_verification", _VERIFIER_TYPE_EXTERNAL_FACT, None, None, "UNKNOWN"),
+        ("cross_modal_verification", _VERIFIER_TYPE_CROSS_MODAL, None, None, "UNKNOWN"),
+        ("entity_resolution", _VERIFIER_TYPE_ENTITY_RESOLUTION, None, None, "UNKNOWN"),
+    )
+
+    def append_verification(
+        self,
+        unit_id: int,
+        verifier_type: str,
+        status: str,
+        *,
+        score: float | None = None,
+        checks: dict | None = None,
+        reason_codes: list | None = None,
+        detail: dict | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        version: str | None = None,
+        evidence_id: int | None = None,
+        provenance: dict | None = None,
+        session=None,
+    ) -> KnowledgeVerification:
+        row = KnowledgeVerification(
+            knowledge_unit_id=unit_id,
+            verifier_type=str(verifier_type),
+            verifier_provider=provider,
+            verifier_model=model,
+            verifier_version=version,
+            status=str(status),
+            score=score,
+            checks_json=_dumps(checks or {}),
+            reason_codes_json=_dumps(reason_codes or []),
+            detail_json=_dumps(detail or {}),
+            evidence_id=evidence_id,
+            provenance_json=_dumps(provenance or {}),
+        )
+        if session is not None:
+            session.add(row)
+            session.flush()
+            return row
+        with session_scope() as owned_session:
+            owned_session.add(row)
+            owned_session.flush()
+            owned_session.refresh(row)
+            return row
+
+    def list_verifications(self, unit_id: int, limit: int = 100) -> list[dict]:
+        with session_scope() as session:
+            rows = list(
+                session.execute(
+                    select(KnowledgeVerification)
+                    .where(KnowledgeVerification.knowledge_unit_id == unit_id)
+                    .order_by(KnowledgeVerification.id.asc())
+                    .limit(limit)
+                ).scalars()
+            )
+            return [self._serialize_verification(row) for row in rows]
+
+    def _append_attribute_verifications(self, session, unit_id: int, attributes: dict) -> None:
+        for key, verifier_type, default_provider, default_version, default_status in self._ATTRIBUTE_VERIFIER_KEYS:
+            result = attributes.get(key)
+            if not isinstance(result, dict):
+                continue
+            score = result.get("score")
+            if score is None:
+                score = result.get("support_probability")
+            self.append_verification(
+                unit_id,
+                verifier_type,
+                str(result.get("status") or result.get("support_status") or default_status),
+                score=score,
+                checks=result.get("checks"),
+                reason_codes=result.get("reason_codes"),
+                detail=result,
+                provider=result.get("provider") or default_provider,
+                model=result.get("model") or result.get("verifier_model"),
+                version=result.get("version") or result.get("verifier_version") or default_version,
+                evidence_id=result.get("evidence_id"),
+                provenance=self._verification_provenance(result),
+                session=session,
+            )
+
+    @staticmethod
+    def _verification_provenance(result: dict) -> dict:
+        provenance: dict = {}
+        extra = result.get("provenance")
+        if isinstance(extra, dict):
+            provenance.update(extra)
+        for key in _PROVENANCE_KEYS:
+            if result.get(key) is not None:
+                provenance[key] = result[key]
+        return provenance
+
+    @staticmethod
+    def _serialize_verification(row: KnowledgeVerification) -> dict:
+        return {
+            "id": row.id,
+            "knowledge_unit_id": row.knowledge_unit_id,
+            "verifier_type": row.verifier_type,
+            "verifier_provider": row.verifier_provider,
+            "verifier_model": row.verifier_model,
+            "verifier_version": row.verifier_version,
+            "status": row.status,
+            "score": row.score,
+            "checks": _loads(row.checks_json, {}),
+            "reason_codes": _loads(row.reason_codes_json, []),
+            "detail": _loads(row.detail_json, {}),
+            "evidence_id": row.evidence_id,
+            "provenance": _loads(row.provenance_json, {}),
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
 
     def list_chapters(self, video_id: int) -> list[dict]:
         with session_scope() as session:
@@ -316,6 +469,38 @@ class KnowledgeRepository:
             rows = list(session.execute(statement.order_by(KnowledgeUnit.as_of_time.desc(), KnowledgeUnit.id.desc()).limit(limit)).scalars())
             return self._serialize_units_with_children(session, rows)
 
+    def list_units_for_factor(
+        self,
+        as_of_start: datetime | None = None,
+        as_of_end: datetime | None = None,
+        *,
+        minimum_support_status: str = "SOURCE_SUPPORTED",
+        limit: int = 10000,
+    ) -> list[dict]:
+        """P2-4（设计文档 §76-77）：量化视频因子专用轻量查询，storage 层唯一因子扩展点。
+
+        返回 as_of_time 落在 [as_of_start, as_of_end) 内、support 等级不低于
+        minimum_support_status（support_rank 语义）且未被人工 REJECTED 的 unit，
+        按 as_of_time 升序。防前视窗口判断由调用方（engines/factor/video_features）负责，
+        这里只做质量门与时间范围裁剪；as_of_time 为 NULL 的 unit 无法对齐，直接排除。
+        """
+        with session_scope() as session:
+            statement = select(KnowledgeUnit).where(KnowledgeUnit.as_of_time.is_not(None))
+            if as_of_start is not None:
+                statement = statement.where(KnowledgeUnit.as_of_time >= as_of_start)
+            if as_of_end is not None:
+                statement = statement.where(KnowledgeUnit.as_of_time < as_of_end)
+            statement = self._apply_unit_filters(
+                statement,
+                {
+                    "minimum_support_status": minimum_support_status,
+                    "denied_review_status": ["REJECTED"],
+                },
+            )
+            statement = statement.order_by(KnowledgeUnit.as_of_time.asc(), KnowledgeUnit.id.asc()).limit(int(limit))
+            rows = list(session.execute(statement).scalars())
+            return self._serialize_units_with_children(session, rows)
+
     def get_unit(self, unit_id: int) -> dict | None:
         with session_scope() as session:
             row = session.get(KnowledgeUnit, unit_id)
@@ -346,6 +531,7 @@ class KnowledgeRepository:
         *,
         lifecycle_status: str | None = None,
         verification_status: str | None = None,
+        review_status: str | None = None,
         valid_to: datetime | None = None,
         attributes_patch: dict | None = None,
         reason: str | None = None,
@@ -362,6 +548,10 @@ class KnowledgeRepository:
                 row.lifecycle_status = lifecycle_status
             if verification_status:
                 row.verification_status = verification_status
+            if review_status:
+                # P0-12（§38）：人工审核轴落库；审核 from/to 由 MANUAL_REVIEW
+                # verification ledger 记录（KnowledgeLifecycleAudit 无 review 列）。
+                row.review_status = review_status
             if valid_to is not None:
                 row.valid_to = valid_to
             if attributes_patch:
@@ -502,12 +692,17 @@ class KnowledgeRepository:
             return "require_evidence_verification"
         return "keep_latest_as_current"
 
-    def get_current_subject_state(self, subject_key: str, domain: str | None = None, limit: int = 20) -> dict:
+    def get_current_subject_state(self, subject_key: str, domain: str | None = None, limit: int = 20, *, minimum_support_score: float | None = None) -> dict:
+        # P1-8（设计文档 §62）：current-state 查询带 review gate（排除人工 REJECTED），
+        # 可选 support score 门槛；minimum_support_score 默认 None 不启用以保持向后兼容。
         filters = {
             "subject_key": subject_key,
             "lifecycle_status": ["ACTIVE", "VALIDATED"],
             "support_status": ["SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED", "EXTERNALLY_VERIFIED", "VALIDATED"],
+            "denied_review_status": ["REJECTED"],
         }
+        if minimum_support_score is not None:
+            filters["minimum_support_score"] = minimum_support_score
         if domain:
             filters["primary_domain"] = domain
         units = self.search_units("", filters=filters, limit=limit)
@@ -534,6 +729,7 @@ class KnowledgeRepository:
             "lifecycle_status": KnowledgeUnit.lifecycle_status,
             "verification_status": KnowledgeUnit.verification_status,
             "support_status": KnowledgeUnit.support_status,
+            "review_status": KnowledgeUnit.review_status,
             "truth_status": KnowledgeUnit.truth_status,
             "subject_key": KnowledgeUnit.subject_key,
             "subject_type": KnowledgeUnit.subject_type,
@@ -547,6 +743,27 @@ class KnowledgeRepository:
                     statement = statement.where(KnowledgeUnit.support_probability >= float(value))
                 except (TypeError, ValueError):
                     pass
+                continue
+            if key == "minimum_support_score":
+                # support_score 为 NULL 的行被自动排除（NULL >= x 不为真）。
+                try:
+                    statement = statement.where(KnowledgeUnit.support_score >= float(value))
+                except (TypeError, ValueError):
+                    pass
+                continue
+            if key == "minimum_support_status":
+                normalized = str(value).strip().upper()
+                if normalized not in _FILTER_SUPPORT_STATUSES:
+                    continue
+                threshold = support_rank(normalized)
+                allowed_statuses = [status for status in _FILTER_SUPPORT_STATUSES if support_rank(status) >= threshold]
+                statement = statement.where(KnowledgeUnit.support_status.in_(allowed_statuses))
+                continue
+            if key == "denied_review_status":
+                denied = value if isinstance(value, list) else [value]
+                denied = [item for item in denied if item not in (None, "")]
+                if denied:
+                    statement = statement.where(KnowledgeUnit.review_status.not_in(denied))
                 continue
             column = allowed.get(key)
             if column is None or value in (None, ""):
@@ -735,6 +952,9 @@ class KnowledgeRepository:
             "verification_status": row.verification_status,
             "support_status": row.support_status,
             "support_probability": row.support_probability,
+            "support_score": row.support_score,
+            "review_status": row.review_status,
+            "evidence_quality_status": row.evidence_quality_status,
             "truth_status": row.truth_status,
             "external_verification_status": row.external_verification_status,
             "source_reliability_score": row.source_reliability_score,
@@ -775,6 +995,7 @@ class VideoAnalysisDocumentRepository:
             row.action_count = int(payload.get("action_count") or 0)
             row.risk_count = int(payload.get("risk_count") or 0)
             row.confidence_score = payload.get("confidence_score")
+            row.quality_summary_json = _dumps(payload.get("quality_summary") or {})
             row.generator_provider = payload.get("generator_provider")
             row.generator_model = payload.get("generator_model")
             row.generator_version = payload.get("generator_version") or "v3.0-rule"
@@ -799,6 +1020,7 @@ class VideoAnalysisDocumentRepository:
                 "chapter_count": row.chapter_count,
                 "knowledge_unit_count": row.knowledge_unit_count,
                 "confidence_score": row.confidence_score,
+                "quality_summary": _loads(row.quality_summary_json, {}),
                 "generator_provider": row.generator_provider,
                 "generator_model": row.generator_model,
                 "generator_version": row.generator_version,
@@ -936,6 +1158,9 @@ class KnowledgeVectorTaskService:
     @staticmethod
     def is_indexable(unit: dict[str, Any]) -> bool:
         if unit.get("lifecycle_status") in {"REJECTED", "RETIRED"}:
+            return False
+        # P0-12 review gate（设计文档 §38）：人工 REJECTED 的知识不进入向量索引。
+        if str(unit.get("review_status") or "").upper() == "REJECTED":
             return False
         return str(unit.get("support_status") or unit.get("verification_status") or "").upper() in {
             "SOURCE_SUPPORTED", "CROSS_MODAL_SUPPORTED", "EXTERNALLY_VERIFIED", "VALIDATED"

@@ -13,7 +13,7 @@ from engines.retrieval.postgres_hydrator import PostgresHydrator
 from engines.retrieval.qdrant_client import FinancialQdrantClient
 from engines.retrieval.query_understanding import build_retrieval_plan
 from engines.retrieval.reranker_client import RerankerClient
-from engines.retrieval.retrieval_policy import RetrievalPolicy
+from engines.retrieval.retrieval_policy import RetrievalPolicy, merge_policy_filters
 from engines.retrieval.sparse_retriever import PostgresSparseRetriever, SparseBM25Scorer
 
 
@@ -39,7 +39,7 @@ class HybridRetriever:
     def retrieve(self, query: str, task_type: str | None = None, filters: dict | None = None, top_k: int = 5) -> dict:
         plan = build_retrieval_plan(query=query, task_type=task_type, filters=normalize_retrieval_filters(filters), top_k=top_k)
         policy_filters = RetrievalPolicy.filters_for(plan["task_type"])
-        plan["filters"] = policy_filters | plan["filters"]
+        plan["filters"] = merge_policy_filters(policy_filters, plan["filters"])
         query_vector = self.embedder.embed(plan["query"])
         query_filter = self._build_filter(plan["filters"])
         dense_candidates: list[dict] = []
@@ -87,8 +87,16 @@ class HybridRetriever:
         if not filters:
             return None
         must = []
+        must_not = []
         for key, value in filters.items():
-            if key == "valid_at":
+            if key in {"valid_at", "valid_only"}:
+                # valid_only is enforced by the python-side gate / sparse SQL layer;
+                # dense payloads have no comparable field to filter on.
+                continue
+            if key == "denied_review_status":
+                denied = [str(item) for item in (value if isinstance(value, list) else [value])]
+                if denied:
+                    must_not.append(models.FieldCondition(key="review_status", match=models.MatchAny(any=denied)))
                 continue
             if key == "minimum_support_status":
                 allowed = RetrievalPolicy.allowed_statuses(str(value))
@@ -102,13 +110,19 @@ class HybridRetriever:
                 must.append(models.FieldCondition(key=key, match=models.MatchAny(any=value)))
             else:
                 must.append(models.FieldCondition(key=key, match=models.MatchValue(value=value)))
-        return models.Filter(must=must)
+        if not must and not must_not:
+            return None
+        return models.Filter(must=must, must_not=must_not or None)
 
     @staticmethod
     def _apply_quality_gate(candidates: list[dict], filters: dict) -> list[dict]:
         minimum_probability = filters.get("minimum_support_probability")
         allowed = set(RetrievalPolicy.allowed_statuses(filters.get("minimum_support_status")))
         truth_status = filters.get("truth_status")
+        allowed_truth = {str(item) for item in (truth_status if isinstance(truth_status, list) else [truth_status]) if item} if truth_status else set()
+        denied_value = filters.get("denied_review_status")
+        denied_review = {str(item).upper() for item in (denied_value if isinstance(denied_value, list) else [denied_value]) if item}
+        denied_review.add("REJECTED")
         result = []
         for candidate in candidates:
             payload = candidate.get("payload") or {}
@@ -122,7 +136,10 @@ class HybridRetriever:
                     continue
             except (TypeError, ValueError):
                 continue
-            if truth_status and payload.get("truth_status") != truth_status:
+            if allowed_truth and payload.get("truth_status") not in allowed_truth:
+                continue
+            review_status = str(payload.get("review_status") or "").upper()
+            if review_status and review_status in denied_review:
                 continue
             result.append(candidate)
         return result

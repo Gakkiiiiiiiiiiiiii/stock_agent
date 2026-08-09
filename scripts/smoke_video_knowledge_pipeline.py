@@ -72,8 +72,9 @@ class FakeAudioPipeline:
 
 
 class FakeAsrService:
-    def transcribe(self, audio_path, language_hint=None):
+    def transcribe(self, audio_path, language_hint=None, speaker_mode="UNKNOWN"):
         _ = (audio_path, language_hint)
+        speaker_label = "speaker_0" if str(speaker_mode).upper() == "SINGLE_SPEAKER" else None
         sentences = [
             "黄金主题仍有催化，避险需求会继续提振龙头股。",
             "上证指数日线站上均线以后偏强，但如果跌破缺口这个判断就失效。",
@@ -87,7 +88,7 @@ class FakeAsrService:
                     "segment_index": index,
                     "start_ms": index * 5000,
                     "end_ms": (index + 1) * 5000,
-                    "speaker_label": "speaker_0",
+                    "speaker_label": speaker_label,
                     "text": text,
                     "confidence_score": 0.92,
                 }

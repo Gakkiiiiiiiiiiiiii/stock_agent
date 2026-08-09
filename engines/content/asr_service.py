@@ -61,12 +61,18 @@ class AsrService:
         )
         self.initial_prompt = self._resolve_initial_prompt(initial_prompt)
 
-    def transcribe(self, audio_path: str | Path, language_hint: str | None = None) -> dict:
+    def transcribe(
+        self,
+        audio_path: str | Path,
+        language_hint: str | None = None,
+        speaker_mode: str = "UNKNOWN",
+    ) -> dict:
         self._ensure_runtime_paths()
         try:
             from faster_whisper import BatchedInferencePipeline, WhisperModel
         except ImportError as exc:
             raise RuntimeError("faster-whisper is not installed") from exc
+        speaker_label = self._speaker_label_for_mode(speaker_mode)
         model = WhisperModel(self.model_size, device=self.device, compute_type=self.compute_type)
         transcribe_kwargs: dict[str, Any] = {
             "language": language_hint,
@@ -105,17 +111,22 @@ class AsrService:
                 if str(getattr(word, "word", "") or "").strip()
             ]
             text_parts.append(segment_text)
+            quality_proxy = self._confidence_from_metrics(avg_logprob, no_speech_prob)
+            word_probabilities = [word["probability"] for word in words if word.get("probability") is not None]
             items.append(
                 {
                     "segment_index": index,
                     "start_ms": int(float(segment.start) * 1000),
                     "end_ms": int(float(segment.end) * 1000),
-                    "speaker_label": "speaker_0",
+                    "speaker_label": speaker_label,
                     "text": segment_text,
                     "avg_logprob": avg_logprob,
                     "no_speech_prob": no_speech_prob,
                     "compression_ratio": compression_ratio,
-                    "confidence_score": self._confidence_from_metrics(avg_logprob, no_speech_prob),
+                    "confidence_score": quality_proxy,
+                    "asr_quality_proxy": quality_proxy,
+                    "mean_word_probability": round(sum(word_probabilities) / len(word_probabilities), 4) if word_probabilities else None,
+                    "min_word_probability": round(min(word_probabilities), 4) if word_probabilities else None,
                     "word_timestamps": words,
                 }
             )
@@ -132,7 +143,19 @@ class AsrService:
             "batch_size": self.batch_size,
             "chunk_length_seconds": self.chunk_length_seconds,
             "beam_size": self.beam_size,
+            "speaker_mode": str(speaker_mode or "UNKNOWN").strip().upper(),
         }
+
+    @staticmethod
+    def _speaker_label_for_mode(speaker_mode: str | None) -> str | None:
+        """UNKNOWN/DIARIZE 不伪造说话人；仅 SINGLE_SPEAKER 确认单人口播。
+
+        DIARIZE 模式下标签由 DiarizationService 覆写，此处保持未知。
+        """
+        mode = str(speaker_mode or "UNKNOWN").strip().upper()
+        if mode == "SINGLE_SPEAKER":
+            return "speaker_0"
+        return None
 
     @staticmethod
     def _optional_float(value: Any) -> float | None:

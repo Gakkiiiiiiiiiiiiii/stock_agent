@@ -1,25 +1,21 @@
 from __future__ import annotations
 
+from engines.content.knowledge_enums import (
+    KnowledgeKind,
+    LifecycleStatus,
+    TemporalClass,
+    VerificationStatus,
+)
 from engines.content.video_ingest_service import VideoIngestService
 
 
 service = VideoIngestService()
 MAX_TOP_K = 100
-VALID_KNOWLEDGE_KINDS = {
-    "METHOD",
-    "CONCEPT",
-    "CAUSAL_THESIS",
-    "FACT",
-    "STATE",
-    "FORECAST",
-    "TECHNICAL_SIGNAL",
-    "ACTION",
-    "RISK_CONDITION",
-    "MODEL_INFERENCE",
-}
-VALID_TEMPORAL_CLASSES = {"DURABLE", "CYCLICAL", "SNAPSHOT", "EVENT_BOUND"}
-VALID_LIFECYCLE_STATUSES = {"EXTRACTED", "ACTIVE", "VALIDATED", "SUPERSEDED", "EXPIRED", "REJECTED", "RETIRED"}
-VALID_VERIFICATION_STATUSES = {"UNVERIFIED", "SOURCE_CONFIRMED", "VERIFIED", "VALIDATED", "REJECTED", "NEEDS_REVIEW"}
+# 枚举统一（P0-11 / 设计文档 §36）：与 API / Lifecycle 共用 knowledge_enums 单一事实来源。
+VALID_KNOWLEDGE_KINDS = KnowledgeKind.values()
+VALID_TEMPORAL_CLASSES = TemporalClass.values()
+VALID_LIFECYCLE_STATUSES = LifecycleStatus.values()
+VALID_VERIFICATION_STATUSES = VerificationStatus.values()
 
 
 def ingest_bilibili_video(
@@ -119,6 +115,18 @@ def search_video_knowledge(
     predicate_key: str | None = None,
     valid_only: bool = True,
 ) -> dict:
+    """搜索视频知识（带统一质量门，P0-10 / 设计文档 §32-34）。
+
+    intent 语义：消费场景标识（research / factual_qa / current_state /
+    trading_decision / author_viewpoint 等），默认按 "research" 处理。
+    intent → KnowledgeAccessPolicy 质量门（最低 support_status、support score、
+    truth_status、review gate、valid_only），policy 合并在 service 层统一做一次；
+    调用方 filters 只能收紧 policy，不能放宽（§28 strictest merge）。
+    本层不做 merge，只透传 intent + 原始 filters，避免双重 merge 冲突。
+
+    返回 item 中的 source_reliability_score 语义为“来源（作者/平台）可靠性”，
+    不是单条证据的置信度（P1-5 / §56-57），不能替代 Evidence Verification。
+    """
     if not str(query or "").strip():
         return {"error": {"code": "EMPTY_QUERY", "message": "query is required"}, "items": [], "limit": 0, "warnings": ["empty_query"]}
     top_k, warnings = _safe_top_k(top_k)
@@ -142,11 +150,13 @@ def search_video_knowledge(
     validation_error = _validate_filters_in_place(merged_filters)
     if validation_error:
         return {"error": validation_error, "items": [], "limit": top_k, "filters": merged_filters, "warnings": warnings}
-    payload = service.search_video_knowledge(query=query, filters=merged_filters, limit=top_k)
-    return {"intent": intent, **payload, "warnings": [*(payload.get("warnings") or []), *warnings]}
+    payload = service.search_video_knowledge(query=query, filters=merged_filters, limit=top_k, intent=intent)
+    return {"intent": intent or "research", **payload, "warnings": [*(payload.get("warnings") or []), *warnings]}
 
 
 def get_current_subject_state(subject_key: str, domains: list[str] | None = None, domain: str | None = None, top_k: int = 10) -> dict:
+    """主体当前状态。repository 层已内置 current-state 质量门（P1-8 / §62-63）：
+    仅 ACTIVE/VALIDATED + SOURCE_SUPPORTED 及以上，且排除人工 review REJECTED。"""
     if not str(subject_key or "").strip():
         return {"error": {"code": "EMPTY_SUBJECT", "message": "subject_key is required"}, "items": [], "warnings": ["empty_subject"]}
     top_k, warnings = _safe_top_k(top_k)

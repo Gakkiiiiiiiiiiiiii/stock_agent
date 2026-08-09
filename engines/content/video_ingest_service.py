@@ -16,10 +16,13 @@ from engines.content.event_conflict_resolver import EventConflictResolver
 from engines.content.financial_entity_normalizer import FinancialEntityNormalizer
 from engines.content.financial_event_extractor import FinancialEventExtractor
 from engines.content.external_fact_verifier import ExternalFactVerifier
+from engines.content.external_verification.factory import build_default_provider
+from engines.content.cross_modal_evidence_verifier import CrossModalEvidenceVerifier
 from engines.content.cross_video_corroboration import CrossVideoCorroboration
 from engines.content.chapter_segmenter import ChapterSegmenter
 from engines.content.knowledge_conflict_resolver import KnowledgeConflictResolver
 from engines.content.knowledge_deduplicator import KnowledgeDeduplicator
+from engines.content.knowledge_enums import HIGH_RISK_KINDS, SupportStatus, TruthStatus
 from engines.content.knowledge_lifecycle_service import KnowledgeLifecycleService
 from engines.content.knowledge_temporal_policy import KnowledgeTemporalPolicy
 from engines.content.knowledge_unit_extractor import KnowledgeUnitExtractor
@@ -36,7 +39,9 @@ from engines.content.video_vision_service import VideoVisionService
 from engines.content.video_summarizer import VideoSummarizer
 from engines.content.xiaoe_hls_adapter import XiaoeHlsAdapter
 from engines.memory.memory_writer import enqueue_memory_reindex, write_memory_and_enqueue
+from engines.retrieval.knowledge_access_policy import KnowledgeAccessPolicy, to_filters
 from engines.retrieval.qdrant_client import FinancialQdrantClient
+from engines.retrieval.retrieval_policy import merge_policy_filters
 from financial_agent.utils import project_root
 from storage.repositories.content_repository import ContentQueryRepository, ContentTaskRepository, FinancialEventRepository, VideoAssetRepository, VideoChunkRepository, VideoFrameRepository, VideoSummaryRepository
 from storage.repositories.knowledge_repository import (
@@ -116,7 +121,8 @@ class VideoIngestService:
             repository=self.knowledge_repo,
             vector_task_service=self.knowledge_vector_task_service,
         )
-        self.external_fact_verifier = external_fact_verifier or ExternalFactVerifier()
+        self.external_fact_verifier = external_fact_verifier or ExternalFactVerifier(provider=build_default_provider())
+        self.cross_modal_evidence_verifier = CrossModalEvidenceVerifier()
         self.cross_video_corroboration = CrossVideoCorroboration()
         self.task_repo = task_repo or ContentTaskRepository()
         self.query_repo = query_repo or ContentQueryRepository()
@@ -163,6 +169,7 @@ class VideoIngestService:
             "summary_mode": summary_mode,
             "index_to_memory": index_to_memory,
             "use_diarization": use_diarization,
+            "speaker_mode": "DIARIZE" if use_diarization else "UNKNOWN",
             "language_hint": language_hint,
             "enable_visual_context": enable_visual_context,
         }
@@ -227,6 +234,7 @@ class VideoIngestService:
             "summary_mode": summary_mode,
             "index_to_memory": index_to_memory,
             "use_diarization": use_diarization,
+            "speaker_mode": "DIARIZE" if use_diarization else "UNKNOWN",
             "language_hint": language_hint,
             "enable_visual_context": enable_visual_context,
             "author_name": author_name,
@@ -242,6 +250,14 @@ class VideoIngestService:
         source_ref = page_url or metadata["url"]
         task = self.task_repo.create(source_type="xiaoe_hls", source_ref=source_ref, options=options, video_id=existing.id if existing else None)
         return {"task_id": task.id, "video_id": task.video_id, "status": task.status, "stage": task.stage, "deduplicated": False}
+
+    @staticmethod
+    def _resolve_speaker_mode(options: dict) -> str:
+        # 兼容存量任务：旧 options 只有 use_diarization，没有 speaker_mode。
+        explicit = str(options.get("speaker_mode") or "").strip().upper()
+        if explicit in {"SINGLE_SPEAKER", "DIARIZE", "UNKNOWN"}:
+            return explicit
+        return "DIARIZE" if options.get("use_diarization") else "UNKNOWN"
 
     def process_task(self, task_id: int) -> dict:
         task = self.task_repo.get(task_id)
@@ -262,10 +278,11 @@ class VideoIngestService:
             self._ensure_full_audio_download(metadata=metadata, audio_path=standardized_audio_path)
             self.video_repo.update_audio(asset.id, str(standardized_audio_path))
             self.task_repo.update(task_id, stage="asr", progress=45)
-            transcript = self.asr_service.transcribe(standardized_audio_path, language_hint=options.get("language_hint"))
-            if options.get("use_diarization"):
+            speaker_mode = self._resolve_speaker_mode(options)
+            transcript = self.asr_service.transcribe(standardized_audio_path, language_hint=options.get("language_hint"), speaker_mode=speaker_mode)
+            if speaker_mode == "DIARIZE":
                 self.task_repo.update(task_id, stage="diarization", progress=60)
-                transcript = self.diarization_service.annotate(standardized_audio_path, transcript)
+            transcript = self.diarization_service.annotate(standardized_audio_path, transcript, speaker_mode=speaker_mode)
             self.task_repo.update(task_id, stage="postprocess", progress=70)
             transcript = self.transcript_postprocessor.normalize(transcript, metadata=metadata)
             transcript["source_hash"] = hashlib.sha256((transcript.get("text") or "").encode("utf-8")).hexdigest()
@@ -344,10 +361,11 @@ class VideoIngestService:
             self._ensure_full_audio_download(metadata=metadata, audio_path=standardized_audio_path)
             self.video_repo.update_audio(asset.id, str(standardized_audio_path))
             self.task_repo.update(task_id, stage="asr", progress=45)
-            transcript = self.asr_service.transcribe(standardized_audio_path, language_hint=options.get("language_hint"))
-            if options.get("use_diarization"):
+            speaker_mode = self._resolve_speaker_mode(options)
+            transcript = self.asr_service.transcribe(standardized_audio_path, language_hint=options.get("language_hint"), speaker_mode=speaker_mode)
+            if speaker_mode == "DIARIZE":
                 self.task_repo.update(task_id, stage="diarization", progress=60)
-                transcript = self.diarization_service.annotate(standardized_audio_path, transcript)
+            transcript = self.diarization_service.annotate(standardized_audio_path, transcript, speaker_mode=speaker_mode)
             self.task_repo.update(task_id, stage="postprocess", progress=70)
             transcript = self.transcript_postprocessor.normalize(transcript, metadata=metadata)
             transcript["source_hash"] = hashlib.sha256((transcript.get("text") or "").encode("utf-8")).hexdigest()
@@ -419,6 +437,8 @@ class VideoIngestService:
             self.task_repo.update(task_id, stage="knowledge_normalize", progress=86)
             units = self.knowledge_normalizer.normalize(units, metadata=metadata)
             logger.info("知识流水线 video_id=%s normalize=%s", video_id, len(units))
+            units = self.cross_modal_evidence_verifier.verify_many(units)
+            logger.info("知识流水线 video_id=%s cross_modal=%s", video_id, len(units))
             self.task_repo.update(task_id, stage="external_verify", progress=88)
             units = self.external_fact_verifier.verify_many(units)
             source_date = self.knowledge_normalizer.parse_source_datetime(metadata.get("publish_time"))
@@ -502,19 +522,73 @@ class VideoIngestService:
 
     @staticmethod
     def _knowledge_quality_metrics(extraction_validation: dict, persisted_units: list[dict]) -> dict:
+        """P1-12（§70-71）：运行级质量指标，按三轴状态分组统计结果正确性信号，
+        而不是只记录流程执行计数。旧字段保留以兼容既有消费方。"""
+        total = len(persisted_units)
+
+        def _ratio(count: int) -> float | None:
+            return round(count / total, 4) if total else None
+
         ocr_evidence_count = 0
         low_evidence_count = 0
+        with_evidence_count = 0
+        measured_quality_count = 0
+        speaker_attributed_count = 0
+        support_counts = {"located": 0, "supported": 0, "cross_modal": 0, "needs_review": 0, "unsupported": 0}
+        truth_counts = {"eligible_fact_count": 0, "verified_fact_count": 0, "external_conflict_count": 0, "not_checked_count": 0}
         for unit in persisted_units:
             evidence = unit.get("evidence") or []
+            if evidence:
+                with_evidence_count += 1
             if any(str(item.get("source_type") or "").upper() in {"OCR", "VISION", "FRAME"} for item in evidence):
                 ocr_evidence_count += 1
-            if unit.get("verification_status") == "NEEDS_REVIEW":
+            support = str(unit.get("support_status") or "").strip().upper()
+            legacy_status = str(unit.get("verification_status") or "").strip().upper()
+            if support == "NEEDS_REVIEW" or (not support and legacy_status == "NEEDS_REVIEW"):
+                support_counts["needs_review"] += 1
+            elif support in {
+                SupportStatus.SOURCE_LOCATED.value,
+                SupportStatus.SOURCE_SUPPORTED.value,
+                SupportStatus.CROSS_MODAL_SUPPORTED.value,
+            }:
+                support_counts[{
+                    SupportStatus.SOURCE_LOCATED.value: "located",
+                    SupportStatus.SOURCE_SUPPORTED.value: "supported",
+                    SupportStatus.CROSS_MODAL_SUPPORTED.value: "cross_modal",
+                }[support]] += 1
+            elif support == SupportStatus.UNSUPPORTED.value:
+                support_counts["unsupported"] += 1
+            elif support in {"EXTERNALLY_VERIFIED", "VALIDATED"}:  # legacy 高等级值
+                support_counts["cross_modal"] += 1
+            if legacy_status == "NEEDS_REVIEW":
                 low_evidence_count += 1
+            if str(unit.get("evidence_quality_status") or "").strip().upper() in {"HIGH", "MEDIUM", "LOW"}:
+                measured_quality_count += 1
+            if unit.get("speaker_id"):
+                speaker_attributed_count += 1
+            if str(unit.get("knowledge_kind") or "").strip().upper() in HIGH_RISK_KINDS:
+                truth_counts["eligible_fact_count"] += 1
+                truth = str(unit.get("truth_status") or "").strip().upper()
+                if truth == TruthStatus.EXTERNALLY_VERIFIED.value:
+                    truth_counts["verified_fact_count"] += 1
+                elif truth == TruthStatus.EXTERNAL_CONFLICT.value:
+                    truth_counts["external_conflict_count"] += 1
+                else:  # NOT_CHECKED / NOT_FOUND / 空
+                    truth_counts["not_checked_count"] += 1
+        unknown_quality_count = total - measured_quality_count
         return {
             "extraction_validation": extraction_validation or {},
             "ocr_evidence_unit_count": ocr_evidence_count,
             "low_evidence_unit_count": low_evidence_count,
-            "knowledge_unit_count": len(persisted_units),
+            "knowledge_unit_count": total,
+            "evidence": {
+                "coverage": _ratio(with_evidence_count),
+                "unknown_quality_ratio": _ratio(unknown_quality_count),
+                "measured_quality_ratio": _ratio(measured_quality_count),
+            },
+            "support": support_counts,
+            "truth": truth_counts,
+            "speaker": {"attributed_unit_ratio": _ratio(speaker_attributed_count)},
         }
 
     def _annotate_cross_video_corroboration(self, units: list[dict]) -> None:
@@ -673,14 +747,22 @@ class VideoIngestService:
     def get_knowledge_unit(self, unit_id: int) -> dict | None:
         return self.knowledge_repo.get_unit(unit_id)
 
-    def search_video_knowledge(self, query: str, filters: dict | None = None, limit: int = 20) -> dict:
+    def search_video_knowledge(self, query: str, filters: dict | None = None, limit: int = 20, intent: str | None = None) -> dict:
+        """统一质量门搜索（P0-10 / 设计文档 §32-34）。
+
+        intent → KnowledgeAccessPolicy 的 AccessRule，policy 与调用方 filters
+        在本层做一次 strictest merge（调用方只能收紧，不能放宽）。
+        MCP / API 只传 intent + 原始 filters，不再各自 merge。
+        """
         safe_limit, warnings = self._safe_knowledge_limit(limit, default=20)
+        policy_filters = to_filters(KnowledgeAccessPolicy.for_intent(intent or "research"))
+        merged_filters = merge_policy_filters(policy_filters, filters or {})
         return {
             "query": query,
-            "items": self.knowledge_repo.search_units(query, filters=filters, limit=safe_limit),
+            "items": self.knowledge_repo.search_units(query, filters=merged_filters, limit=safe_limit),
             "limit": safe_limit,
             "next_cursor": None,
-            "filters": filters or {},
+            "filters": merged_filters,
             "warnings": warnings,
         }
 
@@ -690,6 +772,7 @@ class VideoIngestService:
         *,
         lifecycle_status: str | None = None,
         verification_status: str | None = None,
+        review_status: str | None = None,
         valid_to: datetime | None = None,
         note: str | None = None,
         operator: str | None = None,
@@ -698,6 +781,7 @@ class VideoIngestService:
             unit_id,
             lifecycle_status=lifecycle_status,
             verification_status=verification_status,
+            review_status=review_status,
             valid_to=valid_to,
             reason=note,
             operator=operator,
@@ -720,7 +804,14 @@ class VideoIngestService:
 
     def get_current_subject_state(self, subject_key: str, domain: str | None = None, limit: int = 20) -> dict:
         safe_limit, warnings = self._safe_knowledge_limit(limit, default=20)
-        payload = self.knowledge_repo.get_current_subject_state(subject_key=subject_key, domain=domain, limit=safe_limit)
+        # P1-8（§62-63）：current-state 查询统一走中央 Policy 的 support score 门槛。
+        policy = KnowledgeAccessPolicy.for_intent("current_state")
+        payload = self.knowledge_repo.get_current_subject_state(
+            subject_key=subject_key,
+            domain=domain,
+            limit=safe_limit,
+            minimum_support_score=policy.min_support_score,
+        )
         return payload | {"limit": safe_limit, "next_cursor": None, "filters": {"subject_key": subject_key, "domain": domain}, "warnings": warnings}
 
     def get_subject_history(self, subject_key: str, domain: str | None = None, limit: int = 50) -> dict:
