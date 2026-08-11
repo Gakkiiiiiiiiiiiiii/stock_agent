@@ -10,6 +10,7 @@ import redis
 
 from engines.market.stream_repository import RedisMarketEventStream
 from engines.market.streaming import StreamingFeatureEngine
+from engines.market.realtime_state_repository import RealtimeFeatureStateRepository
 
 logger = logging.getLogger(__name__)
 
@@ -25,10 +26,13 @@ def build_worker() -> tuple[RedisMarketEventStream, StreamingFeatureEngine, str,
     return stream, StreamingFeatureEngine(lateness), group, consumer
 
 
-def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine, group: str, consumer: str, count: int = 100) -> int:
+def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine, group: str, consumer: str, count: int = 100, state_repository: RealtimeFeatureStateRepository | None = None) -> int:
     processed = 0
     for message_id, event in stream.consume(group, consumer, count):
         result = engine.process(event)
+        if result.get("accepted") and state_repository is not None:
+            state_repository.save_symbol(event.symbol, engine.symbol_features(event.symbol))
+            state_repository.save_aggregate(engine.aggregate_features())
         # Both normal, duplicate and late events are durable outcomes.  Acking
         # them avoids poison-message loops while retaining late event IDs in the
         # engine audit state.
@@ -41,9 +45,10 @@ def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     stream, engine, group, consumer = build_worker()
+    state = RealtimeFeatureStateRepository(stream.client)
     while True:
         try:
-            process_batch(stream, engine, group, consumer)
+            process_batch(stream, engine, group, consumer, state_repository=state)
         except Exception:  # noqa: BLE001
             logger.exception("market stream processing failed")
             time.sleep(2)

@@ -60,7 +60,7 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "app*", "engines*", "financial_agent*", "mcp_servers*", "storage*", "workers*", "xiaoe_hls_poc*"]
+include = ["agent*", "app*", "contracts*", "engines*", "financial_agent*", "mcp_servers*", "services*", "storage*", "workers*", "xiaoe_hls_poc*"]
 exclude = ["artitect*", "config*", "docs*", "knowledge_base*", "skills*", "tests*"]
 
 [tool.pytest.ini_options]

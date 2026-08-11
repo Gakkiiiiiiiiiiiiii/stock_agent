@@ -1,5 +1,10 @@
 multi_agent:
   version: v1
+  # Controlled rollout: when true ClaudeAgent.run routes configured skills
+  # through the real specialist DAG before SkillExecutor.
+  enabled: false
+  enabled_skills:
+    - daily-market-decision
   max_agents_per_run: 8
   max_parallel_agents: 4
   max_total_tool_calls: 60

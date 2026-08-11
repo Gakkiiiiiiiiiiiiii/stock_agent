@@ -12,4 +12,9 @@ def reconcile(local: dict, broker: dict, tolerance: float = 1e-6) -> dict:
     for symbol in sorted(set(local_positions) | set(broker_positions)):
         if abs(float(local_positions.get(symbol, 0)) - float(broker_positions.get(symbol, 0))) > tolerance:
             differences.append({"kind": "POSITION_MISMATCH", "symbol": symbol, "local": local_positions.get(symbol, 0), "broker": broker_positions.get(symbol, 0)})
+    for field in ("orders", "fills"):
+        local_ids = {str(item.get("broker_order_id") or item.get("id")) for item in (local.get(field) or [])}
+        broker_ids = {str(item.get("broker_order_id") or item.get("id")) for item in (broker.get(field) or [])}
+        if local_ids != broker_ids:
+            differences.append({"kind": field.upper() + "_MISMATCH", "local_only": sorted(local_ids - broker_ids), "broker_only": sorted(broker_ids - local_ids)})
     return {"status": "RECONCILED" if not differences else "RECONCILIATION_REQUIRED", "differences": differences, "allow_position_increase": not differences}

@@ -95,14 +95,7 @@ class QmtMarketDataProvider(MarketDataProvider):
     def get_market_snapshot(self, as_of: date | None = None, force_refresh: bool = False) -> dict[str, Any]:
         _ = force_refresh
         if as_of and as_of != date.today():
-            return {
-                "market_regime": "未知",
-                "risk_appetite": "未知",
-                "warning": "HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE",
-                "quality_score": 0.0,
-                "quality_flags": ["HISTORICAL_MARKET_SNAPSHOT_UNAVAILABLE"],
-                "source": "qmt",
-            }
+            return self._get_historical_market_snapshot(as_of)
         index_symbols = ["000001.SH", "399001.SZ", "399006.SZ"]
         requested_day = as_of or date.today()
         end_day = latest_available_trading_day(requested_day)
@@ -286,8 +279,18 @@ class QmtMarketDataProvider(MarketDataProvider):
         }
 
     def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:
-        if as_of and as_of != date.today():
-            return []
+        # SectorFeatureService is responsible for point-in-time membership;
+        # do not short-circuit historical calls to an empty result.
+        if as_of and as_of < date.today():
+            try:
+                from engines.market.feature_service import SectorFeatureService
+
+                return SectorFeatureService(provider=self, repository=self._get_feature_repository()).get_sector_strength(
+                    top_k=top_k, as_of=as_of, read_cache=False
+                )
+            except Exception:
+                logger.warning("historical sector strength failed", exc_info=True)
+                return []
         try:
             rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
         except QmtBridgeError:
@@ -311,6 +314,77 @@ class QmtMarketDataProvider(MarketDataProvider):
         else:
             return results
         return self._sampled_sector_strength(membership, top_k=top_k, as_of=as_of)
+
+    def _get_historical_market_snapshot(self, as_of: date) -> dict[str, Any]:
+        """Rebuild a daily market view using only rows whose trading date is not
+        later than ``as_of``. Missing historical breadth lowers coverage rather
+        than returning an all-UNKNOWN snapshot."""
+        end_day = latest_available_trading_day(as_of)
+        start_day = end_day - timedelta(days=45)
+        index_symbols = ["000001.SH", "399001.SZ", "399006.SZ"]
+        try:
+            index_rows = self.bridge.get_history(symbols=index_symbols, period="1d", start_time=start_day.strftime("%Y%m%d"), end_time=end_day.strftime("%Y%m%d"), dividend_type="front", fill_data=True, prefer_cache_first=True)
+        except QmtBridgeError as exc:
+            return {"market_regime": "未知", "risk_appetite": "未知", "warning": str(exc), "quality_flags": ["HISTORICAL_INDEX_UNAVAILABLE"], "source": "qmt", "as_of": end_day.isoformat()}
+        grouped = group_history_rows(index_rows or [])
+        intraday_values: list[float] = []
+        returns_5d: list[float] = []
+        returns_20d: list[float] = []
+        volatility: list[float] = []
+        drawdown: list[float] = []
+        for symbol in index_symbols:
+            records = [item for item in grouped.get(symbol, []) if item.date <= end_day]
+            if len(records) >= 2 and records[-2].close > 0:
+                intraday_values.append((records[-1].close / records[-2].close - 1) * 100)
+            for bucket, fn, target in ((5, calculate_return_pct, returns_5d), (20, calculate_return_pct, returns_20d), (20, calculate_volatility_pct, volatility), (20, calculate_drawdown_pct, drawdown)):
+                value = fn(records, bucket)
+                if value is not None:
+                    target.append(value)
+        breadth = self._build_historical_market_breadth(end_day)
+        intraday, avg_5d, avg_20d = average(intraday_values), average(returns_5d), average(returns_20d)
+        regime, appetite = classify_market_snapshot(intraday, avg_5d, avg_20d)
+        flags = list(breadth.get("quality_flags") or []) + ["HISTORICAL_REBUILT"]
+        return {
+            "market_regime": regime, "risk_appetite": appetite, "source": "qmt", "as_of": end_day.isoformat(),
+            "turnover": breadth.get("turnover_amount"), "turnover_amount": breadth.get("turnover_amount"),
+            "universe_size": breadth.get("universe_size"), "requested_quote_count": breadth.get("requested_quote_count"), "received_quote_count": breadth.get("received_quote_count"), "quote_coverage": breadth.get("quote_coverage"),
+            "up_count": breadth.get("up_count"), "down_count": breadth.get("down_count"), "limit_up_count": breadth.get("limit_up_count"), "limit_down_count": breadth.get("limit_down_count"), "top10_amount_share": breadth.get("top10_amount_share"),
+            "quality_flags": sorted(set(flags)), "quality_score": breadth.get("quality_score"), "warning": breadth.get("warning"),
+            "indices": {"intraday_pct": safe_round(intraday, 2), "return_5d_pct": safe_round(avg_5d, 2), "return_20d_pct": safe_round(avg_20d, 2), "volatility_20d_pct": safe_round(average(volatility), 2), "drawdown_20d_pct": safe_round(average(drawdown), 2)},
+        }
+
+    def _build_historical_market_breadth(self, as_of: date) -> dict[str, Any]:
+        repository = self._get_feature_repository()
+        memberships = repository.get_memberships_at(at_date=as_of) if repository is not None else []
+        symbols = sorted({item.symbol for item in memberships})
+        if not symbols:
+            return {"quality_flags": ["HISTORICAL_MEMBERSHIP_UNAVAILABLE"], "warning": "HISTORICAL_MEMBERSHIP_UNAVAILABLE", "quality_score": 0.0}
+        rows: list[dict[str, Any]] = []
+        start = as_of - timedelta(days=5)
+        for chunk in batched(symbols, 200):
+            try:
+                rows.extend(self.bridge.get_history(symbols=chunk, period="1d", start_time=start.strftime("%Y%m%d"), end_time=as_of.strftime("%Y%m%d"), dividend_type="front", fill_data=True, prefer_cache_first=True) or [])
+            except QmtBridgeError:
+                continue
+        grouped = group_history_rows(rows)
+        up = down = limit_up = limit_down = received = 0
+        amounts: list[float] = []
+        for symbol in symbols:
+            records = [item for item in grouped.get(symbol, []) if item.date <= as_of]
+            if len(records) < 2 or records[-2].close <= 0:
+                continue
+            received += 1
+            pct = records[-1].close / records[-2].close - 1
+            if pct > 0: up += 1
+            elif pct < 0: down += 1
+            rule = resolve_price_limit_rule(symbol, trade_date=as_of)
+            if rule.has_price_limit and rule.limit_up_pct is not None:
+                if pct >= rule.limit_up_pct - .002: limit_up += 1
+                elif pct <= -rule.limit_down_pct + .002: limit_down += 1
+            if records[-1].amount > 0: amounts.append(records[-1].amount)
+        coverage = received / len(symbols) if symbols else 0.0
+        total = sum(amounts)
+        return {"universe_size": len(symbols), "requested_quote_count": len(symbols), "received_quote_count": received, "quote_coverage": round(coverage, 6), "up_count": up, "down_count": down, "limit_up_count": limit_up, "limit_down_count": limit_down, "turnover_amount": round(total, 2) if total else None, "top10_amount_share": round(sum(sorted(amounts, reverse=True)[:10]) / total, 6) if total else None, "quality_score": round(coverage, 6), "quality_flags": ["HISTORICAL_QUOTE_COVERAGE_LOW"] if coverage < .9 else []}
 
     def _get_feature_repository(self) -> Any:
         """惰性构造 MarketFeatureRepository；不可用时返回 None（持久化为 best-effort）。"""

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from sqlalchemy import select
+
 from storage.db import session_scope
 from storage.models.p2 import (
     AgentConflictRecord, AgentRun, AgentSubtask, ExecutionFillRecord,
     ExecutionOrderRecord, ExecutionReconciliationRecord, PositionSnapshotRecord,
-    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, TradeIntentRecord,
+    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, TradeIntentRecord, ExecutionOrderEventRecord,
 )
 
 
@@ -27,6 +29,40 @@ class P2Repository:
 
     def add_fill(self, **payload) -> ExecutionFillRecord:
         return self._add(ExecutionFillRecord(**payload))
+
+    def add_order_event(self, **payload) -> ExecutionOrderEventRecord:
+        return self._add(ExecutionOrderEventRecord(**payload))
+
+    def get_trade_intent_by_client_order_id(self, client_order_id: str) -> TradeIntentRecord | None:
+        with session_scope() as session:
+            return session.execute(select(TradeIntentRecord).where(TradeIntentRecord.client_order_id == client_order_id)).scalars().first()
+
+    def get_order(self, order_id: str) -> ExecutionOrderRecord | None:
+        with session_scope() as session:
+            return session.get(ExecutionOrderRecord, order_id)
+
+    def get_order_for_client_order_id(self, client_order_id: str) -> ExecutionOrderRecord | None:
+        with session_scope() as session:
+            intent = session.execute(select(TradeIntentRecord).where(TradeIntentRecord.client_order_id == client_order_id)).scalars().first()
+            return session.execute(select(ExecutionOrderRecord).where(ExecutionOrderRecord.trade_intent_id == intent.id)).scalars().first() if intent else None
+
+    def update_order_status(self, order_id: str, status: str, **payload) -> ExecutionOrderRecord:
+        with session_scope() as session:
+            row = session.get(ExecutionOrderRecord, order_id)
+            if row is None: raise KeyError(order_id)
+            row.status = status
+            for key, value in payload.items(): setattr(row, key, value)
+            session.flush(); session.refresh(row)
+            return row
+
+    def list_fills(self, order_id: str) -> list[ExecutionFillRecord]:
+        with session_scope() as session:
+            return list(session.execute(select(ExecutionFillRecord).where(ExecutionFillRecord.execution_order_id == order_id)).scalars())
+
+    def list_open_orders(self) -> list[ExecutionOrderRecord]:
+        terminal = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
+        with session_scope() as session:
+            return list(session.execute(select(ExecutionOrderRecord).where(ExecutionOrderRecord.status.not_in(terminal))).scalars())
 
     def add_position_snapshot(self, **payload) -> PositionSnapshotRecord:
         return self._add(PositionSnapshotRecord(**payload))

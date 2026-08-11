@@ -29,6 +29,21 @@ class SharedContext:
             self._token_used += artifact.token_used
             self._artifacts[artifact.task_id] = artifact
 
+    def reserve_budget(self, tool_calls: int = 0, tokens: int = 0) -> None:
+        """Reserve before a specialist starts so parallel work cannot overspend."""
+        with self._lock:
+            if self._tool_used + tool_calls > self.max_tools or self._token_used + tokens > self.max_tokens:
+                raise BudgetExceeded("shared budget reservation rejected")
+            self._tool_used += tool_calls
+            self._token_used += tokens
+
+    def commit_budget(self, reserved_tools: int, reserved_tokens: int, artifact: AgentArtifact) -> None:
+        """Replace a reservation with actual usage without double counting."""
+        with self._lock:
+            self._tool_used -= reserved_tools
+            self._token_used -= reserved_tokens
+        self.record(artifact)
+
     def artifact(self, task_id: str) -> AgentArtifact | None:
         with self._lock:
             return self._artifacts.get(task_id)

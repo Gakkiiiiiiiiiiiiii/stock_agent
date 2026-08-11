@@ -36,6 +36,14 @@ class ExecutionService:
         existing = self._orders.get(intent.idempotency_key())
         if existing:
             return existing.order
+        if self.repository is not None:
+            existing_intent = self.repository.get_trade_intent_by_client_order_id(intent.idempotency_key())
+            if existing_intent is not None:
+                existing_order = self.repository.get_order_for_client_order_id(intent.idempotency_key())
+                if existing_order is not None:
+                    restored = ExecutionOrder(id=existing_order.id, client_order_id=intent.idempotency_key(), intent=TradeIntent.model_validate(existing_intent.payload), mode=existing_order.mode, status=existing_order.status, quantity=existing_order.quantity, limit_price=existing_order.limit_price, broker_order_id=existing_order.broker_order_id, rejection_reasons=list(existing_order.rejection_reasons or []))
+                    self._orders[restored.client_order_id] = _StoredOrder(restored, sum(item.quantity for item in self.repository.list_fills(restored.id)))
+                    return restored
         duplicate_context = {**context, "duplicate_order": False}
         reasons = validate_trade_intent(intent, duplicate_context, self.rules)
         order = ExecutionOrder(client_order_id=intent.idempotency_key(), intent=intent, mode=self.mode, quantity=quantity, limit_price=limit_price)
@@ -56,6 +64,7 @@ class ExecutionService:
                 quantity=order.quantity, limit_price=order.limit_price, broker_order_id=order.broker_order_id,
                 rejection_reasons=order.rejection_reasons,
             )
+            self.repository.add_order_event(execution_order_id=order.id, status=order.status.value, payload={"reasons": order.rejection_reasons})
         return order
 
     def submit(self, client_order_id: str) -> ExecutionOrder:
@@ -72,6 +81,9 @@ class ExecutionService:
                 return order
             order.broker_order_id = self.adapter.submit(order)
         order.status = OrderStatus.SUBMITTED
+        if self.repository is not None:
+            self.repository.update_order_status(order.id, order.status.value, broker_order_id=order.broker_order_id)
+            self.repository.add_order_event(execution_order_id=order.id, status=order.status.value, payload={})
         return order
 
     def record_fill(self, fill: ExecutionFill) -> ExecutionOrder:
@@ -83,10 +95,12 @@ class ExecutionService:
             raise ValueError("filled quantity exceeds order quantity")
         stored.order.status = OrderStatus.FILLED if stored.filled_quantity == stored.order.quantity else OrderStatus.PARTIALLY_FILLED
         if self.repository is not None:
+            self.repository.update_order_status(stored.order.id, stored.order.status.value)
             self.repository.add_fill(
                 execution_order_id=fill.order_id, quantity=fill.quantity, price=fill.price,
                 broker_fill_id=fill.broker_fill_id, filled_at=fill.filled_at,
             )
+            self.repository.add_order_event(execution_order_id=stored.order.id, status=stored.order.status.value, payload=fill.model_dump(mode="json"))
         return stored.order
 
     def order(self, client_order_id: str) -> ExecutionOrder | None:

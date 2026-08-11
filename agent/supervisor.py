@@ -57,7 +57,10 @@ class Supervisor:
         return {"artifacts": [item.model_dump(mode="json") for item in shared.artifacts()], "errors": errors, "usage": shared.usage()}
 
     def _run_one(self, task: AgentTask, shared: SharedContext) -> AgentArtifact:
-        role = AgentRole(task.task_type)
+        # task_type describes the business task (e.g. daily_market_decision),
+        # while assigned_agent is the specialist role. Retain the v1 fallback
+        # so persisted/test tasks using a role as task_type remain replayable.
+        role = task.assigned_agent or AgentRole(task.task_type)
         specialist = self.specialists.get(role)
         if specialist is None:
             raise ValueError(f"unregistered specialist: {role}")

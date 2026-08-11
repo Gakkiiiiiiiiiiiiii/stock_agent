@@ -3,13 +3,13 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 services:
-  api: {enabled: true, replicas: 2, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000}
-  worker: {enabled: true, replicas: 1, command: ["python", "workers/job_worker.py"]}
-  retrieval: {enabled: true, replicas: 2, command: ["uvicorn", "workers/reranker_api:app", "--host", "0.0.0.0", "--port", "8010"], port: 8010}
-  market-data: {enabled: true, replicas: 1, command: ["python", "scripts/qmt_bridge_http.py"], singleton: true}
-  execution: {enabled: true, replicas: 1, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8011"], singleton: true, port: 8011}
-  content-cpu: {enabled: true, replicas: 1, command: ["python", "workers/content_ingest_worker.py"]}
-  content-gpu: {enabled: false, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], gpu: 1}
+  api: {enabled: true, replicas: 2, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000, probe: {type: http, path: /health/ready, port: 8000}}
+  worker: {enabled: true, replicas: 1, command: ["python", "workers/job_worker.py"], probe: {type: none}}
+  retrieval: {enabled: true, replicas: 2, command: ["uvicorn", "services.retrieval_api:app", "--host", "0.0.0.0", "--port", "8010"], port: 8010, probe: {type: http, path: /health/ready, port: 8010}}
+  market-data: {enabled: true, replicas: 1, command: ["uvicorn", "services.market_data_api:app", "--host", "0.0.0.0", "--port", "8012"], singleton: true, port: 8012, probe: {type: http, path: /health/ready, port: 8012}}
+  execution: {enabled: true, replicas: 1, command: ["uvicorn", "services.execution_api:app", "--host", "0.0.0.0", "--port", "8011"], singleton: true, port: 8011, probe: {type: http, path: /health/ready, port: 8011}}
+  content-cpu: {enabled: true, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], probe: {type: none}}
+  content-gpu: {enabled: false, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], gpu: 1, probe: {type: none}}
 resources:
   requests: {cpu: 250m, memory: 512Mi}
   limits: {cpu: "1", memory: 1Gi}
@@ -22,3 +22,5 @@ cronJobs:
   - {name: market-feature-snapshot, schedule: "5 15 * * 1-5", command: ["python", "workers/job_worker.py", "--once"]}
   - {name: lifecycle-sweep, schedule: "15 16 * * *", command: ["python", "workers/job_worker.py", "--once"]}
   - {name: retrieval-evaluation, schedule: "30 17 * * 0", command: ["python", "-m", "scripts.run_retrieval_evaluation"]}
+  - {name: outcome-evaluation, schedule: "30 16 * * 1-5", command: ["python", "workers/job_worker.py", "--once"]}
+  - {name: vector-reconciliation, schedule: "0 18 * * *", command: ["python", "workers/vector_index_worker.py", "--once"]}

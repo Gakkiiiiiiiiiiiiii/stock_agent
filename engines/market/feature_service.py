@@ -52,7 +52,7 @@ class _BuilderDataAccess:
             return self._kline_cache[symbol]
         return _provider_call(self.provider, "get_kline", symbol)
 
-    def warm_kline_cache(self, symbols: list[str], batch_size: int = 200, lookback_days: int = 240) -> None:
+    def warm_kline_cache(self, symbols: list[str], batch_size: int = 200, lookback_days: int = 240, as_of: date | None = None) -> None:
         """批量预取 K 线；无批量接口（如测试假 provider）时静默跳过。"""
         fetch = getattr(self.provider, "get_history", None)
         if fetch is None:
@@ -62,8 +62,9 @@ class _BuilderDataAccess:
         pending = [symbol for symbol in symbols if symbol not in self._kline_cache]
         if not pending:
             return
-        start = (date.today() - timedelta(days=lookback_days)).strftime("%Y%m%d")
-        end = date.today().strftime("%Y%m%d")
+        anchor = as_of or date.today()
+        start = (anchor - timedelta(days=lookback_days)).strftime("%Y%m%d")
+        end = anchor.strftime("%Y%m%d")
         for chunk in batched(sorted(set(pending)), batch_size):
             try:
                 rows = fetch(
@@ -149,7 +150,7 @@ class SectorFeatureService:
             cached = self._read_cache(top_k=top_k, as_of=as_of_dt)
             if cached:
                 return cached
-        membership, sector_codes = self._load_membership()
+        membership, sector_codes = self._load_membership(_as_date(as_of_dt))
         if not membership:
             return []
         feature_version = str(
@@ -157,10 +158,10 @@ class SectorFeatureService:
             or get_version("sector_strength_version", DEFAULT_SECTOR_CALCULATION_VERSION)
         )
         builder = SectorFeatureBuilder(
-            self._warm_data_access(membership),
+            self._warm_data_access(membership, _as_date(as_of_dt)),
             low_coverage_threshold=float(self.config.get("low_coverage_threshold", 0.6)),
         )
-        features = builder.build_sector_features(membership, market_context=self._market_context(), sector_codes=sector_codes)
+        features = builder.build_sector_features(membership, market_context=self._market_context(_as_date(as_of_dt)), sector_codes=sector_codes)
         results = builder.compute_strength(
             features,
             weights=dict(self.config.get("weights") or {}),
@@ -173,14 +174,14 @@ class SectorFeatureService:
 
     def get_sector_features(self, sector: str, as_of: datetime | date | None = None) -> dict[str, Any] | None:
         as_of_dt = _as_datetime(as_of)
-        membership, sector_codes = self._load_membership()
+        membership, sector_codes = self._load_membership(_as_date(as_of_dt))
         if sector not in membership:
             return None
         builder = SectorFeatureBuilder(
-            self._warm_data_access(membership),
+            self._warm_data_access(membership, _as_date(as_of_dt)),
             low_coverage_threshold=float(self.config.get("low_coverage_threshold", 0.6)),
         )
-        features = builder.build_sector_features(membership, market_context=self._market_context(), sector_codes=sector_codes)
+        features = builder.build_sector_features(membership, market_context=self._market_context(_as_date(as_of_dt)), sector_codes=sector_codes)
         detail = dict(features[sector])
         strengths = builder.compute_strength(
             features,
@@ -202,13 +203,32 @@ class SectorFeatureService:
         detail["as_of"] = as_of_dt or datetime.now(timezone.utc)
         return detail
 
-    def _warm_data_access(self, membership: dict[str, list[str]]) -> _BuilderDataAccess:
+    def _warm_data_access(self, membership: dict[str, list[str]], as_of: date | None = None) -> _BuilderDataAccess:
         data_access = _BuilderDataAccess(self.provider)
         all_symbols = sorted({symbol for symbols in membership.values() for symbol in symbols})
-        data_access.warm_kline_cache(all_symbols)
+        data_access.warm_kline_cache(all_symbols, as_of=as_of)
         return data_access
 
-    def _load_membership(self) -> tuple[dict[str, list[str]], dict[str, str]]:
+    def _load_membership(self, as_of: date | None = None) -> tuple[dict[str, list[str]], dict[str, str]]:
+        """Load point-in-time constituents. Historical calls must never use QMT's
+        current industry map because that would leak future reclassifications."""
+        requested_date = as_of or date.today()
+        if requested_date < date.today():
+            getter = getattr(self.repository, "get_memberships_at", None)
+            if getter is None:
+                return {}, {}
+            rows = getter(at_date=requested_date) or []
+            membership: dict[str, list[str]] = {}
+            sector_codes: dict[str, str] = {}
+            for row in rows:
+                sector = str(getattr(row, "sector_name", "") or "未分类")
+                symbol = str(getattr(row, "symbol", "") or "").strip()
+                if symbol:
+                    membership.setdefault(sector, []).append(symbol)
+                    code = str(getattr(row, "sector_code", "") or "")
+                    if code:
+                        sector_codes.setdefault(sector, code)
+            return membership, sector_codes
         rows = _provider_call(self.provider, "get_industry_map", symbols=[], sector_prefix="GICS2", only_a_share=True)
         membership: dict[str, list[str]] = {}
         sector_codes: dict[str, str] = {}
@@ -223,17 +243,17 @@ class SectorFeatureService:
                 sector_codes[sector] = code
         return membership, sector_codes
 
-    def _market_context(self) -> dict[str, Any]:
+    def _market_context(self, as_of: date | None = None) -> dict[str, Any]:
         context: dict[str, Any] = {}
         try:
-            snapshot = self.provider.get_market_snapshot()
+            snapshot = self.provider.get_market_snapshot(as_of=as_of)
         except Exception:  # noqa: BLE001 - 市场上下文缺失时按空上下文继续
             return context
         indices = snapshot.get("indices") or {}
         context["market_return_5d"] = indices.get("return_5d_pct")
         context["market_return_20d"] = indices.get("return_20d_pct")
         context["total_market_amount"] = snapshot.get("turnover_amount") or snapshot.get("turnover")
-        context["trade_date"] = date.today()
+        context["trade_date"] = as_of or date.today()
         return context
 
     def _read_cache(self, top_k: int, as_of: datetime | None) -> list[dict[str, Any]] | None:

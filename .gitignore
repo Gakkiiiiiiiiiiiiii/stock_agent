@@ -3,6 +3,7 @@
 .idea/
 .pytest_cache/
 .pytest_tmp*/
+.pytest_tmp*.db
 .pytest-tmp/
 __pycache__/
 *.py[cod]

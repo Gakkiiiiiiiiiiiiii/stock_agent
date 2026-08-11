@@ -99,6 +99,16 @@ class InvestmentDecision(Base):
     agent_run_id: Mapped[str | None] = mapped_column(String(36), index=True)
     supervisor_version: Mapped[str | None] = mapped_column(String(32))
     participating_agents: Mapped[list | None] = mapped_column(JSON)
+    decision_type: Mapped[str | None] = mapped_column(String(64))
+    market: Mapped[str | None] = mapped_column(String(32))
+    style: Mapped[str | None] = mapped_column(String(64))
+    sector: Mapped[str | None] = mapped_column(String(128))
+    opportunity_ranking_version: Mapped[str | None] = mapped_column(String(64))
+    portfolio_rule_version: Mapped[str | None] = mapped_column(String(64))
+    benchmark_router_version: Mapped[str | None] = mapped_column(String(64))
+    regime_model_version: Mapped[str | None] = mapped_column(String(64))
+    retrieval_policy_version: Mapped[str | None] = mapped_column(String(64))
+    benchmark_route_input: Mapped[dict | None] = mapped_column(JSON)
 
 
 class InvestmentDecisionOutcome(Base):

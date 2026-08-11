@@ -134,3 +134,28 @@ jobs:
         with:
           name: video-accuracy-real-report
           path: artifacts/video_accuracy/real_report.json
+
+  full-stack-e2e:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - name: Start real service dependencies
+        run: docker compose up -d postgres redis qdrant embedding reranker api vector_worker job_worker
+      - name: Wait for API readiness
+        run: python scripts/wait_full_stack.py --url http://127.0.0.1:8000/health/ready --timeout 180
+      - name: Full stack integration tests
+        run: |
+          pip install -e ".[test]"
+          pytest -q tests/integration/test_service_stack.py -m integration
+      - name: Collect service logs
+        if: always()
+        run: docker compose logs --no-color > artifacts/full_stack_compose.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with: {name: full-stack-logs, path: artifacts/full_stack_compose.log}
+      - name: Stop stack
+        if: always()
+        run: docker compose down -v

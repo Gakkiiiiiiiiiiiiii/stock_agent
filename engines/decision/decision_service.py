@@ -51,6 +51,9 @@ class DecisionService:
     def save_decision(self, **payload: Any) -> dict:
         create_all()
         route_attrs = {key: payload.pop(key) for key in _ROUTING_ONLY_KEYS if key in payload}
+        # Persist every router input so replay can reconstruct the historical
+        # benchmark decision rather than silently using today's defaults.
+        payload.update(route_attrs)
         route_attrs.setdefault("symbols", [str(item["symbol"]) for item in payload.get("candidates") or [] if isinstance(item, dict) and item.get("symbol")])
         route_attrs.setdefault("themes", list(payload.get("themes") or []))
         route = BenchmarkRouter().route(route_attrs)
@@ -62,6 +65,7 @@ class DecisionService:
         else:
             payload["benchmark_symbol"] = route["primary_benchmark"]
         payload.setdefault("benchmark_route", route)
+        payload.setdefault("benchmark_route_input", route_attrs)
         decision = self.repository.create(**payload)
         jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at))
         return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs}

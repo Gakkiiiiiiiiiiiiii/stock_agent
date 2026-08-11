@@ -1,0 +1,1 @@
+CREATE TABLE IF NOT EXISTS execution_order_event (id SERIAL PRIMARY KEY, execution_order_id VARCHAR(36) NOT NULL, status VARCHAR(32) NOT NULL, payload JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);

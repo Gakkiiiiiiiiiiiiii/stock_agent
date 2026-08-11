@@ -84,6 +84,15 @@ class ExecutionFillRecord(Base):
     filled_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
 
+class ExecutionOrderEventRecord(Base):
+    __tablename__ = "execution_order_event"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    execution_order_id: Mapped[str] = mapped_column(String(36), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
 class PositionSnapshotRecord(Base):
     __tablename__ = "position_snapshot"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

@@ -26,9 +26,13 @@ spec:
             {{- if $service.gpu }}
               nvidia.com/gpu: {{ $service.gpu }}
             {{- end }}
-          startupProbe: {httpGet: {path: /health/live, port: {{ default 8000 $service.port }}}, failureThreshold: 30, periodSeconds: 5}
-          readinessProbe: {httpGet: {path: /health/ready, port: {{ default 8000 $service.port }}}, initialDelaySeconds: 5, periodSeconds: 10}
-          livenessProbe: {httpGet: {path: /health/live, port: {{ default 8000 $service.port }}}, initialDelaySeconds: 15, periodSeconds: 20}
+          {{- if eq (dig "probe" "type" "none" $service) "http" }}
+          startupProbe: {httpGet: {path: {{ dig "probe" "path" "/health/live" $service }}, port: {{ dig "probe" "port" 8000 $service }}}, failureThreshold: 30, periodSeconds: 5}
+          readinessProbe: {httpGet: {path: {{ dig "probe" "path" "/health/ready" $service }}, port: {{ dig "probe" "port" 8000 $service }}}, initialDelaySeconds: 5, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health/live, port: {{ dig "probe" "port" 8000 $service }}}, initialDelaySeconds: 15, periodSeconds: 20}
+          {{- else if eq (dig "probe" "type" "none" $service) "exec" }}
+          livenessProbe: {exec: {command: {{ toJson (dig "probe" "command" (list "true") $service) }}, initialDelaySeconds: 10, periodSeconds: 20}
+          {{- end }}
           {{- if $service.port }}
           ports: [{containerPort: {{ $service.port }}}]
           {{- end }}

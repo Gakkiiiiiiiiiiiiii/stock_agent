@@ -1,0 +1,10 @@
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS decision_type VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS market VARCHAR(32);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS style VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS sector VARCHAR(128);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS opportunity_ranking_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS portfolio_rule_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS benchmark_router_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS regime_model_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS retrieval_policy_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN IF NOT EXISTS benchmark_route_input JSONB;

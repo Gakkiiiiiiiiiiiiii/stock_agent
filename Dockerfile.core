@@ -14,6 +14,8 @@ COPY scripts ./scripts
 COPY skills ./skills
 COPY storage ./storage
 COPY workers ./workers
+COPY services ./services
+COPY contracts ./contracts
 COPY xiaoe_hls_poc ./xiaoe_hls_poc
 RUN pip install --no-cache-dir -e .
 EXPOSE 8000

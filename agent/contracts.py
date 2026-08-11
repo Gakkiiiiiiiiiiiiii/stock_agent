@@ -37,6 +37,7 @@ class AgentTask(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     parent_task_id: str | None = None
     task_type: str
+    assigned_agent: AgentRole | None = None
     objective: str
     required_outputs: list[str] = Field(default_factory=list)
     input_refs: list[str] = Field(default_factory=list)
@@ -69,4 +70,3 @@ class AgentConflict(BaseModel):
     resolution_policy: str = "domain_owner_first"
     resolved_value: object | None = None
     resolved_by: str | None = None
-

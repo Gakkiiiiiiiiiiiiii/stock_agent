@@ -1,0 +1,10 @@
+ALTER TABLE investment_decision ADD COLUMN decision_type VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN market VARCHAR(32);
+ALTER TABLE investment_decision ADD COLUMN style VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN sector VARCHAR(128);
+ALTER TABLE investment_decision ADD COLUMN opportunity_ranking_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN portfolio_rule_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN benchmark_router_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN regime_model_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN retrieval_policy_version VARCHAR(64);
+ALTER TABLE investment_decision ADD COLUMN benchmark_route_input JSON;

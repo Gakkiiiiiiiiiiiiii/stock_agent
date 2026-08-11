@@ -114,6 +114,9 @@ class ClaudeAgent:
         from agent.context_builder import ContextBuilder
 
         context = ContextBuilder().build(user_query, context)
+        multi_agent_result = self._run_multi_agent_preflight(decision.skill, user_query, context)
+        if multi_agent_result is not None:
+            context = {**context, "multi_agent": multi_agent_result}
         self._emit(
             emit,
             "selection",
@@ -148,6 +151,7 @@ class ClaudeAgent:
                     "content": decision.reason,
                     "data": {"skill": decision.skill.slug},
                 },
+                *([{"type": "multi_agent", "title": "Specialist DAG", "content": "Daily-decision specialists completed.", "data": multi_agent_result}] if multi_agent_result is not None else []),
                 *trace_steps,
             ],
         }
@@ -160,6 +164,25 @@ class ClaudeAgent:
             raw_text=report,
             decision_id=decision_id,
         )
+
+    def _run_multi_agent_preflight(self, skill: SkillDefinition, query: str, context: dict[str, Any]) -> dict[str, Any] | None:
+        """Run the bounded specialist DAG for configured skills, then let the
+        normal SkillExecutor remain the single final-report path."""
+        from agent.supervisor import Supervisor, load_multi_agent_config
+        from agent.plans.daily_market_decision import build_daily_market_decision_graph
+        from agent.specialists import FactorSpecialist, MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
+        from agent.contracts import AgentRole
+
+        config = load_multi_agent_config()
+        if not config.get("enabled") or skill.slug not in set(config.get("enabled_skills") or []):
+            return None
+        graph = build_daily_market_decision_graph(query, token_budget=min(8_000, int(config.get("max_total_llm_tokens", 60_000))), tool_budget=10)
+        specialists = {
+            AgentRole.MARKET: MarketSpecialist(self.tool_registry, context), AgentRole.RESEARCH: ResearchSpecialist(self.tool_registry, context),
+            AgentRole.TECHNICAL: TechnicalSpecialist(self.tool_registry, context), AgentRole.FACTOR: FactorSpecialist(self.tool_registry, context),
+            AgentRole.PORTFOLIO: PortfolioSpecialist(self.tool_registry, context), AgentRole.RISK: RiskSpecialist(self.tool_registry, context),
+        }
+        return Supervisor(specialists, config).run(graph)
 
     @staticmethod
     def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]]) -> str | None:

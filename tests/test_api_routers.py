@@ -90,6 +90,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/execution/reconcile"),
     ("POST", "/api/v1/stream/market-events"),
     ("GET", "/api/v1/stream/market-features/{symbol}"),
+    ("GET", "/api/v1/stream/market-features"),
 }
 
 

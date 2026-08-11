@@ -15,6 +15,8 @@ from engines.skill_evolution import SkillEvolutionService, SkillProposal
 from engines.skill_evolution.models import ProposalStatus
 from engines.strategy_factory import StrategyDefinition, StrategyFactory
 from engines.strategy_factory.models import StrategyStatus
+from agent.plans.daily_market_decision import build_daily_market_decision_graph
+from agent.task_graph import TaskGraph
 
 
 def test_supervisor_runs_dag_and_domain_owner_wins_conflict():
@@ -26,6 +28,15 @@ def test_supervisor_runs_dag_and_domain_owner_wins_conflict():
     result = Supervisor({AgentRole.MARKET: market}).run(graph)
     assert result["errors"] == []
     assert result["artifacts"][0]["conclusion"]["regime"] == "rotation"
+
+
+def test_daily_decision_plan_separates_task_type_from_agent_role():
+    graph = build_daily_market_decision_graph("daily")
+    tasks = list(graph.tasks.values())
+    assert {task.task_type for task in tasks} == {"daily_market_decision"}
+    assert {task.assigned_agent for task in tasks} >= {AgentRole.MARKET, AgentRole.PORTFOLIO, AgentRole.RISK}
+    portfolio = next(task for task in tasks if task.assigned_agent == AgentRole.PORTFOLIO)
+    assert len(graph.dependencies(portfolio.task_id)) == 4
 
 
 def test_execution_is_idempotent_and_shadow_never_submits():

@@ -27,6 +27,8 @@ class MarketEvent(BaseModel):
     ask: list[float] = Field(default_factory=list)
     source: str = "qmt"
     schema_version: int = 1
+    sector: str | None = None
+    at_limit_up: bool = False
 
 
 class InMemoryEventStream:
@@ -123,6 +125,25 @@ class StreamingFeatureEngine:
             "base_snapshot_version": base_snapshot.get("feature_version") or base_snapshot.get("calculation_version"),
             "stream_state_version": self.version,
         }
+
+    def aggregate_features(self) -> dict:
+        """Intraday breadth and sector-relative strength from the same symbol
+        state, rather than a second independent feature source."""
+        features = [self.symbol_features(symbol) for symbol in sorted(self._events)]
+        valid = [item for item in features if item.get("return_1m") is not None]
+        breadth = sum(item["return_1m"] > 0 for item in valid) / len(valid) if valid else None
+        sectors: dict[str, list[float]] = defaultdict(list)
+        limit_up: dict[str, int] = defaultdict(int)
+        counts: dict[str, int] = defaultdict(int)
+        for symbol, events in self._events.items():
+            if not events: continue
+            sector = events[-1].sector or "UNKNOWN"
+            value = self.symbol_features(symbol).get("return_1m")
+            if value is not None: sectors[sector].append(value)
+            counts[sector] += 1
+            limit_up[sector] += int(events[-1].at_limit_up)
+        market_return = mean([item["return_1m"] for item in valid]) if valid else None
+        return {"breadth_intraday": breadth, "sector_relative_strength_intraday": {sector: round(mean(values) - market_return, 8) if market_return is not None else None for sector, values in sectors.items()}, "limit_up_breadth": {sector: round(limit_up[sector] / counts[sector], 8) for sector in counts}, "stream_state_version": self.version}
 
     @classmethod
     def replay(cls, events: Iterable[MarketEvent], allowed_lateness_seconds: int = 5) -> "StreamingFeatureEngine":
