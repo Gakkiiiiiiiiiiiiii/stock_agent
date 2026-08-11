@@ -145,3 +145,16 @@ class StrategyDefinitionRecord(Base):
     status: Mapped[str] = mapped_column(String(32), index=True)
     definition: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
+class StrategyEvaluationRecord(Base):
+    __tablename__ = "strategy_evaluation"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    strategy_id: Mapped[str] = mapped_column(String(36), index=True)
+    evaluation_type: Mapped[str] = mapped_column(String(32))
+    data_as_of: Mapped[datetime | None] = mapped_column(DateTime)
+    data_snapshot_id: Mapped[str | None] = mapped_column(String(128))
+    metrics: Mapped[dict] = mapped_column(JSON, default=dict)
+    quality_flags: Mapped[list] = mapped_column(JSON, default=list)
+    passed: Mapped[bool] = mapped_column(default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))

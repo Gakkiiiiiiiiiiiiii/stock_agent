@@ -9,6 +9,7 @@ from engines.factor.promotion_gate import evaluate_promotion_gate
 from engines.execution.models import ExecutionFill, ExecutionMode, TradeIntent
 from engines.execution.service import ExecutionService
 from storage.repositories.p2_repository import P2Repository
+from engines.skill_evolution import SkillEvolutionRunner, SkillEvolutionService, SkillProposal
 
 
 def _gate(**overrides):
@@ -68,3 +69,15 @@ def test_execution_restores_account_snapshot_and_cash(isolated_database):
     restarted = ExecutionService(mode=ExecutionMode.PAPER, repository=repository, rules={"initial_cash": 10_000})
     assert restarted.status()["positions"]["600000.SH"] == 100
     assert restarted.status()["cash"] < 10_000
+
+
+def test_skill_runner_generates_replay_and_paper_evidence(tmp_path):
+    service = SkillEvolutionService(config={"min_replay_improvement": 0, "max_token_regression_ratio": 1.1})
+    proposal = service.propose(SkillProposal(skill_slug="daily-market-decision", base_version=2, hypothesis="x"))
+    runner = SkillEvolutionRunner(
+        service=service,
+        golden_executor=lambda *_: {"base": {"quality_score": 1, "tokens": 10}, "candidate": {"quality_score": 1, "tokens": 10}, "passed": True},
+        paper_evidence_provider=lambda _: {"sample_count": 5, "tool_error_rate": 0, "passed": True},
+    )
+    result = runner.run_full_evaluation(proposal.proposal_id)
+    assert result["completed"] is True

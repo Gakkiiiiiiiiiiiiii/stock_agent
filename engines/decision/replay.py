@@ -75,8 +75,11 @@ class DecisionReplayService:
             return {"error": "DECISION_NOT_FOUND", "decision_id": decision_id}
 
         market_features, market_feature_source = self._resolve_market_features(decision, mode)
-        replay_output, current_versions = self._run_chain(decision)
         multi_agent = self._multi_agent_provenance(decision) if mode == "multi_agent" else None
+        if mode == "multi_agent" and multi_agent and multi_agent.get("available"):
+            replay_output, current_versions = self._run_multi_agent_chain(decision, multi_agent)
+        else:
+            replay_output, current_versions = self._run_chain(decision)
 
         recorded_versions = self._recorded_versions(decision)
         mismatch_details = {
@@ -96,6 +99,11 @@ class DecisionReplayService:
             "benchmark_route": dict(decision.benchmark_route or {}),
         }
         diffs = self._diff(original_output, replay_output)
+        if mode == "multi_agent" and multi_agent and multi_agent.get("available"):
+            recorded_regime = decision.market_regime
+            replayed_regime = replay_output.get("multi_agent_context", {}).get("market_regime")
+            if recorded_regime is not None and replayed_regime is not None and recorded_regime != replayed_regime:
+                diffs.append({"field": "market_regime", "stored": recorded_regime, "replayed": replayed_regime})
 
         return self._json_safe(
             {
@@ -164,6 +172,37 @@ class DecisionReplayService:
             "benchmark_router_version": route.get("router_version"),
         }
         return {"ranked": ranking, "portfolio": portfolio, "benchmark_route": route}, current_versions
+
+    def _run_multi_agent_chain(self, decision: Any, provenance: dict) -> tuple[dict, dict]:
+        """Rebuild only deterministic stages from persisted specialist output."""
+        artifacts = {item["agent"]: dict(item.get("conclusion") or {}) for item in provenance.get("artifacts") or []}
+        market = artifacts.get("MarketAgent", {})
+        regime_payload = market.get("get_market_regime") or market.get("market_regime") or {}
+        regime = regime_payload.get("primary_regime") if isinstance(regime_payload, dict) else regime_payload
+        regime = regime or decision.market_regime
+        technical = artifacts.get("TechnicalAgent", {}).get("technical") or {}
+        technical_candidates = technical.get("candidates") or technical.get("ranked") if isinstance(technical, dict) else None
+        candidates = [dict(item) for item in (technical_candidates or decision.candidates or []) if isinstance(item, dict)]
+        # Persisted conflict resolution is a deterministic input, not prose.
+        resolved = {item["dimension"]: (item.get("resolved_value") or {}).get("value") for item in provenance.get("conflicts") or []}
+        ranking = OpportunityRankingService().rank(candidates, {"as_of": (decision.decision_as_of or decision.created_at).isoformat(), "market_regime": regime, "resolved_conflicts": resolved})
+        score_map = {item["symbol"]: item["opportunity_score"] for item in ranking["ranked"]}
+        pipeline_candidates = [{**item, **({"opportunity_score": score_map[item["symbol"]]} if item.get("symbol") in score_map else {})} for item in candidates]
+        portfolio = run_portfolio_pipeline(pipeline_candidates, [], context={"regime": regime, "resolved_conflicts": resolved})
+        route = BenchmarkRouter().route(self._route_attributes(decision, candidates))
+        risk = artifacts.get("RiskAgent", {})
+        return {
+            "ranked": ranking,
+            "portfolio": portfolio,
+            "benchmark_route": route,
+            "risk_veto": bool(risk.get("veto", False)),
+            "multi_agent_context": {"market_regime": regime, "resolved_conflicts": resolved, "artifact_agents": sorted(artifacts)},
+        }, {
+            "market_feature_version": get_version("market_feature_version"),
+            "opportunity_ranking_version": ranking["meta"].get("calculation_version"),
+            "portfolio_rule_version": (portfolio.get("summary") or {}).get("rules_version"),
+            "benchmark_router_version": route.get("router_version"),
+        }
 
     @staticmethod
     def _route_attributes(decision: Any, candidates: list[dict]) -> dict:

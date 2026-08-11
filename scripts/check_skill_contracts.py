@@ -71,15 +71,15 @@ def _md_tool_list_violations(slug: str, body: str, known_tools: set[str]) -> lis
     return violations
 
 
-def lint_skill(skill_dir: Path, known_tools: set[str]) -> list[LintViolation]:
-    slug = skill_dir.name
+def lint_skill(skill_dir: Path, known_tools: set[str], expected_slug: str | None = None) -> list[LintViolation]:
+    slug = expected_slug if expected_slug is not None else skill_dir.name
     violations: list[LintViolation] = []
     yaml_path = skill_dir / "SKILL.yaml"
     if not yaml_path.exists():
         return [LintViolation("MISSING_YAML", slug, "SKILL.yaml is missing")]
     contract = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
 
-    if contract.get("slug") != slug:
+    if expected_slug is not None and contract.get("slug") != slug:
         violations.append(LintViolation("SLUG_MISMATCH", slug, f"yaml slug is {contract.get('slug')!r}"))
 
     version = contract.get("version")
@@ -120,10 +120,13 @@ def lint_skill(skill_dir: Path, known_tools: set[str]) -> list[LintViolation]:
 
 def lint_skills(skill_root: Path, known_tools: set[str]) -> list[LintViolation]:
     if (skill_root / "SKILL.yaml").exists():
-        return lint_skill(skill_root, known_tools)
+        # Candidate workspaces are named by proposal ID, not skill slug. Their
+        # contract owns the identity; normal multi-skill roots still enforce
+        # directory-name equality below.
+        return lint_skill(skill_root, known_tools, expected_slug=None)
     violations: list[LintViolation] = []
     for skill_dir in sorted(path for path in skill_root.iterdir() if path.is_dir()):
-        violations.extend(lint_skill(skill_dir, known_tools))
+        violations.extend(lint_skill(skill_dir, known_tools, expected_slug=skill_dir.name))
     return violations
 
 

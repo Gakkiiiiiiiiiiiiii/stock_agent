@@ -4,6 +4,7 @@ from __future__ import annotations
 from financial_agent.config import load_yaml_config
 
 from engines.strategy_factory.models import StrategyDefinition, StrategyStatus
+from engines.strategy_factory.evaluation_runner import StrategyEvaluationRunner
 
 
 def load_strategy_promotion_config() -> dict:
@@ -14,9 +15,11 @@ def load_strategy_promotion_config() -> dict:
 
 
 class StrategyFactory:
-    def __init__(self, config: dict | None = None) -> None:
+    def __init__(self, config: dict | None = None, evaluation_runner: StrategyEvaluationRunner | None = None, paper_evidence_provider=None) -> None:
         self.config = {**load_strategy_promotion_config(), **(config or {})}
         self._strategies: dict[str, StrategyDefinition] = {}
+        self.evaluation_runner = evaluation_runner or StrategyEvaluationRunner()
+        self.paper_evidence_provider = paper_evidence_provider or (lambda _strategy_id: {"observed_trading_days": 0, "passed": False})
 
     def generate(self, definition: StrategyDefinition) -> StrategyDefinition:
         self._validate_schema(definition)
@@ -46,29 +49,37 @@ class StrategyFactory:
         strategy.status = StrategyStatus.STATIC_VALIDATED if coverage_ok else StrategyStatus.REJECTED
         return strategy
 
-    def evaluate_backtest(self, strategy_id: str, metrics: dict) -> StrategyDefinition:
+    def run_evaluation(self, strategy_id: str, dataset: dict, evaluation_type: str = "BACKTEST") -> dict:
+        return self.evaluation_runner.run(self._get(strategy_id), dataset, evaluation_type)
+
+    def evaluate_backtest(self, strategy_id: str, evaluation_run_id: str) -> StrategyDefinition:
         strategy = self._get(strategy_id)
         if strategy.status != StrategyStatus.STATIC_VALIDATED:
             raise ValueError("strategy must pass static validation first")
-        if float(metrics.get("max_drawdown", 1)) > float(self.config["max_drawdown"]) or float(metrics.get("turnover", float("inf"))) > float(self.config["max_turnover"]):
+        evaluation = self._evaluation(strategy_id, evaluation_run_id, "BACKTEST")
+        metrics = evaluation["metrics"]
+        if not evaluation["passed"] or float(metrics.get("max_drawdown", 1)) > float(self.config["max_drawdown"]) or float(metrics.get("turnover", float("inf"))) > float(self.config["max_turnover"]):
             strategy.status = StrategyStatus.REJECTED
         else:
             strategy.status = StrategyStatus.BACKTESTED
         return strategy
 
-    def validate_oos(self, strategy_id: str, metrics: dict) -> StrategyDefinition:
+    def validate_oos(self, strategy_id: str, evaluation_run_id: str) -> StrategyDefinition:
         strategy = self._get(strategy_id)
         if strategy.status != StrategyStatus.BACKTESTED:
             raise ValueError("strategy must pass backtest first")
-        ok = (int(metrics.get("oos_days", 0)) >= int(self.config["min_oos_days"]) and float(metrics.get("excess_sharpe", -99)) >= float(self.config["min_excess_sharpe"]) and float(metrics.get("pbo", 1)) <= float(self.config["max_pbo"]))
+        evaluation = self._evaluation(strategy_id, evaluation_run_id, "OOS")
+        metrics = evaluation["metrics"]
+        ok = evaluation["passed"] and (int(metrics.get("oos_days", 0)) >= int(self.config["min_oos_days"]) and float(metrics.get("excess_sharpe", -99)) >= float(self.config["min_excess_sharpe"]) and float(metrics.get("pbo", 1)) <= float(self.config["max_pbo"]))
         strategy.status = StrategyStatus.OOS_VALIDATED if ok else StrategyStatus.REJECTED
         return strategy
 
-    def paper_track(self, strategy_id: str, days: int) -> StrategyDefinition:
+    def paper_track(self, strategy_id: str) -> StrategyDefinition:
         strategy = self._get(strategy_id)
         if strategy.status != StrategyStatus.OOS_VALIDATED:
             raise ValueError("strategy must pass OOS validation first")
-        strategy.status = StrategyStatus.PAPER_TRACKING if days >= int(self.config["min_paper_days"]) else StrategyStatus.REJECTED
+        evidence = self.paper_evidence_provider(strategy_id)
+        strategy.status = StrategyStatus.PAPER_TRACKING if evidence.get("passed") and int(evidence.get("observed_trading_days", 0)) >= int(self.config["min_paper_days"]) else StrategyStatus.REJECTED
         return strategy
 
     def promote_shadow(self, strategy_id: str) -> StrategyDefinition:
@@ -101,3 +112,9 @@ class StrategyFactory:
         if strategy_id not in self._strategies:
             raise KeyError(strategy_id)
         return self._strategies[strategy_id]
+
+    def _evaluation(self, strategy_id: str, evaluation_run_id: str, expected_type: str) -> dict:
+        evaluation = self.evaluation_runner.get(evaluation_run_id)
+        if evaluation is None or evaluation.get("strategy_id") != strategy_id or evaluation.get("evaluation_type") != expected_type:
+            raise ValueError("strategy evaluation run is missing or incompatible")
+        return evaluation

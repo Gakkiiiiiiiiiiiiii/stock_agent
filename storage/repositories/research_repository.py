@@ -81,6 +81,10 @@ class DecisionRepository:
         """Attach orchestration provenance after either tool or fallback save."""
         return self.update(decision_id, agent_run_id=agent_run_id, supervisor_version=supervisor_version)
 
+    def list_decisions_for_skill(self, skill_slug: str, limit: int = 200) -> list[InvestmentDecision]:
+        with session_scope() as session:
+            return list(session.execute(select(InvestmentDecision).where(InvestmentDecision.skill_slug == skill_slug).order_by(InvestmentDecision.created_at.desc()).limit(limit)).scalars())
+
     def add_outcome(self, **payload) -> InvestmentDecisionOutcome:
         with session_scope() as session:
             outcome = InvestmentDecisionOutcome(**payload)

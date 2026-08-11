@@ -82,12 +82,23 @@ def test_skill_evolution_requires_gates_and_no_automatic_promotion():
 
 
 def test_strategy_factory_enforces_lifecycle():
-    factory = StrategyFactory()
+    class Runs:
+        def __init__(self):
+            self.runs = {
+                "backtest": {"strategy_id": "", "evaluation_type": "BACKTEST", "passed": True, "metrics": {"max_drawdown": .1, "turnover": 1}},
+                "oos": {"strategy_id": "", "evaluation_type": "OOS", "passed": True, "metrics": {"oos_days": 60, "excess_sharpe": .6, "pbo": .1}},
+            }
+        def get(self, run_id):
+            return self.runs.get(run_id)
+    runs = Runs()
+    factory = StrategyFactory(evaluation_runner=runs, paper_evidence_provider=lambda _: {"observed_trading_days": 20, "passed": True})
     definition = StrategyDefinition(name="rotation", universe={"name": "all"}, entry_rules=[{"op": "gt"}], exit_rules=[{"op": "lt"}])
     factory.generate(definition)
+    runs.get("backtest")["strategy_id"] = definition.strategy_id
+    runs.get("oos")["strategy_id"] = definition.strategy_id
     factory.validate_static(definition.strategy_id)
-    factory.evaluate_backtest(definition.strategy_id, {"max_drawdown": .1, "turnover": 1})
-    factory.validate_oos(definition.strategy_id, {"oos_days": 60, "excess_sharpe": .6, "pbo": .1})
-    factory.paper_track(definition.strategy_id, 20)
+    factory.evaluate_backtest(definition.strategy_id, "backtest")
+    factory.validate_oos(definition.strategy_id, "oos")
+    factory.paper_track(definition.strategy_id)
     factory.promote_shadow(definition.strategy_id)
     assert factory.activate(definition.strategy_id, "LIVE").status == StrategyStatus.ACTIVE

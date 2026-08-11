@@ -6,7 +6,7 @@ from storage.db import session_scope
 from storage.models.p2 import (
     AgentConflictRecord, AgentRun, AgentSubtask, ExecutionFillRecord,
     ExecutionOrderRecord, ExecutionReconciliationRecord, PositionSnapshotRecord,
-    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, TradeIntentRecord, ExecutionOrderEventRecord, ExecutionRuntimeState,
+    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, StrategyEvaluationRecord, TradeIntentRecord, ExecutionOrderEventRecord, ExecutionRuntimeState,
 )
 
 
@@ -124,6 +124,13 @@ class P2Repository:
 
     def save_strategy(self, **payload) -> StrategyDefinitionRecord:
         return self._add(StrategyDefinitionRecord(**payload))
+
+    def create_strategy_evaluation(self, **payload) -> StrategyEvaluationRecord:
+        return self._add(StrategyEvaluationRecord(**payload))
+
+    def get_strategy_evaluation(self, evaluation_id: str) -> StrategyEvaluationRecord | None:
+        with session_scope() as session:
+            return session.get(StrategyEvaluationRecord, evaluation_id)
 
     @staticmethod
     def _add(row):
