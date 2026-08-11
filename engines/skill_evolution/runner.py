@@ -3,7 +3,9 @@ from engines.skill_evolution.candidate_workspace import CandidateWorkspace
 from engines.skill_evolution.evaluator import run_candidate_tests, run_contract_lint
 from engines.skill_evolution.release_registry import SkillReleaseRegistry
 from engines.skill_evolution.service import SkillEvolutionService
+from engines.skill_evolution.models import ProposalStatus
 from engines.skill_evolution.evaluator import compare_replay
+from engines.skill_evolution.golden_executor import SkillGoldenExecutor
 from financial_agent.utils import project_root
 from storage.repositories.research_repository import DecisionRepository
 import json
@@ -31,6 +33,10 @@ class SkillEvolutionRunner:
         workspace = CandidateWorkspace(proposal_id).root
         base_root = project_root() / "skills" / proposal.skill_slug
         golden = self.golden_executor(proposal.skill_slug, base_root, workspace)
+        if not golden.get("passed"):
+            proposal.evaluations.append({"stage": "GOLDEN", "passed": False, "result": golden})
+            proposal.status = ProposalStatus.REJECTED
+            return {**static, "proposal": proposal, "golden": golden, "completed": False, "reject_reason": "GOLDEN_CASES_FAILED"}
         replay = compare_replay(golden["base"], golden["candidate"], float(self.service.config["max_token_regression_ratio"]))
         self.service.replay_validate(proposal_id, replay["base"], replay["candidate"])
         evidence = self.paper_evidence_provider(proposal.skill_slug)
@@ -44,23 +50,32 @@ class SkillEvolutionRunner:
     def _evaluate_golden_contracts(slug: str, base_root, candidate_root) -> dict:
         path = project_root() / "tests" / "fixtures" / "skill_golden" / f"{slug}.jsonl"
         cases = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()] if path.exists() else []
-        def score(root):
-            import yaml
-            contract = yaml.safe_load((root / "SKILL.yaml").read_text(encoding="utf-8")) or {}
-            execution, output = contract.get("execution") or {}, contract.get("output") or {}
-            passed = sum(set(case.get("required_tools") or []).issubset(set(execution.get("required_tools") or [])) and set(case.get("required_sections") or []).issubset(set(output.get("required_sections") or [])) for case in cases)
-            text = (root / "SKILL.md").read_text(encoding="utf-8")
-            return {"quality_score": passed / len(cases) if cases else 0.0, "tokens": len(text.split()), "cases": len(cases), "passed_cases": passed}
-        return {"base": score(base_root), "candidate": score(candidate_root), "passed": bool(cases)}
+        return SkillGoldenExecutor().evaluate(slug, base_root, candidate_root, cases)
 
     @staticmethod
     def _paper_evidence(slug: str) -> dict:
-        decisions = DecisionRepository().list_decisions_for_skill(slug)
+        evidence_rows = DecisionRepository().list_skill_evidence(slug)
         minimum = 5
-        tool_calls = [call for item in decisions for call in (item.tool_trace or [])]
+        tool_calls = [call for item in evidence_rows for call in item["tool_trace"]]
         errors = sum(bool((call.get("output") or {}).get("error")) for call in tool_calls if isinstance(call, dict))
-        rate = errors / len(tool_calls) if tool_calls else 1.0
-        return {"sample_count": len(decisions), "tool_error_rate": rate, "output_contract_failure_rate": 0.0, "decision_failure_rate": 0.0, "passed": len(decisions) >= minimum and rate <= .05}
+        tool_error_rate = errors / len(tool_calls) if tool_calls else 1.0
+        # A decision is contract-complete only when the persisted form contains
+        # the decision fields required for subsequent execution/review.
+        output_failures = sum(not item["market_regime"] or not item["candidates"] or not item["portfolio_advice"] for item in evidence_rows)
+        evaluated = [item for item in evidence_rows if item["outcome"] is not None and item["review"] is not None]
+        decision_failures = sum(
+            (item["review"].decision_quality is not None and item["review"].decision_quality < .5)
+            or (item["review"].decision_quality is None and float(item["outcome"].excess_return or 0) <= 0)
+            for item in evaluated
+        )
+        output_contract_failure_rate = output_failures / len(evidence_rows) if evidence_rows else 1.0
+        decision_failure_rate = decision_failures / len(evaluated) if evaluated else 1.0
+        return {
+            "sample_count": len(evidence_rows), "evaluated_sample_count": len(evaluated),
+            "tool_error_rate": tool_error_rate, "output_contract_failure_rate": output_contract_failure_rate,
+            "decision_failure_rate": decision_failure_rate,
+            "passed": len(evidence_rows) >= minimum and len(evaluated) >= minimum and tool_error_rate <= .05 and output_contract_failure_rate <= .05 and decision_failure_rate <= .05,
+        }
     def release(self, proposal_id: str, approved: bool = False) -> dict:
         proposal = self.service.promote(proposal_id, approved=approved)
         if proposal.status.value != "ACTIVE": return {"proposal": proposal, "released": False}

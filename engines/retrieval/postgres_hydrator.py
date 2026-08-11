@@ -63,6 +63,7 @@ class PostgresHydrator:
                     "title": payload.get("title"),
                     "status": payload.get("status"),
                     "source_type": payload.get("source_type"),
+                    "version": payload.get("version"),
                     "related_strategy": payload.get("related_strategy"),
                     "related_theme": payload.get("related_theme"),
                     "related_symbol": payload.get("related_symbol"),

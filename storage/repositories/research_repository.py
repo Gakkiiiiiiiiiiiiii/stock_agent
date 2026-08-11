@@ -85,6 +85,17 @@ class DecisionRepository:
         with session_scope() as session:
             return list(session.execute(select(InvestmentDecision).where(InvestmentDecision.skill_slug == skill_slug).order_by(InvestmentDecision.created_at.desc()).limit(limit)).scalars())
 
+    def list_skill_evidence(self, skill_slug: str, limit: int = 200) -> list[dict]:
+        """Return decision/outcome/review evidence in one read-only snapshot."""
+        with session_scope() as session:
+            decisions = list(session.execute(select(InvestmentDecision).where(InvestmentDecision.skill_slug == skill_slug).order_by(InvestmentDecision.created_at.desc()).limit(limit)).scalars())
+            rows = []
+            for decision in decisions:
+                outcome = session.execute(select(InvestmentDecisionOutcome).where(InvestmentDecisionOutcome.decision_id == decision.id).order_by(InvestmentDecisionOutcome.evaluation_date.desc(), InvestmentDecisionOutcome.id.desc())).scalars().first()
+                review = session.execute(select(DecisionReview).where(DecisionReview.decision_id == decision.id).order_by(DecisionReview.created_at.desc(), DecisionReview.id.desc())).scalars().first()
+                rows.append({"decision_id": decision.id, "tool_trace": list(decision.tool_trace or []), "market_regime": decision.market_regime, "candidates": list(decision.candidates or []), "portfolio_advice": dict(decision.portfolio_advice or {}), "outcome": outcome, "review": review})
+            return rows
+
     def add_outcome(self, **payload) -> InvestmentDecisionOutcome:
         with session_scope() as session:
             outcome = InvestmentDecisionOutcome(**payload)
@@ -127,6 +138,12 @@ class DecisionRepository:
             if horizon_days is not None:
                 query = query.where(InvestmentDecisionOutcome.horizon_days == horizon_days)
             return session.execute(query.order_by(InvestmentDecisionOutcome.evaluation_date.desc())).scalars().first()
+
+    def list_outcomes_for_decisions(self, decision_ids: list[str]) -> list[InvestmentDecisionOutcome]:
+        if not decision_ids:
+            return []
+        with session_scope() as session:
+            return list(session.execute(select(InvestmentDecisionOutcome).where(InvestmentDecisionOutcome.decision_id.in_(decision_ids)).order_by(InvestmentDecisionOutcome.evaluation_date.asc(), InvestmentDecisionOutcome.id.asc())).scalars())
 
     def get_outcome_by_id(self, outcome_id: int) -> InvestmentDecisionOutcome | None:
         with session_scope() as session:

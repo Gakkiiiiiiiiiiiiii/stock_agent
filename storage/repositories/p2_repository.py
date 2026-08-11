@@ -82,6 +82,16 @@ class P2Repository:
         with session_scope() as session:
             return list(session.execute(select(ExecutionFillRecord).where(ExecutionFillRecord.execution_order_id == order_id)).scalars())
 
+    def list_strategy_execution_evidence(self, strategy_id: str) -> dict:
+        """Read paper execution lineage for one strategy without inferring metrics."""
+        with session_scope() as session:
+            intents = list(session.execute(select(TradeIntentRecord).where(TradeIntentRecord.strategy_id == strategy_id)).scalars())
+            intent_ids = [item.id for item in intents]
+            orders = list(session.execute(select(ExecutionOrderRecord).where(ExecutionOrderRecord.trade_intent_id.in_(intent_ids))).scalars()) if intent_ids else []
+            order_ids = [item.id for item in orders]
+            fills = list(session.execute(select(ExecutionFillRecord).where(ExecutionFillRecord.execution_order_id.in_(order_ids))).scalars()) if order_ids else []
+            return {"intents": intents, "orders": orders, "fills": fills}
+
     def list_open_orders(self) -> list[ExecutionOrderRecord]:
         terminal = {"FILLED", "CANCELED", "REJECTED", "EXPIRED"}
         with session_scope() as session:

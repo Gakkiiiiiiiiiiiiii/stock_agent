@@ -1,7 +1,7 @@
 """Deterministic source for StrategyFactory promotion metrics."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from uuid import uuid4
 
 import numpy as np
@@ -31,7 +31,7 @@ class StrategyEvaluationRunner:
         passed = bool(result["passed"] and not result.get("quality_flags"))
         if evaluation_type == "OOS":
             passed = passed and bool(metrics["purged_walkforward"].get("passed"))
-        run = {"id": str(uuid4()), "strategy_id": definition.strategy_id, "evaluation_type": evaluation_type, "data_as_of": datetime.now(UTC), "data_snapshot_id": _snapshot_id(dataset), "metrics": metrics, "quality_flags": list(result.get("quality_flags") or []), "passed": passed}
+        run = {"id": str(uuid4()), "strategy_id": definition.strategy_id, "evaluation_type": evaluation_type, "data_as_of": _data_as_of(dataset), "data_snapshot_id": _snapshot_id(dataset), "metrics": metrics, "quality_flags": list(result.get("quality_flags") or []), "passed": passed}
         self._runs[run["id"]] = run
         if self.repository is not None:
             row = self.repository.create_strategy_evaluation(**run)
@@ -50,3 +50,19 @@ class StrategyEvaluationRunner:
 def _snapshot_id(dataset: dict) -> str | None:
     metadata = dataset.get("score_metadata") or []
     return str((metadata[0] or {}).get("data_snapshot_id")) if metadata else None
+
+
+def _data_as_of(dataset: dict) -> datetime:
+    values = dataset.get("dates") or []
+    if not values:
+        return datetime.now(UTC)
+    value = values[-1]
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day, tzinfo=UTC)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return datetime.now(UTC)

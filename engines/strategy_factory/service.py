@@ -5,6 +5,7 @@ from financial_agent.config import load_yaml_config
 
 from engines.strategy_factory.models import StrategyDefinition, StrategyStatus
 from engines.strategy_factory.evaluation_runner import StrategyEvaluationRunner
+from engines.strategy_factory.paper_evidence import StrategyPaperEvidenceProvider
 
 
 def load_strategy_promotion_config() -> dict:
@@ -19,7 +20,7 @@ class StrategyFactory:
         self.config = {**load_strategy_promotion_config(), **(config or {})}
         self._strategies: dict[str, StrategyDefinition] = {}
         self.evaluation_runner = evaluation_runner or StrategyEvaluationRunner()
-        self.paper_evidence_provider = paper_evidence_provider or (lambda _strategy_id: {"observed_trading_days": 0, "passed": False})
+        self.paper_evidence_provider = paper_evidence_provider or StrategyPaperEvidenceProvider(minimum_days=int(self.config["min_paper_days"])).collect
 
     def generate(self, definition: StrategyDefinition) -> StrategyDefinition:
         self._validate_schema(definition)

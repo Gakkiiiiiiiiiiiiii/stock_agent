@@ -29,3 +29,12 @@ jobs:
           grep 'market-data:Recreate' rollout-strategies.txt
           grep 'execution:Recreate' rollout-strategies.txt
           kubectl get cronjob
+      - name: Upgrade and verify singleton rollouts
+        run: |
+          helm upgrade stock-agent deploy/helm/stock-agent --set image.repository=stock-agent --set image.tag=ci
+          kubectl rollout status deployment/stock-agent-market-data --timeout=180s
+          kubectl rollout status deployment/stock-agent-execution --timeout=180s
+          for deployment in stock-agent-market-data stock-agent-execution; do
+            replicas=$(kubectl get deployment "$deployment" -o jsonpath='{.status.readyReplicas}')
+            test "$replicas" = "1"
+          done
