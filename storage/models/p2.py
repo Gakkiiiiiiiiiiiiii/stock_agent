@@ -110,6 +110,14 @@ class ExecutionReconciliationRecord(Base):
     differences: Mapped[list] = mapped_column(JSON, default=list)
 
 
+class ExecutionRuntimeState(Base):
+    __tablename__ = "execution_runtime_state"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    halted: Mapped[bool] = mapped_column(default=False)
+    halt_reason: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
 class SkillProposalRecord(Base):
     __tablename__ = "skill_proposal"
     id: Mapped[str] = mapped_column(String(36), primary_key=True)

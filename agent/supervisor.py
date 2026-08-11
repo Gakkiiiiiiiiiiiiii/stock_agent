@@ -31,15 +31,24 @@ def load_multi_agent_config() -> dict:
 
 
 class Supervisor:
-    def __init__(self, specialists: dict[AgentRole, Specialist], config: dict | None = None) -> None:
+    def __init__(self, specialists: dict[AgentRole, Specialist], config: dict | None = None, repository=None) -> None:
         self.specialists = dict(specialists)
         self.config = {**load_multi_agent_config(), **(config or {})}
+        self.repository = repository
 
     def run(self, graph: TaskGraph) -> dict:
         if len(graph.tasks) > int(self.config["max_agents_per_run"]):
             raise ValueError("max_agents_per_run exceeded")
         shared = SharedContext(int(self.config["max_total_tool_calls"]), int(self.config["max_total_llm_tokens"]))
         shared.set_dependencies({task_id: graph.dependencies(task_id) for task_id in graph.tasks})
+        first_task = next(iter(graph.tasks.values()), None)
+        run = self.repository.create_agent_run(
+            task_type=first_task.task_type if first_task else "unknown",
+            objective=first_task.objective if first_task else "",
+            status="RUNNING",
+            as_of=first_task.as_of if first_task else None,
+            participating_agents=[task.assigned_agent.value for task in graph.tasks.values() if task.assigned_agent],
+        ) if self.repository is not None else None
         errors: list[dict] = []
         for layer in graph.topological_layers():
             with ThreadPoolExecutor(max_workers=min(len(layer), int(self.config["max_parallel_agents"]))) as pool:
@@ -58,17 +67,41 @@ class Supervisor:
                     try:
                         artifact = future.result()
                         shared.commit_budget(reserved_tools, reserved_tokens, artifact)
+                        self._persist_subtask(run, artifact)
                     except BudgetExceeded as exc:
                         shared.release_budget(reserved_tools, reserved_tokens)
                         graph.tasks[task_id].status = TaskStatus.BUDGET_EXHAUSTED
                         errors.append({"task_id": task_id, "code": "BUDGET_EXHAUSTED", "message": str(exc)})
+                        self._persist_failed_subtask(run, graph.tasks[task_id], TaskStatus.BUDGET_EXHAUSTED, str(exc))
                     except Exception as exc:  # noqa: BLE001
                         shared.release_budget(reserved_tools, reserved_tokens)
                         graph.tasks[task_id].status = TaskStatus.FAILED
                         errors.append({"task_id": task_id, "code": type(exc).__name__, "message": str(exc)})
+                        self._persist_failed_subtask(run, graph.tasks[task_id], TaskStatus.FAILED, str(exc))
         artifacts = shared.artifacts()
         conflicts = self._detect_conflicts(artifacts)
-        return {"artifacts": [item.model_dump(mode="json") for item in artifacts], "errors": errors, "conflicts": [item.model_dump(mode="json") for item in conflicts], "usage": shared.usage()}
+        usage = shared.usage()
+        if run is not None:
+            for conflict in conflicts:
+                self.repository.add_conflict(
+                    agent_run_id=run.id, dimension=conflict.dimension, opinions=conflict.opinions,
+                    resolution_policy=conflict.resolution_policy, resolved_value={"value": conflict.resolved_value}, resolved_by=conflict.resolved_by,
+                )
+            self.repository.update_agent_run(run.id, status="FAILED" if errors else "SUCCESS", usage=usage)
+        return {"agent_run_id": run.id if run is not None else None, "artifacts": [item.model_dump(mode="json") for item in artifacts], "errors": errors, "conflicts": [item.model_dump(mode="json") for item in conflicts], "usage": usage}
+
+    def _persist_subtask(self, run, artifact: AgentArtifact) -> None:
+        if run is not None:
+            self.repository.add_subtask(
+                id=artifact.task_id, agent_run_id=run.id, agent=artifact.agent.value, status=artifact.status.value,
+                conclusion=artifact.conclusion, evidence_refs=artifact.evidence_refs, confidence=artifact.confidence,
+                usage={"tool_calls": artifact.tool_calls, "token_used": artifact.token_used, "latency_ms": artifact.latency_ms},
+            )
+
+    def _persist_failed_subtask(self, run, task: AgentTask, status: TaskStatus, error: str) -> None:
+        if run is not None:
+            role = task.assigned_agent or AgentRole(task.task_type)
+            self.repository.add_subtask(id=task.task_id, agent_run_id=run.id, agent=role.value, status=status.value, conclusion={"error": error}, evidence_refs=[], confidence=0.0, usage={})
 
     def _run_one(self, task: AgentTask, shared: SharedContext) -> AgentArtifact:
         # task_type describes the business task (e.g. daily_market_decision),

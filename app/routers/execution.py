@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 from engines.execution.models import ExecutionFill, ExecutionMode, TradeIntent
-from engines.execution.reconciliation import reconcile
 from engines.execution.service import ExecutionService
 from storage.repositories.p2_repository import P2Repository
 
@@ -71,11 +70,11 @@ def paper_quote(symbol: str, quote: dict) -> dict:
 
 
 @router.post("/halt")
-def set_halt(halted: bool, mode: ExecutionMode = ExecutionMode.PAPER) -> dict:
-    _service(mode).set_halted(halted)
-    return {"halted": halted, "mode": mode.value}
+def set_halt(halted: bool, mode: ExecutionMode = ExecutionMode.PAPER, reason: str | None = None) -> dict:
+    _service(mode).set_halted(halted, reason)
+    return _service(mode).status()
 
 
 @router.post("/reconcile")
 def reconcile_positions(local: dict, broker: dict) -> dict:
-    return reconcile(local, broker)
+    return _service(ExecutionMode.PAPER).reconcile(local, broker)

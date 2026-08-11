@@ -171,6 +171,8 @@ class ClaudeAgent:
         from agent.supervisor import Supervisor, load_multi_agent_config
         from agent.plans.daily_market_decision import build_daily_market_decision_graph
         from agent.specialists import MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
+        from storage.bootstrap import create_all
+        from storage.repositories.p2_repository import P2Repository
         from agent.contracts import AgentRole
 
         config = load_multi_agent_config()
@@ -182,7 +184,8 @@ class ClaudeAgent:
             AgentRole.TECHNICAL: TechnicalSpecialist(self.tool_registry, context),
             AgentRole.PORTFOLIO: PortfolioSpecialist(self.tool_registry, context), AgentRole.RISK: RiskSpecialist(self.tool_registry, context),
         }
-        return Supervisor(specialists, config).run(graph)
+        create_all()
+        return Supervisor(specialists, config, repository=P2Repository()).run(graph)
 
     @staticmethod
     def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]]) -> str | None:

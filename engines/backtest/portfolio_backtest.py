@@ -146,6 +146,7 @@ def run_topk_backtest(
     lower_limit_prices=None,
     execution_model: ExecutionModel | str = ExecutionModel.NEXT_OPEN,
     limit_prices=None,
+    amounts=None,
 ) -> dict:
     """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。
 
@@ -168,11 +169,13 @@ def run_topk_backtest(
     _validate_optional_panel_shape(upper_limit_prices, (n_symbols, n_days), "upper_limit_prices")
     _validate_optional_panel_shape(lower_limit_prices, (n_symbols, n_days), "lower_limit_prices")
     _validate_optional_panel_shape(limit_prices, (n_symbols, n_days), "limit_prices")
+    _validate_optional_panel_shape(amounts, (n_symbols, n_days), "amounts")
     meta_cells = np.asarray(security_meta, dtype=object) if security_meta is not None else None
     upper_cells = np.asarray(upper_limit_prices, dtype=object) if upper_limit_prices is not None else None
     lower_cells = np.asarray(lower_limit_prices, dtype=object) if lower_limit_prices is not None else None
     limit_cells = np.asarray(limit_prices, dtype=object) if limit_prices is not None else None
-    execution_prices = _execution_price_panel(model, opens, highs, lows, closes, volumes, limit_cells)
+    amount_values = np.asarray(amounts, dtype=float) if amounts is not None else None
+    execution_prices = _execution_price_panel(model, opens, highs, lows, closes, volumes, limit_cells, amount_values)
     if top_k is None:
         # 默认池子的 1%，下限 5 只
         top_k = max(5, int(n_symbols * 0.01))
@@ -243,7 +246,7 @@ def run_topk_backtest(
             before_stats = _snapshot_pl_stats(pl_stats)
             trade_start = len(trades)
             traded_value = _rebalance_day(
-                t, state, scores, opens, execution_prices, closes, volumes, last_close,
+                t, state, scores, opens, execution_prices, highs, lows, closes, volumes, last_close,
                 symbols, dates, trades, top_k, n_symbols,
                 meta_cells=meta_cells,
                 upper_cells=upper_cells,
@@ -251,6 +254,7 @@ def run_topk_backtest(
                 pl_stats=pl_stats,
                 fail_on_ambiguous=fail_on_ambiguous,
                 fail_on_invalid_meta=fail_on_invalid_meta,
+                limit_order=model == ExecutionModel.LIMIT_PRICE,
             )
             _append_execution_events(execution_events, trades[trade_start:], dates, t, model)
             price_limit_daily_stats.append(_daily_pl_stats(dates[t], before_stats, pl_stats))
@@ -269,6 +273,8 @@ def run_topk_backtest(
         })
 
     quality_flags: list[str] = []
+    if model == ExecutionModel.VWAP and amount_values is None:
+        quality_flags.append("VWAP_APPROXIMATED")
     if pl_stats["buy_ambiguous_cells"] or pl_stats["sell_ambiguous_cells"]:
         quality_flags.append("BACKTEST_HISTORICAL_RISK_STATUS_UNAVAILABLE")
     quality_flags.extend(sorted(pl_stats["conflicts"]))
@@ -324,6 +330,7 @@ def _execution_price_panel(
     closes: np.ndarray,
     volumes: np.ndarray,
     limit_prices: np.ndarray | None,
+    amounts: np.ndarray | None,
 ) -> np.ndarray:
     if model == ExecutionModel.NEXT_OPEN:
         return opens
@@ -332,6 +339,10 @@ def _execution_price_panel(
     if model == ExecutionModel.VWAP:
         # Intraday amount is optional in the existing panel contract.  Typical
         # price is an explicit, deterministic fallback rather than a mock.
+        if amounts is not None:
+            with np.errstate(divide="ignore", invalid="ignore"):
+                vwap = amounts / volumes
+            return np.where(np.isfinite(vwap) & (vwap > 0), vwap, (highs + lows + closes) / 3.0)
         return (highs + lows + closes) / 3.0
     if limit_prices is None:
         raise ValueError("LIMIT_PRICE requires limit_prices panel")
@@ -535,6 +546,8 @@ def _rebalance_day(
     scores: np.ndarray,
     opens: np.ndarray,
     execution_prices: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
     closes: np.ndarray,
     volumes: np.ndarray,
     last_close: np.ndarray,
@@ -549,13 +562,20 @@ def _rebalance_day(
     pl_stats: dict | None = None,
     fail_on_ambiguous: bool = False,
     fail_on_invalid_meta: bool = True,
+    limit_order: bool = False,
 ) -> float:
     """在调仓日 t 以开盘价执行调仓，返回当日成交总额（双边合计）。"""
     traded = 0.0
 
     def tradable(idx: int) -> bool:
         """当日可交易：未停牌且开盘价有效。"""
-        return not is_suspended(volumes[idx, t]) and _valid_price(execution_prices[idx, t])
+        if is_suspended(volumes[idx, t]) or not _valid_price(execution_prices[idx, t]):
+            return False
+        if np.any(np.isnan(highs[idx, t])) or np.any(np.isnan(lows[idx, t])):
+            return True
+        # LIMIT_PRICE represents an order resting at the submitted price, not a
+        # guaranteed fill.  It must trade inside that day's observed range.
+        return not (limit_order and not (lows[idx, t] <= execution_prices[idx, t] <= highs[idx, t]))
 
     # 候选池：分数非 NaN 且当日可交易，取得分最高的 top_k 只
     eligible = [
@@ -662,7 +682,7 @@ def _rebalance_day(
             symbol=symbols[idx],
             trade_date=trade_date,
             prev_close=prev_closes[idx],
-            open_price=opens[idx, t],
+            open_price=execution_prices[idx, t],
             quote=meta,
             upper_limit_price=upper,
             lower_limit_price=lower,

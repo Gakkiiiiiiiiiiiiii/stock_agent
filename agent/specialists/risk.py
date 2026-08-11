@@ -13,4 +13,4 @@ class RiskSpecialist(ToolSpecialist):
         positions = list(portfolio.get("positions") or portfolio.get("targets") or self.context.get("positions") or []) if isinstance(portfolio, dict) else list(self.context.get("positions") or [])
         result = self.call("evaluate_portfolio_risk", {"positions": positions, "portfolio": portfolio})
         veto = bool(result.get("risk_level") in {"high", "critical"} or result.get("veto"))
-        return self.artifact(task, {"risk": result, "veto": veto, "upstream_artifacts": upstream}, tool_calls=1)
+        return self.artifact(task, {"risk": result, "veto": veto, "upstream_artifacts": upstream, "opinions": {"risk": result.get("risk_level") if isinstance(result, dict) else None}}, tool_calls=1)

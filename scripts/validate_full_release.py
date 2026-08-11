@@ -24,7 +24,9 @@ def main() -> int:
         _pytest_gate("StrategyFactory", ["tests/test_p2_automation.py"]),
     ]
     if args.all:
-        gates.append(_pytest_gate("RepositoryRegression", ["tests/test_migrations.py", "tests/test_decision_replay.py", "tests/test_portfolio_v2.py"]))
+        # A release gate must execute the entire repository suite, not a
+        # hand-picked smoke subset.
+        gates.append(_pytest_gate("FullRegression", ["-q"]))
     report = {"required_gates": REQUIRED, "gates": gates, "overall": "PASS" if all(item["status"] == "PASS" for item in gates) else "FAIL"}
     output = project_root() / args.output; output.mkdir(parents=True, exist_ok=True)
     (output / "release_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

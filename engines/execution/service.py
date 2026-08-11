@@ -32,8 +32,11 @@ class ExecutionService:
         self.adapter = adapter
         self.repository = repository
         self._orders: dict[str, _StoredOrder] = {}
-        self._halted = False
+        saved_state = repository.get_execution_runtime_state() if repository is not None else None
+        self._halted = bool(saved_state.halted) if saved_state is not None else False
+        self._halt_reason = saved_state.halt_reason if saved_state is not None else None
         self._paper_fills = PaperFillSimulator()
+        self._positions: dict[str, int] = {}
 
     def create_order(self, intent: TradeIntent, context: dict, quantity: int, limit_price: float | None = None) -> ExecutionOrder:
         existing = self._orders.get(intent.idempotency_key())
@@ -109,6 +112,9 @@ class ExecutionService:
                 broker_fill_id=fill.broker_fill_id, filled_at=fill.filled_at,
             )
             self.repository.add_order_event(execution_order_id=stored.order.id, status=stored.order.status.value, payload=fill.model_dump(mode="json"))
+        direction = 1 if stored.order.intent.side == "BUY" else -1
+        self._positions[stored.order.intent.symbol] = self._positions.get(stored.order.intent.symbol, 0) + direction * fill.quantity
+        self.snapshot_positions(cash=0.0, positions=self._positions, source=self.mode.value.lower())
         return stored.order
 
     def order(self, client_order_id: str) -> ExecutionOrder | None:
@@ -151,8 +157,24 @@ class ExecutionService:
                 filled.append(self.record_fill(fill))
         return filled
 
-    def set_halted(self, halted: bool) -> None:
+    def set_halted(self, halted: bool, reason: str | None = None) -> None:
         self._halted = bool(halted)
+        self._halt_reason = reason if halted else None
+        if self.repository is not None:
+            self.repository.set_execution_runtime_state(self._halted, self._halt_reason)
+
+    def status(self) -> dict:
+        return {"mode": self.mode.value, "halted": self._halted, "halt_reason": self._halt_reason}
+
+    def reconcile(self, local: dict, broker: dict) -> dict:
+        from datetime import UTC, datetime
+        from engines.execution.reconciliation import reconcile
+        result = reconcile(local, broker)
+        if self.repository is not None:
+            self.repository.add_reconciliation(as_of=datetime.now(UTC), status=result["status"], differences=result["differences"])
+        if result["status"] != "RECONCILED":
+            self.set_halted(True, "RECONCILIATION_REQUIRED")
+        return result
 
     def snapshot_positions(self, cash: float, positions: dict, source: str = "execution") -> None:
         if self.repository is not None:

@@ -21,6 +21,9 @@ def test_factor_status_transition(tmp_path):
     gate = evaluate_promotion_gate(
         walkforward={"passed": True, "window_pass_ratio": 0.8},
         statistics={"passed": True},
+        diagnostics={"ic_decay": {1: 0.1, 5: 0.05}},
+        exposure={"liquidity_exposure": 0.1},
+        capacity={"daily_notional_capacity_proxy": 100.0},
     )
     event = FactorLifecycleService(library_path=lib, audit_path=audit).transition(
         "F001", "PAPER_TRADING", reason="paper precheck passed", actor="tester", research_run_id="R001", promotion_gate=gate

@@ -6,7 +6,7 @@ from storage.db import session_scope
 from storage.models.p2 import (
     AgentConflictRecord, AgentRun, AgentSubtask, ExecutionFillRecord,
     ExecutionOrderRecord, ExecutionReconciliationRecord, PositionSnapshotRecord,
-    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, TradeIntentRecord, ExecutionOrderEventRecord,
+    SkillEvaluationRecord, SkillProposalRecord, StrategyDefinitionRecord, TradeIntentRecord, ExecutionOrderEventRecord, ExecutionRuntimeState,
 )
 
 
@@ -20,6 +20,17 @@ class P2Repository:
 
     def add_conflict(self, **payload) -> AgentConflictRecord:
         return self._add(AgentConflictRecord(**payload))
+
+    def update_agent_run(self, run_id: str, **payload) -> AgentRun:
+        with session_scope() as session:
+            row = session.get(AgentRun, run_id)
+            if row is None:
+                raise KeyError(run_id)
+            for key, value in payload.items():
+                setattr(row, key, value)
+            session.flush()
+            session.refresh(row)
+            return row
 
     def create_trade_intent(self, **payload) -> TradeIntentRecord:
         return self._add(TradeIntentRecord(**payload))
@@ -69,6 +80,22 @@ class P2Repository:
 
     def add_reconciliation(self, **payload) -> ExecutionReconciliationRecord:
         return self._add(ExecutionReconciliationRecord(**payload))
+
+    def get_execution_runtime_state(self) -> ExecutionRuntimeState | None:
+        with session_scope() as session:
+            return session.get(ExecutionRuntimeState, 1)
+
+    def set_execution_runtime_state(self, halted: bool, halt_reason: str | None = None) -> ExecutionRuntimeState:
+        with session_scope() as session:
+            row = session.get(ExecutionRuntimeState, 1)
+            if row is None:
+                row = ExecutionRuntimeState(id=1)
+                session.add(row)
+            row.halted = bool(halted)
+            row.halt_reason = halt_reason
+            session.flush()
+            session.refresh(row)
+            return row
 
     def create_skill_proposal(self, **payload) -> SkillProposalRecord:
         return self._add(SkillProposalRecord(**payload))

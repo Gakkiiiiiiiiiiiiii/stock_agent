@@ -14,4 +14,4 @@ class PortfolioSpecialist(ToolSpecialist):
             candidates = list(technical.get("candidates") or technical.get("ranked") or candidates)
         payload = {"candidates": candidates, "positions": list(self.context.get("positions") or []), "context": {**dict(self.context.get("portfolio_context") or {}), "upstream": upstream}}
         result = self.call("construct_portfolio_v2", payload)
-        return self.artifact(task, {"portfolio": result, "upstream_artifacts": upstream}, tool_calls=1)
+        return self.artifact(task, {"portfolio": result, "upstream_artifacts": upstream, "opinions": {"portfolio": result.get("targets") if isinstance(result, dict) else result}}, tool_calls=1)

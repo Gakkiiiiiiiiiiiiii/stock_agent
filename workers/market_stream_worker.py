@@ -5,6 +5,7 @@ import logging
 import os
 import socket
 import time
+from datetime import UTC, datetime, timedelta
 
 import redis
 
@@ -20,7 +21,8 @@ def build_worker() -> tuple[RedisMarketEventStream, StreamingFeatureEngine, str,
     stream_key = os.getenv("MARKET_EVENT_STREAM_KEY", "market:events:v1")
     group = os.getenv("MARKET_EVENT_CONSUMER_GROUP", "market-feature-v1")
     consumer = os.getenv("MARKET_EVENT_CONSUMER", f"market-stream-{socket.gethostname()}")
-    stream = RedisMarketEventStream(client, stream_key)
+    retention = int(os.getenv("MARKET_EVENT_RETENTION_SECONDS", "3600"))
+    stream = RedisMarketEventStream(client, stream_key, retention_seconds=retention)
     stream.ensure_group(group)
     lateness = int(os.getenv("MARKET_EVENT_ALLOWED_LATENESS_SECONDS", "5"))
     return stream, StreamingFeatureEngine(lateness), group, consumer
@@ -28,7 +30,9 @@ def build_worker() -> tuple[RedisMarketEventStream, StreamingFeatureEngine, str,
 
 def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine, group: str, consumer: str, count: int = 100, state_repository: RealtimeFeatureStateRepository | None = None) -> int:
     processed = 0
-    for message_id, event in stream.consume(group, consumer, count):
+    pending = stream.claim_pending(group, consumer, count=count)
+    messages = pending or stream.consume(group, consumer, count)
+    for message_id, event in messages:
         result = engine.process(event)
         if result.get("accepted") and state_repository is not None:
             state_repository.save_symbol(event.symbol, engine.symbol_features(event.symbol))
@@ -45,9 +49,10 @@ def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     stream, engine, group, consumer = build_worker()
-    # Rebuild the bounded in-memory feature window from the durable stream.  It
-    # prevents an empty API state after a worker restart without replaying QMT.
-    engine = StreamingFeatureEngine.replay(stream.recent(), engine.allowed_lateness_seconds)
+    # Rebuild the full calculation window (rather than an arbitrary event
+    # count) so cross-market bursts cannot erase 15m/VWAP features.
+    recovery_seconds = int(os.getenv("MARKET_EVENT_RECOVERY_SECONDS", "1800"))
+    engine = StreamingFeatureEngine.replay(stream.recent_since(datetime.now(UTC) - timedelta(seconds=recovery_seconds)), engine.allowed_lateness_seconds)
     state = RealtimeFeatureStateRepository(stream.client)
     state.checkpoint(engine)
     while True:
