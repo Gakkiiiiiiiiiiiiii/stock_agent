@@ -1,3 +1,4 @@
+version: 2
 slug: market-regime-strategy-router
 name: 市场状态与策略路由
 execution:

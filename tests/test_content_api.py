@@ -167,7 +167,7 @@ def test_summary_document_prefers_analysis_document_over_legacy_summary(monkeypa
 
 
 def test_content_ingest_api(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     response = client.post("/api/v1/content/bilibili/ingest", json={"url": "https://www.bilibili.com/video/BVTEST123"})
     assert response.status_code == 200
     assert response.json()["task_id"] == 1
@@ -175,7 +175,7 @@ def test_content_ingest_api(monkeypatch):
 
 def test_content_task_process_api_starts_background_task(monkeypatch):
     fake_service = FakeContentService(task_status="pending")
-    monkeypatch.setattr("app.api.content_ingest_service", fake_service)
+    monkeypatch.setattr("app.dependencies.content_ingest_service", fake_service)
     response = client.post("/api/v1/content/tasks/1/process")
     assert response.status_code == 200
     assert response.json()["started"] is True
@@ -183,7 +183,7 @@ def test_content_task_process_api_starts_background_task(monkeypatch):
 
 
 def test_content_task_and_video_api(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     task = client.get("/api/v1/content/tasks/1")
     videos = client.get("/api/v1/content/videos")
     video = client.get("/api/v1/content/videos/2")
@@ -263,7 +263,7 @@ def test_content_task_and_video_api(monkeypatch):
 
 
 def test_content_video_knowledge_contract_validation(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     oversized = client.get("/api/v1/content/videos", params={"limit": 999})
     invalid_kind = client.get("/api/v1/content/videos/2/knowledge", params={"knowledge_kind": "unknown"})
     invalid_search = client.post("/api/v1/content/knowledge/search", json={"query": "券商", "filters": {"lifecycle_status": "bad"}})
@@ -278,20 +278,20 @@ def test_content_video_knowledge_contract_validation(monkeypatch):
 
 
 def test_content_summarize_api(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     response = client.post("/api/v1/content/bilibili/summarize", json={"url": "https://www.bilibili.com/video/BVTEST123"})
     assert response.status_code == 200
     assert response.json()["summary"]["core_summary"] == "摘要"
 
 
 def test_xiaoe_hls_ingest_requires_authorized_content(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     response = client.post("/api/v1/content/xiaoe/hls/ingest", json={"m3u8_url": "https://media.example.com/v_abc/index.m3u8"})
     assert response.status_code == 400
 
 
 def test_xiaoe_hls_summarize_api(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     response = client.post(
         "/api/v1/content/xiaoe/hls/summarize",
         json={
@@ -323,7 +323,7 @@ def test_content_task_options_redact_xiaoe_hls_secrets():
 
 
 def test_admin_delete_video_summary_doc_routes_to_content_service(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
     response = client.delete("/api/v1/admin/docs/content", params={"path": "video_summaries/test.md"})
     assert response.status_code == 200
     assert response.json()["delete_mode"] == "video_summary"
@@ -331,8 +331,8 @@ def test_admin_delete_video_summary_doc_routes_to_content_service(monkeypatch):
 
 
 def test_admin_delete_video_summary_doc_falls_back_to_file_delete(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeContentService())
-    monkeypatch.setattr("app.api.admin_service", FakeAdminService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeContentService())
+    monkeypatch.setattr("app.dependencies.admin_service", FakeAdminService())
     response = client.delete("/api/v1/admin/docs/content", params={"path": "video_summaries/orphan.md"})
     assert response.status_code == 200
     assert response.json()["delete_mode"] == "video_summary_file_only"

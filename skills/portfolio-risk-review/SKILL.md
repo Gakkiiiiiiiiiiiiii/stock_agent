@@ -17,12 +17,6 @@ description: 用于持仓集中度、主题暴露、止损纪律和组合风险�
 4. 是否触发止损或证伪条件。
 5. 是否和当前市场环境匹配。
 
-## 必须调用的工具
-
-- evaluate_portfolio_risk
-- search_theme_logic
-- get_market_snapshot
-
 ## 输出格式
 
 ### 1. 总体风险

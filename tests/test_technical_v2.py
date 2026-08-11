@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+import yaml
 from pathlib import Path
 
 from app.tool_registry import ClaudeToolRegistry
@@ -83,7 +84,9 @@ def test_legacy_patterns_not_default(monkeypatch):
 
 
 def test_skill_uses_profile_tools():
-    content = (Path("skills/a-share-technical-analysis/SKILL.md")).read_text(encoding="utf-8")
-    assert "calc_profile_indicators" in content
-    assert "evaluate_technical_rules" in content
-    assert "detect_pattern_signal" not in content
+    # P0-02: SKILL.yaml is the machine-executable truth; SKILL.md no longer lists tools.
+    contract = yaml.safe_load((Path("skills/a-share-technical-analysis/SKILL.yaml")).read_text(encoding="utf-8"))
+    tools = contract["execution"]["required_tools"] + contract["execution"].get("optional_tools", [])
+    assert "calc_profile_indicators" in tools
+    assert "evaluate_technical_rules" in tools
+    assert "detect_pattern_signal" not in tools

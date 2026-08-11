@@ -1,3 +1,4 @@
+version: 2
 slug: decision-outcome-review
 name: 决策结果复盘
 description: 基于已保存决策、真实结果和当时市场状态，生成可复用的策略经验。

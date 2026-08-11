@@ -1,7 +1,8 @@
+version: 2
 slug: portfolio-construction
 name: 组合构建
 execution:
   required_tools: [route_strategy, evaluate_portfolio_risk, construct_portfolio]
   max_tool_rounds: 8
 output:
-  required_sections: []
+  required_sections: [候选标的梳理, 组合调整动作, 仓位与现金约束, 风险提示]

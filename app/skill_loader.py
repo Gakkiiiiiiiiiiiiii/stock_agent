@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import yaml
@@ -15,6 +16,9 @@ class SkillDefinition(BaseModel):
     name: str
     description: str
     content: str = ""
+    version: int = 1
+    skill_contract_hash: str | None = None
+    skill_markdown_hash: str | None = None
     execution: SkillExecutionContract = Field(default_factory=SkillExecutionContract)
     output: SkillOutputContract = Field(default_factory=SkillOutputContract)
 
@@ -43,6 +47,15 @@ def _parse_frontmatter(raw: str) -> tuple[dict[str, str], str]:
     return data, body.strip()
 
 
+def _contract_hash(contract: dict) -> str:
+    canonical = yaml.safe_dump(contract, sort_keys=True, allow_unicode=True)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+
+
+def _markdown_hash(body: str) -> str:
+    return hashlib.sha256(body.encode("utf-8")).hexdigest()[:16]
+
+
 def load_skills(skill_root: Path | None = None) -> list[SkillDefinition]:
     root = skill_root or project_root() / "skills"
     skills: list[SkillDefinition] = []
@@ -61,6 +74,9 @@ def load_skills(skill_root: Path | None = None) -> list[SkillDefinition]:
                 name=contract.get("name", frontmatter.get("name", slug)),
                 description=contract.get("description", frontmatter.get("description", "")),
                 content=body,
+                version=int(contract.get("version", 1)),
+                skill_contract_hash=_contract_hash(contract),
+                skill_markdown_hash=_markdown_hash(body),
                 execution=contract.get("execution", {}),
                 output=contract.get("output", {}),
             )

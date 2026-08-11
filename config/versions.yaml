@@ -1,0 +1,9 @@
+versions:
+  market_feature_version: market_feature_v2
+  sector_strength_version: sector_strength_v2
+  regime_model_version: regime_preclassifier_v1
+  portfolio_rule_version: portfolio_rules_v2
+  opportunity_ranking_version: opportunity_ranking_v1
+  factor_version: factor_dsl_v1
+  retrieval_policy_version: retrieval_policy_v1
+  benchmark_router_version: benchmark_router_v1

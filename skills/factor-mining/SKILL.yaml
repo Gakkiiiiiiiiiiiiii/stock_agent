@@ -1,3 +1,4 @@
+version: 2
 slug: factor-mining
 name: 因子挖掘
 execution:

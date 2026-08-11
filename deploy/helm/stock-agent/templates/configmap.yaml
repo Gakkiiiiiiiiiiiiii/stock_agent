@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "stock-agent.fullname" . }}-config
+data:
+  EXECUTION_MODE: {{ .Values.env.EXECUTION_MODE | quote }}
+  DATABASE_URL: {{ .Values.env.DATABASE_URL | quote }}
+  REDIS_URL: {{ .Values.env.REDIS_URL | quote }}
+  QDRANT_URL: {{ .Values.env.QDRANT_URL | quote }}

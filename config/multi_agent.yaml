@@ -1,0 +1,7 @@
+multi_agent:
+  version: v1
+  max_agents_per_run: 8
+  max_parallel_agents: 4
+  max_total_tool_calls: 60
+  max_total_llm_tokens: 60000
+  max_replan_rounds: 2

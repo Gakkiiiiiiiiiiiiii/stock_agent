@@ -1,0 +1,5 @@
+skill_evolution:
+  version: v1
+  auto_promote: false
+  max_token_regression_ratio: 1.10
+  min_replay_improvement: 0.0

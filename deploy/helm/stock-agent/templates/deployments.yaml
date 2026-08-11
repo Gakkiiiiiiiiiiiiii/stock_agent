@@ -1,0 +1,37 @@
+{{- range $name, $service := .Values.services }}
+{{- if $service.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "stock-agent.fullname" $ }}-{{ $name }}
+  labels: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }}}
+spec:
+  replicas: {{ $service.replicas }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector: {matchLabels: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }}}}
+  template:
+    metadata: {labels: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }}}}
+    spec:
+      containers:
+        - name: {{ $name }}
+          image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: {{ toJson $service.command }}
+          envFrom: [{configMapRef: {name: {{ include "stock-agent.fullname" $ }}-config}}]
+          resources:
+            requests: {{ toYaml $.Values.resources.requests | nindent 14 }}
+            limits: {{ toYaml $.Values.resources.limits | nindent 14 }}
+            {{- if $service.gpu }}
+              nvidia.com/gpu: {{ $service.gpu }}
+            {{- end }}
+          startupProbe: {httpGet: {path: /health/live, port: {{ default 8000 $service.port }}}, failureThreshold: 30, periodSeconds: 5}
+          readinessProbe: {httpGet: {path: /health/ready, port: {{ default 8000 $service.port }}}, initialDelaySeconds: 5, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /health/live, port: {{ default 8000 $service.port }}}, initialDelaySeconds: 15, periodSeconds: 20}
+          {{- if $service.port }}
+          ports: [{containerPort: {{ $service.port }}}]
+          {{- end }}
+---
+{{- end }}
+{{- end }}

@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 
 from storage.db import session_scope
-from storage.models.vector import MemoryRecord, VectorIndexMapping, VectorIndexTask
+from storage.models.vector import MemoryEvidence, MemoryRecord, VectorIndexMapping, VectorIndexTask
 
 
 class VectorTaskRepository:
@@ -125,6 +125,76 @@ class MemoryRepository:
     def list_all(self) -> list[MemoryRecord]:
         with session_scope() as session:
             return list(session.execute(select(MemoryRecord).order_by(MemoryRecord.id.asc())).scalars())
+
+    def add_evidence(
+        self,
+        memory_id: int,
+        decision_id: str | None = None,
+        regime: str | None = None,
+        horizon_days: int | None = None,
+        market_excess_return: float | None = None,
+        sector_excess_return: float | None = None,
+        decision_quality: float | None = None,
+        applicability: float | None = None,
+        weight: float = 1.0,
+        created_at: datetime | None = None,
+    ) -> MemoryEvidence:
+        """Persist one outcome-evidence event for a memory.
+
+        Upsert semantics: when ``decision_id`` is given, at most one row exists per
+        (memory_id, decision_id, horizon_days) — a repeat call refreshes that row.
+        Anonymous events (``decision_id=None``) are always appended, because legacy
+        callers record repeated outcomes without a decision identity.
+        """
+        with session_scope() as session:
+            evidence = None
+            if decision_id is not None:
+                horizon_clause = (
+                    MemoryEvidence.horizon_days == horizon_days
+                    if horizon_days is not None
+                    else MemoryEvidence.horizon_days.is_(None)
+                )
+                evidence = session.execute(
+                    select(MemoryEvidence).where(
+                        MemoryEvidence.memory_id == memory_id,
+                        MemoryEvidence.decision_id == decision_id,
+                        horizon_clause,
+                    )
+                ).scalars().first()
+            if evidence is None:
+                evidence = MemoryEvidence(memory_id=memory_id, decision_id=decision_id)
+                session.add(evidence)
+            evidence.regime = regime
+            evidence.horizon_days = horizon_days
+            evidence.market_excess_return = market_excess_return
+            evidence.sector_excess_return = sector_excess_return
+            evidence.decision_quality = decision_quality
+            evidence.applicability = applicability
+            evidence.weight = weight
+            evidence.created_at = created_at or datetime.now(UTC)
+            session.flush()
+            session.refresh(evidence)
+            return evidence
+
+    def list_evidence(self, memory_id: int) -> list[MemoryEvidence]:
+        with session_scope() as session:
+            return list(
+                session.execute(
+                    select(MemoryEvidence).where(MemoryEvidence.memory_id == memory_id).order_by(MemoryEvidence.created_at.asc(), MemoryEvidence.id.asc())
+                ).scalars()
+            )
+
+    def latest_evidence_summary(self, memory_id: int) -> dict:
+        events = self.list_evidence(memory_id)
+        excess_values = [float(item.market_excess_return) for item in events if item.market_excess_return is not None]
+        quality_values = [float(item.decision_quality) for item in events if item.decision_quality is not None]
+        return {
+            "memory_id": memory_id,
+            "evidence_count": len(events),
+            "last_evidence_at": events[-1].created_at if events else None,
+            "avg_market_excess_return": (sum(excess_values) / len(excess_values)) if excess_values else None,
+            "avg_decision_quality": (sum(quality_values) / len(quality_values)) if quality_values else None,
+        }
 
 
 class VectorMappingRepository:

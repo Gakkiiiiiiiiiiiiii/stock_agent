@@ -1,0 +1,7 @@
+execution:
+  version: v1
+  mode: PAPER
+  max_single_order_weight: 0.10
+  max_daily_turnover: 0.50
+  stale_market_data_minutes: 5
+  default_max_slippage_bps: 30

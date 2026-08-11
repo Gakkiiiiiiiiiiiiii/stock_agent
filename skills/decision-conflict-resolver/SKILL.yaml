@@ -1,3 +1,4 @@
+version: 2
 slug: decision-conflict-resolver
 name: 决策冲突处理
 execution:
@@ -6,4 +7,4 @@ execution:
   max_tool_rounds: 8
   require_memory_lookup: true
 output:
-  required_sections: []
+  required_sections: [冲突点识别, 取舍依据, 最终动作, 风险与仓位约束]

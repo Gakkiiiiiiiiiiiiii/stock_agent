@@ -1,0 +1,7 @@
+data_quality:
+  min_quote_coverage: 0.9
+  degraded_quote_coverage: 0.7
+  min_sector_membership_coverage: 0.8
+  degraded_sector_membership_coverage: 0.6
+  require_index_data: true
+  require_limit_metadata: true

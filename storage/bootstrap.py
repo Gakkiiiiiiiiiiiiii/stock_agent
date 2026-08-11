@@ -7,6 +7,8 @@ from sqlalchemy import text
 from storage.models import chat  # noqa: F401
 from storage.models import content  # noqa: F401
 from storage.models import knowledge  # noqa: F401
+from storage.models import market_feature  # noqa: F401
+from storage.models import p2  # noqa: F401
 from storage.db import Base, get_engine
 from storage.models import vector  # noqa: F401
 from storage.models import research  # noqa: F401

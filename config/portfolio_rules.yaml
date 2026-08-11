@@ -1,0 +1,33 @@
+portfolio_rules:
+  version: portfolio_rules_v2
+  # 仓位档：watch=0，其余为 [下限, 上限]，新建仓取区间中值（再受 max_single_stock 约束）
+  sizing_bands:
+    watch: 0.0
+    starter: [0.01, 0.03]
+    normal: [0.03, 0.06]
+    high_conviction: [0.06, 0.10]
+  # 分数阈值：>= high_conviction → 高确信档；< reduce_below → 减仓；< exit_below → 清仓
+  score_thresholds:
+    starter: 60
+    normal: 72
+    high_conviction: 85
+    reduce_below: 45
+    exit_below: 30
+  # 减仓目标 = 当前权重 * reduce_factor
+  reduce_factor: 0.5
+  #  regime 风险预算：目标总仓位上限；超出时先压最低分仓位。default 用于未知/未提供 regime。
+  regime_risk_budget:
+    crowding_market: {max_total_position: 0.90}
+    rotation_market: {max_total_position: 0.75}
+    range_market: {max_total_position: 0.60}
+    high_position_retreat: {max_total_position: 0.35}
+    downtrend_market: {max_total_position: 0.20}
+    default: {max_total_position: 0.50}
+  exposure:
+    max_single_stock: 0.10
+    max_theme_weight: 0.40
+    max_sector_weight: 0.50
+    max_correlated_cluster_weight: 0.50
+  turnover:
+    min_rebalance_delta: 0.01
+    max_daily_turnover: 0.30

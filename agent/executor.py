@@ -24,8 +24,9 @@ class SkillExecutor:
         context: dict[str, Any] | None,
         system: str,
         emit: Callable[[str, dict[str, Any]], None] | None = None,
+        query_flags: dict[str, bool] | None = None,
     ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], SkillExecutionState]:
-        state = SkillExecutionState(skill_slug=skill.slug)
+        state = SkillExecutionState(skill_slug=skill.slug, query_flags=dict(query_flags or {}))
         tool_calls: list[dict[str, Any]] = []
         trace_steps: list[dict[str, Any]] = []
         messages: list[dict[str, Any]] = [{

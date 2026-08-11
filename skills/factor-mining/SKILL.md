@@ -24,16 +24,11 @@ description: 用于自动挖掘 A 股横截面选股 alpha 因子：LLM 生成�
 4. 调用 scan_alpha_factors 用库内因子合成 alpha 分数对标的排名。
 5. 输出因子解读，注明样本内局限与【待核验】。
 
-## 必须调用的工具
-
-- mine_factors
-- list_factor_library
-- evaluate_factor
-- scan_alpha_factors
-
 ## 输出格式
 
-### 1. 本轮挖掘概况（轮数、候选数、入库数）
-### 2. 入库因子清单（公式、假设、RankIC/ICIR/TopK 指标）
+各章节标题必须完全一致；本轮挖掘概况需包含轮数、候选数、入库数，入库因子清单需包含公式、假设、RankIC/ICIR/TopK 指标。
+
+### 1. 本轮挖掘概况
+### 2. 入库因子清单
 ### 3. 因子经济含义解读
 ### 4. 样本内局限与待核验声明

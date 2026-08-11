@@ -243,14 +243,14 @@ client = TestClient(app)
 
 
 def test_api_search_passes_intent(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeApiContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeApiContentService())
     response = client.post("/api/v1/content/knowledge/search", json={"query": "黄金", "intent": "factual_qa", "limit": 5})
     assert response.status_code == 200
     assert response.json()["intent"] == "factual_qa"
 
 
 def test_api_lifecycle_update_passes_review_status(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeApiContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeApiContentService())
     response = client.patch("/api/v1/content/knowledge/99/lifecycle", json={"review_status": "APPROVED", "operator": "admin", "note": "人工确认"})
     assert response.status_code == 200
     assert response.json()["review_status"] == "APPROVED"
@@ -259,8 +259,8 @@ def test_api_lifecycle_update_passes_review_status(monkeypatch):
 
 
 def test_api_list_knowledge_verifications(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeApiContentService())
-    monkeypatch.setattr("app.api.knowledge_repository", FakeKnowledgeRepository())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeApiContentService())
+    monkeypatch.setattr("app.dependencies.knowledge_repository", FakeKnowledgeRepository())
     response = client.get("/api/v1/content/knowledge/99/verifications")
     assert response.status_code == 200
     payload = response.json()
@@ -272,7 +272,7 @@ def test_api_list_knowledge_verifications(monkeypatch):
 
 
 def test_api_get_knowledge_evidence(monkeypatch):
-    monkeypatch.setattr("app.api.content_ingest_service", FakeApiContentService())
+    monkeypatch.setattr("app.dependencies.content_ingest_service", FakeApiContentService())
     response = client.get("/api/v1/content/knowledge/99/evidence")
     assert response.status_code == 200
     payload = response.json()

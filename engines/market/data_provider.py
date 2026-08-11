@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, timedelta
 from functools import lru_cache
@@ -10,6 +11,8 @@ from engines.market.price_limit_rules import resolve_price_limit_rule
 from engines.market.qmt_bridge_client import QmtBridgeClient, QmtBridgeError
 from engines.market.trading_calendar import latest_available_trading_day, previous_trading_day
 from financial_agent.models import KlineRecord, KlineResponse
+
+logger = logging.getLogger(__name__)
 
 
 COMMON_SYMBOL_ALIASES = {
@@ -42,10 +45,15 @@ class MarketDataProvider:
     def get_sector_strength(self, top_k: int = 20, as_of: date | None = None) -> list[dict[str, Any]]:
         raise NotImplementedError
 
+    def get_market_features(self, as_of: date | None = None) -> dict[str, Any]:
+        raise NotImplementedError
+
 
 class QmtMarketDataProvider(MarketDataProvider):
     def __init__(self, bridge: QmtBridgeClient | None = None) -> None:
         self.bridge = bridge or QmtBridgeClient()
+        self._feature_repository: Any = None
+        self._feature_repository_failed = False
 
     def get_kline(self, symbol: str, start_date: date | None = None, end_date: date | None = None, freq: str = "1d", adjust: str = "qfq") -> KlineResponse:
         resolved = self.resolve_symbol(symbol)
@@ -284,14 +292,51 @@ class QmtMarketDataProvider(MarketDataProvider):
             rows = self.bridge.get_industry_map(symbols=[], sector_prefix="GICS2", only_a_share=True)
         except QmtBridgeError:
             return []
-        sector_samples: dict[str, list[str]] = defaultdict(list)
+        membership: dict[str, list[str]] = {}
         for row in rows:
             sector_name = str(row.get("industry_name") or row.get("industry_code") or "").strip() or "未分类"
             symbol = str(row.get("symbol") or "").strip()
             if not symbol:
                 continue
-            if len(sector_samples[sector_name]) < 3:
-                sector_samples[sector_name].append(symbol)
+            membership.setdefault(sector_name, []).append(symbol)
+        if not membership:
+            return []
+        try:
+            from engines.market.feature_service import SectorFeatureService
+
+            service = SectorFeatureService(provider=self, repository=self._get_feature_repository())
+            results = service.get_sector_strength(top_k=top_k, as_of=as_of, read_cache=False)
+        except Exception:  # noqa: BLE001 - 全量成分路径失败时降级到旧采样逻辑
+            logger.warning("full-universe sector strength failed; fallback to sampled logic", exc_info=True)
+        else:
+            return results
+        return self._sampled_sector_strength(membership, top_k=top_k, as_of=as_of)
+
+    def _get_feature_repository(self) -> Any:
+        """惰性构造 MarketFeatureRepository；不可用时返回 None（持久化为 best-effort）。"""
+        if self._feature_repository is None and not self._feature_repository_failed:
+            try:
+                from storage.repositories.market_feature_repository import MarketFeatureRepository
+
+                self._feature_repository = MarketFeatureRepository()
+            except Exception:  # noqa: BLE001 - 无 DB 环境仅跳过持久化
+                self._feature_repository_failed = True
+        return self._feature_repository
+
+    def get_market_features(self, as_of: date | None = None) -> dict[str, Any]:
+        from engines.market.feature_service import MarketFeatureService
+
+        service = MarketFeatureService(provider=self, repository=self._get_feature_repository())
+        return service.get_market_features(as_of=as_of)
+
+    def _sampled_sector_strength(
+        self,
+        membership: dict[str, list[str]],
+        top_k: int = 20,
+        as_of: date | None = None,
+    ) -> list[dict[str, Any]]:
+        """旧版每板块 3 只采样逻辑，仅作为全量路径失败时的最后兜底。"""
+        sector_samples: dict[str, list[str]] = {sector: symbols[:3] for sector, symbols in membership.items()}
         sample_symbols = sorted({symbol for symbols in sector_samples.values() for symbol in symbols})
         if not sample_symbols:
             return []
@@ -323,15 +368,27 @@ class QmtMarketDataProvider(MarketDataProvider):
             avg_pct = average(change_pcts)
             breadth = (up_count - down_count) / max(len(change_pcts), 1)
             score = clamp(50 + avg_pct * 6 + breadth * 20, 0, 100)
+            universe_size = len(membership.get(sector_name) or symbols)
             items.append(
                 {
                     "sector": sector_name,
                     "strength_score": round(score, 2),
                     "reason": f"样本涨跌幅均值 {avg_pct:.2f}%，上涨/下跌 {up_count}/{down_count}",
                     "change_pct": round(avg_pct, 2),
+                    "rank": None,
+                    "universe_size": universe_size,
+                    "valid_symbol_count": len(change_pcts),
+                    "coverage": round(len(change_pcts) / max(universe_size, 1), 6),
+                    "components": {},
+                    "as_of": (as_of or date.today()).isoformat(),
+                    "feature_version": "sector_strength_v1_sample3",
+                    "quality_flags": ["SECTOR_STRENGTH_FALLBACK_SAMPLE3"],
                 }
             )
-        return sorted(items, key=lambda item: item["strength_score"], reverse=True)[:top_k]
+        items.sort(key=lambda item: item["strength_score"], reverse=True)
+        for position, item in enumerate(items, start=1):
+            item["rank"] = position
+        return items[:top_k]
 
     @staticmethod
     def resolve_symbol(symbol: str) -> str:

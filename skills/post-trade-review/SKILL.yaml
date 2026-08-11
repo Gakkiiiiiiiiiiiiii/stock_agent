@@ -1,3 +1,4 @@
+version: 2
 slug: post-trade-review
 name: 交易复盘
 execution:

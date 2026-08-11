@@ -1,3 +1,4 @@
+version: 2
 slug: skill-evolution-review
 name: 策略进化复核
 execution:
@@ -6,4 +7,4 @@ execution:
   max_tool_rounds: 8
   require_memory_lookup: true
 output:
-  required_sections: []
+  required_sections: [候选规则清单, 验证结果, 是否进入人工确认]

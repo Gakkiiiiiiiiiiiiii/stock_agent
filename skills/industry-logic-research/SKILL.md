@@ -21,15 +21,6 @@ description: 用于整理、查询、更新行业逻辑和主题投资知识库�
 7. 当前市场是否已经 price in。
 8. 是否存在高位拥挤风险。
 
-## 必须调用的工具
-
-- search_video_insights
-- retrieve_relevant_context
-- search_theme_logic
-- get_theme_related_stocks
-- evaluate_theme_trigger
-- rank_themes_by_score
-
 ## 执行约束
 
 1. 先查最近视频知识库，再查主题知识库。

@@ -1,0 +1,11 @@
+{{- range $name, $service := .Values.services }}
+{{- if and $service.enabled $service.port }}
+apiVersion: v1
+kind: Service
+metadata: {name: {{ include "stock-agent.fullname" $ }}-{{ $name }}}
+spec:
+  selector: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }} }
+  ports: [{name: http, port: {{ $service.port }}, targetPort: {{ $service.port }}}]
+---
+{{- end }}
+{{- end }}

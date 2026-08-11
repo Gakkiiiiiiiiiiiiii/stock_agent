@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from engines.decision.attribution import TOKEN_LABELS, build_attribution
 from engines.decision.decision_service import DecisionService
 from engines.market.market_clock import MarketClock
 from storage.repositories.research_repository import MarketRegimeRepository
@@ -21,6 +22,7 @@ class DecisionReviewRunner:
         if not decision_result.get("found") or not outcome_result.get("found"):
             raise ValueError("DECISION_OR_OUTCOME_NOT_FOUND")
         decision, outcome = decision_result["decision"], outcome_result["outcome"]
+        attribution = build_attribution(decision, outcome)
         start = self._as_date(decision.get("decision_as_of") or decision.get("created_at"))
         end = outcome["evaluation_date"]
         history = self.regime_repository.list_history("CN_A", start_date=start, end_date=end, limit=100)
@@ -29,7 +31,7 @@ class DecisionReviewRunner:
         if agent is not None and getattr(agent, "configured", lambda: False)():
             response = agent.run(
                 f"请复盘决策 {decision_id} 在 T+{horizon_days} 的真实结果，并保存结构化复盘。",
-                context={"decision": decision, "outcome": outcome, "regime_history": historical_regimes},
+                context={"decision": decision, "outcome": outcome, "attribution": attribution, "regime_history": historical_regimes},
                 force_skill="decision-outcome-review",
             )
             saved_call = next(
@@ -45,7 +47,8 @@ class DecisionReviewRunner:
                 )
                 return saved_call | {"report": response.report, "historical_regimes": historical_regimes, "mode": "skill"}
 
-        review = self._build_review(decision, outcome, history)
+        review = self._build_review(decision, outcome, history, attribution)
+        review["attribution"] = attribution
         review["outcome_excess_return"] = outcome.get("excess_return")
         review["review_mode"] = "deterministic_fallback"
         review["regime_path"] = historical_regimes
@@ -62,10 +65,14 @@ class DecisionReviewRunner:
         return ClaudeAgent()
 
     @staticmethod
-    def _build_review(decision: dict, outcome: dict, history: list) -> dict:
+    def _build_review(decision: dict, outcome: dict, history: list, attribution: dict | None = None) -> dict:
         excess = float(outcome.get("excess_return") or 0)
-        correct = ["相对基准取得超额收益"] if excess > 0 else []
-        wrong = ["候选组合未取得相对基准超额收益"] if excess <= 0 else []
+        if attribution and (attribution.get("correct") or attribution.get("wrong")):
+            correct = [f"{TOKEN_LABELS.get(token, token)}正确" for token in attribution["correct"]]
+            wrong = [f"{TOKEN_LABELS.get(token, token)}错误" for token in attribution["wrong"]]
+        else:
+            correct = ["相对基准取得超额收益"] if excess > 0 else []
+            wrong = ["候选组合未取得相对基准超额收益"] if excess <= 0 else []
         regimes = [item.new_regime for item in history]
         lesson = "在该市场环境下应降低同类信号权重，并强化证伪条件。" if excess <= 0 else "该信号在此市场环境下有效，继续监控其证伪条件。"
         return {"decision_quality": max(0.0, min(1.0, 0.5 + excess * 5)), "what_was_correct": correct, "what_was_wrong": wrong, "root_causes": ["市场状态路径：" + " → ".join(regimes)] if regimes else ["历史市场状态数据不足"], "unexpected_events": [], "lessons": [lesson], "applicable_regimes": regimes, "invalidation_updates": list(decision.get("invalidation_conditions") or [])}

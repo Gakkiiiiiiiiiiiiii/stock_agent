@@ -1,0 +1,22 @@
+{{- range $job := .Values.cronJobs }}
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: {{ include "stock-agent.fullname" $ }}-{{ $job.name }}}
+spec:
+  schedule: {{ $job.schedule | quote }}
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: {{ $job.name }}
+              image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+              command: {{ toJson $job.command }}
+              envFrom: [{configMapRef: {name: {{ include "stock-agent.fullname" $ }}-config}}]
+              resources:
+                requests: {{ toYaml $.Values.resources.requests | nindent 18 }}
+                limits: {{ toYaml $.Values.resources.limits | nindent 18 }}
+---
+{{- end }}

@@ -1,3 +1,4 @@
+version: 2
 slug: daily-market-decision
 name: 每日市场决策
 execution:

@@ -29,6 +29,40 @@ class SkillSelectionDecision:
     reason: str
 
 
+def _skill_identity_payload(skill: SkillDefinition) -> dict[str, Any]:
+    return {
+        "slug": skill.slug,
+        "version": skill.version,
+        "contract_hash": skill.skill_contract_hash,
+        "markdown_hash": skill.skill_markdown_hash,
+    }
+
+
+class _SkillIdentityToolProxy:
+    """Wraps the tool registry so save_investment_decision persists which exact
+    skill contract (slug + version + hashes) produced the decision, even when the
+    model does not pass those fields itself. Model-supplied values win."""
+
+    def __init__(self, registry: ClaudeToolRegistry, skill: SkillDefinition) -> None:
+        self._registry = registry
+        self._skill = skill
+
+    def openai_tools(self) -> list[dict[str, Any]]:
+        return self._registry.openai_tools()
+
+    def describe_tool(self, name: str) -> str:
+        return self._registry.describe_tool(name)
+
+    def execute(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if name == "save_investment_decision":
+            payload = dict(payload or {})
+            payload.setdefault("skill_slug", self._skill.slug)
+            payload.setdefault("skill_version", self._skill.version)
+            payload.setdefault("skill_contract_hash", self._skill.skill_contract_hash)
+            payload.setdefault("skill_markdown_hash", self._skill.skill_markdown_hash)
+        return self._registry.execute(name, payload)
+
+
 class ClaudeAgent:
     """
     Keep the ClaudeAgent name because the project still follows the Claude-style
@@ -106,6 +140,7 @@ class ClaudeAgent:
         decision_id = self._ensure_formal_decision(decision.skill, user_query, report, tool_calls)
         trace = {
             "selection_reason": decision.reason,
+            "skill": _skill_identity_payload(decision.skill),
             "steps": [
                 {
                     "type": "skill_selection",
@@ -141,6 +176,9 @@ class ClaudeAgent:
         saved = DecisionService().save_decision(
             query=query,
             skill_slug=skill.slug,
+            skill_version=skill.version,
+            skill_contract_hash=skill.skill_contract_hash,
+            skill_markdown_hash=skill.skill_markdown_hash,
             market_regime=(regime_call.get("regime") or {}).get("primary_regime"),
             market_features=regime_call.get("features") or {},
             thesis={"report": report},
@@ -203,129 +241,6 @@ class ClaudeAgent:
             return SkillSelectionDecision(skill=fallback, reason="Fallback keyword routing selected this skill.")
         raise RuntimeError("Primary agent model did not select a skill")
 
-    def _run_skill_legacy(
-        self,
-        skill: SkillDefinition,
-        user_query: str,
-        context: dict[str, Any] | None = None,
-        emit: Callable[[str, dict[str, Any]], None] | None = None,
-    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
-        tool_calls: list[dict[str, Any]] = []
-        trace_steps: list[dict[str, Any]] = []
-        messages: list[dict[str, Any]] = [
-            {
-                "role": "user",
-                "content": (
-                    f"User query:\n{user_query}\n\n"
-                    f"Structured context:\n{json.dumps(context or {}, ensure_ascii=False)}"
-                ),
-            }
-        ]
-        system = (
-            "You are the primary model running a Claude-style financial analysis agent framework. "
-            "You must personally do skill execution planning, tool invocation, and final report writing. "
-            "Use the provided tools for all deterministic computation and data retrieval. "
-            "If the ask_research_model tool is available, you may use it as a subordinate helper, "
-            "but you remain responsible for the final judgment. "
-            f"Never fabricate missing market data. If data is insufficient, say so clearly. Today's runtime date is {date.today().isoformat()}.\n\n"
-            f"Selected skill: {skill.slug}\n\n"
-            f"Skill instructions:\n{skill.content}\n\n"
-            "Before any tool call, you may write a short user-visible execution note. "
-            "Keep it brief and factual. Do not reveal hidden chain-of-thought."
-        )
-        for round_index in range(1, self.max_tool_rounds + 1):
-            self._emit(emit, "status", {"message": f"Planning round {round_index}..."})
-            response = self.client.create_chat_completion(
-                model=None,
-                max_tokens=2048,
-                system=system,
-                tools=self.tool_registry.openai_tools(),
-                messages=messages,
-            )
-            message = ((response.get("choices") or [{}])[0]).get("message", {})
-            assistant_note = (message.get("content") or "").strip()
-            if assistant_note:
-                step = {
-                    "type": "assistant_note",
-                    "title": f"Round {round_index} note",
-                    "content": assistant_note,
-                }
-                trace_steps.append(step)
-                self._emit(emit, "trace", {"step": step})
-            response_tool_calls = message.get("tool_calls") or []
-            if not response_tool_calls:
-                final_report = (message.get("content") or "").strip()
-                step = {
-                    "type": "final_answer",
-                    "title": "Final answer",
-                    "content": self._truncate_text(final_report),
-                }
-                trace_steps.append(step)
-                self._emit(emit, "trace", {"step": step})
-                for chunk in self._chunk_text(final_report):
-                    self._emit(emit, "report_delta", {"delta": chunk})
-                return final_report, tool_calls, trace_steps
-            assistant_message = {"role": "assistant", "content": message.get("content") or "", "tool_calls": response_tool_calls}
-            messages.append(assistant_message)
-            for tool_call in response_tool_calls:
-                function = tool_call.get("function", {})
-                name = function.get("name")
-                call_id = tool_call.get("id") or f"tool_{len(tool_calls) + 1}"
-                arguments = json.loads(function.get("arguments") or "{}")
-                call_step = {
-                    "type": "tool_call",
-                    "title": name,
-                    "content": self._tool_call_summary(name, arguments),
-                    "data": {"call_id": call_id, "input": arguments},
-                }
-                trace_steps.append(call_step)
-                self._emit(emit, "trace", {"step": call_step})
-                self._emit(emit, "tool_call", {"call_id": call_id, "name": name, "input": arguments})
-                result = self.tool_registry.execute(name, arguments)
-                tool_calls.append({"call_id": call_id, "name": name, "input": arguments, "output": result})
-                result_step = {
-                    "type": "tool_result",
-                    "title": name,
-                    "content": self._tool_result_summary(result),
-                    "data": {"call_id": call_id, "output": result},
-                }
-                trace_steps.append(result_step)
-                self._emit(emit, "trace", {"step": result_step})
-                self._emit(emit, "tool_result", {"call_id": call_id, "name": name, "output": result})
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call_id,
-                        "content": json.dumps(result, ensure_ascii=False),
-                    }
-                )
-        final_response = self.client.create_chat_completion(
-            model=None,
-            max_tokens=2048,
-            system=(
-                f"{system}\n\n"
-                "You have already used enough tools. "
-                "Do not call any more tools. "
-                "Write the final answer directly using the collected evidence, "
-                "and clearly state any remaining uncertainty."
-            ),
-            messages=messages,
-        )
-        final_message = ((final_response.get("choices") or [{}])[0]).get("message", {})
-        final_content = (final_message.get("content") or "").strip()
-        if final_content:
-            step = {
-                "type": "final_answer",
-                "title": "Final answer",
-                "content": self._truncate_text(final_content),
-            }
-            trace_steps.append(step)
-            self._emit(emit, "trace", {"step": step})
-            for chunk in self._chunk_text(final_content):
-                self._emit(emit, "report_delta", {"delta": chunk})
-            return final_content, tool_calls, trace_steps
-        raise RuntimeError("Primary agent tool loop exceeded max rounds")
-
     def _run_skill(
         self,
         skill: SkillDefinition,
@@ -347,8 +262,8 @@ class ClaudeAgent:
             "Keep it brief and factual. Do not reveal hidden chain-of-thought."
         )
         report, tool_calls, trace_steps, _state = SkillExecutor(
-            self.client, self.tool_registry, self.max_tool_rounds
-        ).run(skill=skill, user_query=user_query, context=context, system=system, emit=emit)
+            self.client, _SkillIdentityToolProxy(self.tool_registry, skill), self.max_tool_rounds
+        ).run(skill=skill, user_query=user_query, context=context, system=system, emit=emit, query_flags=(context or {}).get("query_flags"))
         return report, tool_calls, trace_steps
 
     @staticmethod
@@ -409,35 +324,6 @@ class ClaudeAgent:
         recency_keywords = ("最近", "近期", "当前", "今天", "这两天", "这几天", "最新", "本周", "眼下")
         opportunity_keywords = ("板块", "赛道", "方向", "机会", "主线", "值得关注", "值得投资", "可交易", "怎么看")
         return any(keyword in query for keyword in recency_keywords) and any(keyword in query for keyword in opportunity_keywords)
-
-    def _tool_call_summary(self, name: str, arguments: dict[str, Any]) -> str:
-        description = self.tool_registry.describe_tool(name)
-        if not arguments:
-            return description
-        return f"{description} Inputs: {self._truncate_text(json.dumps(arguments, ensure_ascii=False), limit=220)}"
-
-    @staticmethod
-    def _tool_result_summary(result: dict[str, Any]) -> str:
-        if not result:
-            return "Tool returned an empty result."
-        if "error" in result:
-            return f"Tool returned error: {result['error']}"
-        keys = list(result.keys())[:6]
-        return f"Tool returned keys: {', '.join(keys)}"
-
-    @staticmethod
-    def _truncate_text(value: str, limit: int = 280) -> str:
-        text = (value or "").strip()
-        if len(text) <= limit:
-            return text
-        return f"{text[:limit].rstrip()}..."
-
-    @staticmethod
-    def _chunk_text(value: str, chunk_size: int = 120) -> list[str]:
-        text = value or ""
-        if not text:
-            return []
-        return [text[index : index + chunk_size] for index in range(0, len(text), chunk_size)]
 
     @staticmethod
     def _emit(emit: Callable[[str, dict[str, Any]], None] | None, event: str, payload: dict[str, Any]) -> None:

@@ -13,6 +13,20 @@ market_regime:
     max_breadth: 0.6
   high_position_retreat:
     min_retreat_score: 0.65
+probability_model:
+  # 概率向量分类器参数（classify_regime_probabilities 使用）
+  crowding_center: 0.72
+  base_membership: 0.02
+regime_v2:
+  # Regime v2 输出：LLM 提示融合权重与数据质量降级
+  llm_blend_weight: 0.25
+  min_coverage: 0.9
+  low_quality_confidence_scale: 0.5
+calibration:
+  # 历史校准（route_strategy 附加历史胜率）
+  enabled: true
+  min_samples: 5
+  horizons: [1, 5, 20]
 transition:
   confirmation_days:
     high_position_retreat: 1

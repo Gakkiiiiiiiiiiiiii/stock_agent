@@ -24,6 +24,7 @@ class MemoryCandidate(BaseModel):
     valid_from: datetime | None = None
     valid_to: datetime | None = None
     merge_key: str
+    scope: dict | None = None
 
     @property
     def importance_label(self) -> str:

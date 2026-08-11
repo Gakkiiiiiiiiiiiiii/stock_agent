@@ -1,0 +1,6 @@
+stream:
+  version: v1
+  stream_key: market:events:v1
+  consumer_group: market-feature-v1
+  allowed_lateness_seconds: 5
+  state_ttl_seconds: 86400

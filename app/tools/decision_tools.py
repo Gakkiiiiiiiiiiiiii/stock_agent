@@ -20,7 +20,10 @@ class SaveInvestmentDecisionInput(BaseModel):
     confidence: float | None = None
     decision_as_of: str | None = None
     evaluation_anchor: str = "NEXT_SESSION_OPEN"
-    benchmark_symbol: str = "000001.SH"
+    benchmark_symbol: str | None = None
+    decision_type: str | None = None
+    style: str | None = None
+    sector: str | None = None
     trigger_conditions: list = Field(default_factory=list)
     invalidation_conditions: list = Field(default_factory=list)
     evidence_refs: list = Field(default_factory=list)
@@ -40,6 +43,19 @@ class RecordDecisionOutcomeInput(GetDecisionInput):
     horizon_days: int
     benchmark_return: float | None = None
     portfolio_return: float | None = None
+    absolute_return: float | None = None
+    market_return: float | None = None
+    market_excess_return: float | None = None
+    style_return: float | None = None
+    style_excess_return: float | None = None
+    sector_return: float | None = None
+    sector_excess_return: float | None = None
+    theme_basket_return: float | None = None
+    theme_excess_return: float | None = None
+    max_drawdown: float | None = None
+    max_adverse_excursion: float | None = None
+    max_favorable_excursion: float | None = None
+    benchmark_route: dict | None = None
     trigger_hit: bool | None = None
     invalidation_hit: bool | None = None
     realized_metrics: dict = Field(default_factory=dict)

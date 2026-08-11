@@ -22,19 +22,6 @@ description: 用于每日市场扫描、主题强度分析、候选标的筛选�
 8. 检查持仓风险。
 9. 输出候选标的和仓位建议。
 
-## 必须调用的工具
-
-- get_market_snapshot
-- get_market_regime
-- route_strategy
-- search_video_insights
-- retrieve_relevant_context
-- get_sector_strength
-- rank_themes_by_score
-- scan_technical_rules
-- scan_alpha_factors
-- evaluate_portfolio_risk
-
 ## 执行约束
 
 1. 对于“最近/近期/当前”的问题，必须先调用 `search_video_insights`。
@@ -51,8 +38,6 @@ description: 用于每日市场扫描、主题强度分析、候选标的筛选�
 ### 1. 市场环境
 ### 2. 风格判断
 ### 3. 今日强主题
-### 4. 主题逻辑验证
-### 5. 候选标的
-### 6. 当前不建议参与方向
-### 7. 仓位建议
-### 8. 明日观察点
+### 4. 候选标的
+### 5. 仓位建议
+### 6. 明日观察点

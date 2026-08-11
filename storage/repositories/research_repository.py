@@ -85,6 +85,34 @@ class DecisionRepository:
             session.refresh(outcome)
             return outcome
 
+    def list_decision_outcome_rows(self) -> list[dict]:
+        """只读：联表 investment_decision × investment_decision_outcome，展开为纯 dict 行。
+
+        供历史校准（engines/regime/calibration.py）使用；仅返回存在
+        market_excess_return 且 decision 带有 market_regime 的行。
+        """
+        with session_scope() as session:
+            pairs = session.execute(
+                select(InvestmentDecision, InvestmentDecisionOutcome)
+                .join(InvestmentDecisionOutcome, InvestmentDecisionOutcome.decision_id == InvestmentDecision.id)
+                .where(InvestmentDecision.market_regime.is_not(None))
+                .where(InvestmentDecisionOutcome.market_excess_return.is_not(None))
+            ).all()
+            return [
+                {
+                    "decision_id": decision.id,
+                    "market_regime": decision.market_regime,
+                    "skill_slug": decision.skill_slug,
+                    "thesis": dict(decision.thesis or {}),
+                    "tool_trace": list(decision.tool_trace or []),
+                    "themes": list(decision.themes or []),
+                    "horizon_days": outcome.horizon_days,
+                    "market_excess_return": outcome.market_excess_return,
+                    "evaluation_date": outcome.evaluation_date.isoformat() if outcome.evaluation_date else None,
+                }
+                for decision, outcome in pairs
+            ]
+
     def get_outcome(self, decision_id: str, horizon_days: int | None = None) -> InvestmentDecisionOutcome | None:
         with session_scope() as session:
             query = select(InvestmentDecisionOutcome).where(InvestmentDecisionOutcome.decision_id == decision_id)

@@ -17,10 +17,22 @@ class SkillOutputContract(BaseModel):
     json_schema_name: str | None = None
 
 
+class ConditionalRequirement(BaseModel):
+    """Tools that become required only when a runtime query flag is truthy."""
+
+    when: str
+    require: list[str] = Field(default_factory=list)
+    require_any: list[str] = Field(default_factory=list)
+
+
 class SkillExecutionContract(BaseModel):
     required_tools: list[str] = Field(default_factory=list)
     optional_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
+    # Contract v2: named groups; at least one tool per group must succeed.
+    required_any: dict[str, list[str]] = Field(default_factory=dict)
+    # Contract v2: extra requirements activated by SkillExecutionState.query_flags.
+    conditional_requirements: list[ConditionalRequirement] = Field(default_factory=list)
     max_tool_rounds: int = 8
     min_tool_rounds: int = 0
     require_fresh_market_data: bool = False
@@ -61,6 +73,8 @@ class SkillExecutionState(BaseModel):
     decision_memory_loaded: bool = False
     user_preference_loaded: bool = False
     contract_violations: list[str] = Field(default_factory=list)
+    # Runtime flags that activate execution.conditional_requirements entries.
+    query_flags: dict[str, bool] = Field(default_factory=dict)
 
     def record_tool_result(self, name: str, result: dict, call_id: str | None = None) -> None:
         self.called_tools.append(name)
@@ -135,6 +149,17 @@ class SkillContractValidator:
         forbidden = sorted(called.intersection(execution.forbidden_tools))
         if forbidden:
             violations.append(f"Forbidden tools were called: {', '.join(forbidden)}.")
+        for group, tools in execution.required_any.items():
+            if not any(name in successful for name in tools):
+                violations.append(f"MISSING_REQUIRED_ANY:{group} (at least one of: {', '.join(tools)})")
+        for condition in execution.conditional_requirements:
+            if not state.query_flags.get(condition.when):
+                continue
+            for name in condition.require:
+                if name not in successful:
+                    violations.append(f"MISSING_CONDITIONAL_TOOL:{condition.when}:{name}")
+            if condition.require_any and not any(name in successful for name in condition.require_any):
+                violations.append(f"MISSING_CONDITIONAL_ANY:{condition.when} (at least one of: {', '.join(condition.require_any)})")
         if state.round_index < execution.min_tool_rounds:
             violations.append(f"At least {execution.min_tool_rounds} tool rounds are required.")
         if execution.require_fresh_market_data:

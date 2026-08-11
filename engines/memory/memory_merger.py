@@ -37,11 +37,55 @@ class MemoryMerger:
             return {"action": "conflict", "conflict_type": conflict_type, "superseded_memory_id": existing.id, "conflict_group": group, **saved}
         merged_lessons = list(dict.fromkeys([*(existing.lessons or []), *candidate.lessons]))
         saved = write_memory_and_enqueue(
-            payload | {"lessons": merged_lessons, "confidence": max(float(existing.confidence), candidate.confidence)},
+            payload
+            | {
+                "lessons": merged_lessons,
+                "confidence": max(float(existing.confidence), candidate.confidence),
+                **self._merged_scope(existing, payload),
+            },
             target_collection="financial_memory",
             existing_memory_id=existing.id,
         )
         return {"action": "updated", **saved, "merge_key": candidate.merge_key}
+
+    @staticmethod
+    def _scope(candidate: MemoryCandidate, metadata: dict | None) -> dict:
+        """Resolve applicability scope: explicit candidate scope > metadata scope > facts context.
+
+        Every dimension defaults to None (= unrestricted). When the candidate
+        carries regime/theme context (e.g. decision-review facts), that context
+        fills the matching dimensions.
+        """
+        facts = candidate.facts or {}
+        explicit = dict(candidate.scope or {})
+        meta_scope = (metadata or {}).get("scope") or {}
+        regimes = explicit.get("regimes") or meta_scope.get("regimes") or list(facts.get("applicable_regimes") or [])
+        if not regimes and facts.get("market_regime"):
+            regimes = [facts["market_regime"]]
+        themes = explicit.get("themes") or meta_scope.get("themes") or ([facts["theme"]] if facts.get("theme") else [])
+        return {
+            "applicable_market": explicit.get("market") or meta_scope.get("market"),
+            "applicable_regimes": list(dict.fromkeys(regimes)) or None,
+            "applicable_styles": explicit.get("styles") or meta_scope.get("styles"),
+            "applicable_horizon": explicit.get("horizon_days") or meta_scope.get("horizon_days"),
+            "applicable_themes": list(dict.fromkeys(themes)) or None,
+        }
+
+    @staticmethod
+    def _merged_scope(existing, payload: dict) -> dict:
+        """Merge new scope into an existing memory: union lists, keep non-null scalars."""
+
+        def union(old, new):
+            values = list(dict.fromkeys([*(old or []), *(new or [])]))
+            return values or None
+
+        return {
+            "applicable_market": payload.get("applicable_market") or existing.applicable_market,
+            "applicable_regimes": union(existing.applicable_regimes, payload.get("applicable_regimes")),
+            "applicable_styles": union(existing.applicable_styles, payload.get("applicable_styles")),
+            "applicable_horizon": payload.get("applicable_horizon") if payload.get("applicable_horizon") is not None else existing.applicable_horizon,
+            "applicable_themes": union(existing.applicable_themes, payload.get("applicable_themes")),
+        }
 
     @staticmethod
     def _payload(candidate: MemoryCandidate, source_type: str, metadata: dict | None) -> dict:
@@ -60,6 +104,7 @@ class MemoryMerger:
             "facts": candidate.facts,
             "lessons": candidate.lessons,
             "metadata_json": metadata or {},
+            **MemoryMerger._scope(candidate, metadata),
             "valid_from": candidate.valid_from,
             "valid_to": candidate.valid_to,
             "last_seen_at": datetime.now(UTC),

@@ -1,0 +1,11 @@
+sector_strength:
+  version: v2
+  calculation_version: sector_strength_v2
+  low_coverage_threshold: 0.6
+  weights:
+    trend: 0.25
+    breadth: 0.25
+    relative_strength: 0.20
+    liquidity: 0.15
+    momentum: 0.10
+    risk_penalty: 0.05

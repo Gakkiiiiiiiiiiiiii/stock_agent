@@ -1,3 +1,12 @@
+"""模型不可用时的降级编排器（P0-05：Agent Core 单一执行路径的边界约定）。
+
+唯一执行路径是 AgentOrchestrator → SkillSelector（ClaudeAgent._choose_skill）
+→ SkillExecutor → ToolRegistry。本模块仅用于“主模型未配置/不可用”时的降级：
+为 analyze_stock / analyze_theme / daily_scan 提供确定性的无模型结果。
+
+约束：本模块不得演化为第二条业务逻辑路径——不允许在此新增决策、选股、
+组合等业务能力；新增能力必须走 Agent 主路径（技能 + 工具）。
+"""
 from __future__ import annotations
 
 import math

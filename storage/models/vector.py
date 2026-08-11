@@ -67,12 +67,34 @@ class MemoryRecord(Base):
     lessons: Mapped[list] = mapped_column(JSON, default=list)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     conflict_group: Mapped[str | None] = mapped_column(String(64), index=True)
+    applicable_market: Mapped[str | None] = mapped_column(String(64))
+    applicable_regimes: Mapped[list | None] = mapped_column(JSON)
+    applicable_styles: Mapped[list | None] = mapped_column(JSON)
+    applicable_horizon: Mapped[int | None] = mapped_column(Integer)
+    applicable_themes: Mapped[list | None] = mapped_column(JSON)
     valid_from: Mapped[datetime | None] = mapped_column(DateTime)
     valid_to: Mapped[datetime | None] = mapped_column(DateTime)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC))
+
+
+class MemoryEvidence(Base):
+    __tablename__ = "memory_evidence"
+    __table_args__ = (UniqueConstraint("memory_id", "decision_id", "horizon_days", name="uq_memory_evidence_event"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    memory_id: Mapped[int] = mapped_column(Integer, index=True)
+    decision_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    regime: Mapped[str | None] = mapped_column(String(64))
+    horizon_days: Mapped[int | None] = mapped_column(Integer)
+    market_excess_return: Mapped[float | None] = mapped_column(Float)
+    sector_excess_return: Mapped[float | None] = mapped_column(Float)
+    decision_quality: Mapped[float | None] = mapped_column(Float)
+    applicability: Mapped[float | None] = mapped_column(Float)
+    weight: Mapped[float] = mapped_column(Float, default=1.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
 
 class MarketRegimeLabel(Base):

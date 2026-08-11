@@ -12,11 +12,11 @@ from app.tools.decision_tools import build_decision_tools
 from app.tools.definitions import ToolDefinition
 from app.tools.memory_tools import build_memory_tools
 from app.tools.market_tools import build_market_tools
+from app.tools.portfolio_tools import build_portfolio_tools
 from app.tools.regime_tools import build_regime_tools
 from app.tool_policy import PermissionLevel, ProposalStore, ToolAuditor, ToolPolicy, ToolPolicyError
 from mcp_servers import (
     content_server,
-    decision_server,
     factor_mining_server,
     industry_knowledge_server,
     knowledge_server,
@@ -38,7 +38,7 @@ class ClaudeToolRegistry:
     _executor_pool = ThreadPoolExecutor(max_workers=8)
 
     def __init__(self, analysis_model_client: AnalysisModelClient | None = None) -> None:
-        self.analysis_model_client = analysis_model_client or AnalysisModelClient()
+        self._analysis_model_client = analysis_model_client
         self.proposals = ProposalStore()
         self.auditor = ToolAuditor()
         self._tools: dict[str, tuple[dict[str, Any], ToolExecutor]] = {
@@ -556,30 +556,9 @@ class ClaudeToolRegistry:
                 },
                 lambda payload: factor_mining_server.scan_alpha_factors(**payload),
             ),
-            "save_investment_decision": (
-                {
-                    "name": "save_investment_decision",
-                    "description": "Persist an important research decision for later outcome evaluation and review.",
-                    "input_schema": {"type": "object", "properties": {"query": {"type": "string"}, "skill_slug": {"type": "string"}, "market_regime": {"type": "string"}, "thesis": {"type": "object"}, "themes": {"type": "array", "items": {"type": "string"}}, "candidates": {"type": "array", "items": {"type": "object"}}, "confidence": {"type": "number"}, "tool_trace": {"type": "array", "items": {"type": "object"}}}},
-                },
-                lambda payload: decision_server.save_investment_decision(**payload),
-            ),
-            "get_decision": (
-                {"name": "get_decision", "description": "Get a previously persisted investment decision.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}}, "required": ["decision_id"]}},
-                lambda payload: decision_server.get_decision(**payload),
-            ),
-            "get_decision_outcome": (
-                {"name": "get_decision_outcome", "description": "Get the measured outcome of an investment decision.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "horizon_days": {"type": "integer"}}, "required": ["decision_id"]}},
-                lambda payload: decision_server.get_decision_outcome(**payload),
-            ),
-            "record_decision_outcome": (
-                {"name": "record_decision_outcome", "description": "Record a measured decision outcome for a review horizon.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "evaluation_date": {"type": "string"}, "horizon_days": {"type": "integer"}, "benchmark_return": {"type": "number"}, "portfolio_return": {"type": "number"}}, "required": ["decision_id", "evaluation_date", "horizon_days"]}},
-                lambda payload: decision_server.record_decision_outcome(**payload),
-            ),
-            "review_investment_decision": (
-                {"name": "review_investment_decision", "description": "Store a structured post-outcome review and turn its lessons into strategy memory.", "input_schema": {"type": "object", "properties": {"decision_id": {"type": "string"}, "review": {"type": "object"}, "outcome_id": {"type": "integer"}}, "required": ["decision_id", "review"]}},
-                lambda payload: decision_server.review_investment_decision(**payload),
-            ),
+            # 决策工具（save_investment_decision / get_decision / get_decision_outcome /
+            # record_decision_outcome / review_investment_decision）唯一定义在
+            # app/tools/decision_tools.py，由下方 register_many(build_decision_tools()) 注册。
         }
         if os.getenv("ENABLE_LEGACY_TECHNICAL_PATTERNS", "false").lower() not in {"1", "true", "yes"}:
             for legacy_name in ("calc_technical_indicators", "detect_pattern_signal", "scan_stock_signals"):
@@ -588,7 +567,16 @@ class ClaudeToolRegistry:
         self.register_many(build_memory_tools())
         self.register_many(build_regime_tools())
         self.register_many(build_market_tools())
+        self.register_many(build_portfolio_tools())
         self._policies: dict[str, ToolPolicy] = self._default_policies()
+
+    @property
+    def analysis_model_client(self) -> AnalysisModelClient:
+        # Lazily constructed so offline tooling (e.g. the skill contract linter) can
+        # enumerate registered tools without model credentials or network access.
+        if self._analysis_model_client is None:
+            self._analysis_model_client = AnalysisModelClient()
+        return self._analysis_model_client
 
     def register(self, definition: ToolDefinition) -> None:
         """Compatibility bridge while legacy domain tools are migrated incrementally."""
@@ -682,11 +670,13 @@ class ClaudeToolRegistry:
             "evaluate_factor",
             "scan_alpha_factors",
             "construct_portfolio",
+            "construct_portfolio_v2",
+            "rank_opportunities",
             "ingest_bilibili_video",
         }
         writes = {"upsert_theme_logic", "record_decision_outcome", "review_investment_decision"}
         policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
-            "get_kline", "get_market_snapshot", "get_sector_strength", "calc_technical_indicators",
+            "get_kline", "get_market_snapshot", "get_market_features", "get_sector_strength", "calc_technical_indicators",
             "calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules", "explain_technical_rule",
             "detect_pattern_signal", "scan_stock_signals", "search_theme_logic", "retrieve_relevant_context",
             "get_theme_related_stocks", "evaluate_theme_trigger", "rank_themes_by_score", "get_market_regime",
@@ -731,3 +721,12 @@ class ClaudeToolRegistry:
             "confirmation_id": confirmation_id,
             "created_at": int(time.time()),
         })
+
+
+def known_tool_names() -> set[str]:
+    """Names of every tool ClaudeToolRegistry registers.
+
+    Safe for offline use (no model credentials or network): the analysis model
+    client is constructed lazily, and registration itself is in-memory only.
+    """
+    return set(ClaudeToolRegistry()._tools)

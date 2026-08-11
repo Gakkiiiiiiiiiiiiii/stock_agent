@@ -21,6 +21,10 @@ def get_market_snapshot() -> dict:
     return get_market_data_provider().get_market_snapshot()
 
 
+def get_market_features() -> dict:
+    return get_market_data_provider().get_market_features()
+
+
 def get_sector_strength() -> dict:
     return {"sectors": get_market_data_provider().get_sector_strength()}
 

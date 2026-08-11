@@ -27,17 +27,6 @@ description: 用于分析 A 股个股、ETF、行业指数的技术形态，包�
 6. 判断风险。
 7. 输出操作建议。
 
-## 必须调用的工具
-
-- retrieve_relevant_context
-- get_kline
-- calc_profile_indicators
-- evaluate_technical_rules
-- get_market_regime
-- get_sector_strength
-- search_theme_logic
-- evaluate_portfolio_risk
-
 ## 输出格式
 
 ### 1. 当前技术状态

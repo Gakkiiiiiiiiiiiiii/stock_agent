@@ -1,0 +1,20 @@
+# Decision Evaluation v2 — 评估 horizon 语义配置
+# horizons：每个决策到期评估的交易日 horizon 及其语义标签；
+# primary_horizon：触发结构化复盘（decision_review）的 horizon，可按 decision_type 覆盖。
+decision_evaluation:
+  horizons:
+    - days: 1
+      label: "1D 催化/交易时点"
+    - days: 5
+      label: "5D 短线主题与节奏"
+    - days: 20
+      label: "20D 中期逻辑有效性"
+  primary_horizon:
+    default: 5
+    by_decision_type:
+      event_catalyst: 1
+      index_timing: 1
+      market_timing: 1
+      theme_rotation: 5
+      stock_selection: 20
+      asset_allocation: 20

@@ -1,0 +1,18 @@
+memory:
+  lifecycle:
+    # confidence >= validate_confidence 且证据数 >= min_evidence_count → VALIDATED
+    validate_confidence: 0.7
+    # confidence <= revalidate_confidence 且证据数 >= min_evidence_count → REVALIDATION_REQUIRED
+    revalidate_confidence: 0.3
+    min_evidence_count: 3
+    # |超额收益| 低于该噪声带的证据视为中性（低权重，只稀释置信度）
+    significance_threshold: 0.01
+    # 证据权重的时间半衰期（天）
+    recency_half_life_days: 180
+  scope:
+    # 带适用域上下文检索时的候选过取倍数（先硬过滤再截断 top_k）
+    overfetch_factor: 3
+  scorer:
+    # 把生命周期加权置信度作为加分项注入记忆打分
+    confidence_bonus_enabled: true
+    confidence_bonus_weight: 0.05

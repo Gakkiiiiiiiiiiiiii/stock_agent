@@ -1,0 +1,17 @@
+opportunity:
+  version: opportunity_ranking_v1
+  # 缺失成分按中性分处理并记录 MISSING_COMPONENT_<NAME> note
+  neutral_component_score: 50.0
+  # OpportunityScore = w_theme*ThemeStrength + w_technical*TechnicalQuality
+  #   + w_alpha*FactorAlpha + w_regime*RegimeFit + w_knowledge*KnowledgeSupport
+  #   - w_risk*RiskPenalty
+  weights:
+    theme: 0.25
+    technical: 0.20
+    alpha: 0.20
+    regime_fit: 0.15
+    knowledge: 0.10
+    risk: 0.10
+  eligibility:
+    min_liquidity_score: 20.0
+    min_data_coverage: 0.60

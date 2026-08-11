@@ -1,0 +1,57 @@
+# Decision Evaluation v2 — 基准路由配置
+#
+# 路由顺序：显式 sector 映射 → style 映射 → decision_type 映射 → 默认基准。
+# 代码口径说明（均为公开常见指数代码，不确定时回退默认并在 reason 中说明）：
+#   000300.SH 沪深300 / 000905.SH 中证500 / 000852.SH 中证1000
+#   000016.SH 上证50 / 399006.SZ 创业板指 / 000001.SH 上证指数（最终默认）
+#   000922.SH 中证红利（红利/价值风格代理）
+#   932000.CSI 中证2000（微盘/小盘风格代理）
+#   000986-000995.SH 中证全指一级行业指数系列（能源/材料/工业/可选消费/
+#     主要消费/医药卫生/金融地产/信息技术/电信业务/公用事业），用作行业代理。
+# theme 基准由特殊值 THEME_BASKET 表示：决策候选标的等权组合，
+# 主基准回退为 sector/market 基准。
+benchmark_router:
+  version: benchmark_router_v1
+  default_benchmark: "000001.SH"
+  theme_basket_marker: "THEME_BASKET"
+  market_defaults:
+    CN_A: "000001.SH"
+  sector_map:
+    能源: { benchmark: "000986.SH", name: 全指能源 }
+    材料: { benchmark: "000987.SH", name: 全指材料 }
+    工业: { benchmark: "000988.SH", name: 全指工业 }
+    可选消费: { benchmark: "000989.SH", name: 全指可选消费 }
+    消费: { benchmark: "000990.SH", name: 全指消费 }
+    医药: { benchmark: "000991.SH", name: 全指医药 }
+    医疗: { benchmark: "000991.SH", name: 全指医药 }
+    金融: { benchmark: "000992.SH", name: 全指金融 }
+    银行: { benchmark: "000992.SH", name: 全指金融 }
+    券商: { benchmark: "000992.SH", name: 全指金融 }
+    地产: { benchmark: "000992.SH", name: 全指金融 }
+    信息技术: { benchmark: "000993.SH", name: 全指信息 }
+    科技: { benchmark: "000993.SH", name: 全指信息 }
+    TMT: { benchmark: "000993.SH", name: 全指信息 }
+    电信: { benchmark: "000994.SH", name: 全指电信 }
+    通信: { benchmark: "000994.SH", name: 全指电信 }
+    公用事业: { benchmark: "000995.SH", name: 全指公用 }
+  style_map:
+    growth: { benchmark: "399006.SZ", name: 创业板指 }
+    成长: { benchmark: "399006.SZ", name: 创业板指 }
+    dividend: { benchmark: "000922.SH", name: 中证红利 }
+    红利: { benchmark: "000922.SH", name: 中证红利 }
+    value: { benchmark: "000922.SH", name: 中证红利 }
+    价值: { benchmark: "000922.SH", name: 中证红利 }
+    large_cap: { benchmark: "000300.SH", name: 沪深300 }
+    大盘: { benchmark: "000300.SH", name: 沪深300 }
+    blue_chip: { benchmark: "000016.SH", name: 上证50 }
+    蓝筹: { benchmark: "000016.SH", name: 上证50 }
+    mid_cap: { benchmark: "000905.SH", name: 中证500 }
+    中盘: { benchmark: "000905.SH", name: 中证500 }
+    small_cap: { benchmark: "000852.SH", name: 中证1000 }
+    小盘: { benchmark: "000852.SH", name: 中证1000 }
+    microcap: { benchmark: "932000.CSI", name: 中证2000 }
+    微盘: { benchmark: "932000.CSI", name: 中证2000 }
+  decision_type_map:
+    index_timing: { benchmark: "000300.SH", name: 沪深300 }
+    market_timing: { benchmark: "000300.SH", name: 沪深300 }
+    asset_allocation: { benchmark: "000300.SH", name: 沪深300 }
