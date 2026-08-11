@@ -23,6 +23,8 @@ from engines.backtest.execution import (
     cost_of,
     is_suspended,
 )
+from engines.backtest.events import SignalEvent
+from engines.backtest.execution_model import ExecutionModel, resolve_fill, schedule_order
 from engines.market.price_limit_rules import MAIN_BOARD_ST_10_EFFECTIVE_DATE, board_of
 from engines.market.price_limit_metadata import (
     OptionalPriceStatus,
@@ -142,6 +144,8 @@ def run_topk_backtest(
     security_meta: Sequence[Sequence[dict | None]] | None = None,
     upper_limit_prices=None,
     lower_limit_prices=None,
+    execution_model: ExecutionModel | str = ExecutionModel.NEXT_OPEN,
+    limit_prices=None,
 ) -> dict:
     """运行 TopK 等权组合回测，返回净值/基准/交易/换手/持仓日志。
 
@@ -153,6 +157,9 @@ def run_topk_backtest(
     opens = np.asarray(opens, dtype=float)
     closes = np.asarray(closes, dtype=float)
     volumes = np.asarray(volumes, dtype=float)
+    highs = np.asarray(highs, dtype=float)
+    lows = np.asarray(lows, dtype=float)
+    model = ExecutionModel(execution_model)
     n_symbols, n_days = scores.shape
     if rebalance_mask is not None and len(rebalance_mask) != n_days:
         raise ValueError("REBALANCE_MASK_LENGTH_MISMATCH")
@@ -160,9 +167,12 @@ def run_topk_backtest(
     _validate_optional_panel_shape(security_meta, (n_symbols, n_days), "security_meta")
     _validate_optional_panel_shape(upper_limit_prices, (n_symbols, n_days), "upper_limit_prices")
     _validate_optional_panel_shape(lower_limit_prices, (n_symbols, n_days), "lower_limit_prices")
+    _validate_optional_panel_shape(limit_prices, (n_symbols, n_days), "limit_prices")
     meta_cells = np.asarray(security_meta, dtype=object) if security_meta is not None else None
     upper_cells = np.asarray(upper_limit_prices, dtype=object) if upper_limit_prices is not None else None
     lower_cells = np.asarray(lower_limit_prices, dtype=object) if lower_limit_prices is not None else None
+    limit_cells = np.asarray(limit_prices, dtype=object) if limit_prices is not None else None
+    execution_prices = _execution_price_panel(model, opens, highs, lows, closes, volumes, limit_cells)
     if top_k is None:
         # 默认池子的 1%，下限 5 只
         top_k = max(5, int(n_symbols * 0.01))
@@ -198,6 +208,7 @@ def run_topk_backtest(
     daily_turnover: list[float] = []
     holdings_log: list[dict] = []
     price_limit_daily_stats: list[dict] = []
+    execution_events: list[dict] = []
 
     def mark_price(idx: int) -> float:
         """估值价：当日收盘价，缺失时用最近有效收盘价。"""
@@ -230,8 +241,9 @@ def run_topk_backtest(
         if should_rebalance:
             _check_score_time_contract(t, dates, score_metadata, allow_unsafe_without_metadata)
             before_stats = _snapshot_pl_stats(pl_stats)
+            trade_start = len(trades)
             traded_value = _rebalance_day(
-                t, state, scores, opens, closes, volumes, last_close,
+                t, state, scores, opens, execution_prices, closes, volumes, last_close,
                 symbols, dates, trades, top_k, n_symbols,
                 meta_cells=meta_cells,
                 upper_cells=upper_cells,
@@ -240,6 +252,7 @@ def run_topk_backtest(
                 fail_on_ambiguous=fail_on_ambiguous,
                 fail_on_invalid_meta=fail_on_invalid_meta,
             )
+            _append_execution_events(execution_events, trades[trade_start:], dates, t, model)
             price_limit_daily_stats.append(_daily_pl_stats(dates[t], before_stats, pl_stats))
 
         equity = state.cash + sum(
@@ -294,11 +307,62 @@ def run_topk_backtest(
         "invalid_lower_limit_price_count": pl_stats["invalid_lower_limit_price_count"],
         "price_limit_quality_flags": quality_flags,
         "price_limit_daily_stats": price_limit_daily_stats,
+        "execution_model": model.value,
+        "execution_events": execution_events,
         "diagnostics": {
             "rebalance_mode": "explicit_mask" if normalized_rebalance_mask is not None else "interval",
             "rebalance_interval": None if normalized_rebalance_mask is not None else rebalance_interval,
         },
     }
+
+
+def _execution_price_panel(
+    model: ExecutionModel,
+    opens: np.ndarray,
+    highs: np.ndarray,
+    lows: np.ndarray,
+    closes: np.ndarray,
+    volumes: np.ndarray,
+    limit_prices: np.ndarray | None,
+) -> np.ndarray:
+    if model == ExecutionModel.NEXT_OPEN:
+        return opens
+    if model == ExecutionModel.NEXT_CLOSE:
+        return closes
+    if model == ExecutionModel.VWAP:
+        # Intraday amount is optional in the existing panel contract.  Typical
+        # price is an explicit, deterministic fallback rather than a mock.
+        return (highs + lows + closes) / 3.0
+    if limit_prices is None:
+        raise ValueError("LIMIT_PRICE requires limit_prices panel")
+    return np.asarray(limit_prices, dtype=float)
+
+
+def _event_datetime(value, *, close: bool = False) -> datetime:
+    parsed = _parse_dt(value)
+    if parsed is None:
+        raise ValueError(f"invalid backtest date for event: {value}")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.now().astimezone().tzinfo)
+    return parsed.replace(hour=15 if close else 9, minute=30, second=0, microsecond=0)
+
+
+def _append_execution_events(events: list[dict], trades: list[dict], dates: Sequence, t: int, model: ExecutionModel) -> None:
+    """Persist a replayable event chain for every actual simulated fill."""
+    signal_time = _event_datetime(dates[t - 1] if t else dates[t], close=True)
+    fill_time = _event_datetime(dates[t], close=model == ExecutionModel.NEXT_CLOSE)
+    if fill_time <= signal_time:
+        # A first-bar execution has no prior available signal; it remains in the
+        # trade ledger but intentionally has no executable event chain.
+        return
+    for trade in trades:
+        signal = SignalEvent(symbol=str(trade["symbol"]), side=str(trade["side"]).upper(), signal_time=signal_time)
+        order = schedule_order(signal, fill_time, model, float(trade["shares"]), limit_price=float(trade["price"]) if model == ExecutionModel.LIMIT_PRICE else None)
+        fill = resolve_fill(order, signal, {
+            "open": trade["price"], "close": trade["price"], "high": trade["price"], "low": trade["price"],
+            "vwap": trade["price"], "volume": trade["shares"], "amount": float(trade["shares"]) * float(trade["price"]),
+        }, fill_time)
+        events.extend([signal.model_dump(mode="json"), order.model_dump(mode="json"), fill.model_dump(mode="json")])
 
 
 def _snapshot_pl_stats(stats: dict) -> dict:
@@ -470,6 +534,7 @@ def _rebalance_day(
     state: _PortfolioState,
     scores: np.ndarray,
     opens: np.ndarray,
+    execution_prices: np.ndarray,
     closes: np.ndarray,
     volumes: np.ndarray,
     last_close: np.ndarray,
@@ -490,7 +555,7 @@ def _rebalance_day(
 
     def tradable(idx: int) -> bool:
         """当日可交易：未停牌且开盘价有效。"""
-        return not is_suspended(volumes[idx, t]) and _valid_price(opens[idx, t])
+        return not is_suspended(volumes[idx, t]) and _valid_price(execution_prices[idx, t])
 
     # 候选池：分数非 NaN 且当日可交易，取得分最高的 top_k 只
     eligible = [
@@ -636,7 +701,7 @@ def _rebalance_day(
             continue
         if not tradable(idx) or not sell_allowed(idx):
             continue
-        traded += state.sell(idx, t, state.shares_of(idx), opens[idx, t], symbols, dates, trades)
+        traded += state.sell(idx, t, state.shares_of(idx), execution_prices[idx, t], symbols, dates, trades)
 
     if not target:
         return traded
@@ -647,13 +712,13 @@ def _rebalance_day(
         shares = state.shares_of(idx)
         if shares <= 1e-9:
             continue
-        price = opens[idx, t] if _valid_price(opens[idx, t]) else last_close[idx]
+        price = execution_prices[idx, t] if _valid_price(execution_prices[idx, t]) else last_close[idx]
         if _valid_price(price):
             equity_open += shares * price
     target_value = equity_open * 0.99 / len(target)
 
     def current_value(idx: int) -> float:
-        price = opens[idx, t] if _valid_price(opens[idx, t]) else last_close[idx]
+        price = execution_prices[idx, t] if _valid_price(execution_prices[idx, t]) else last_close[idx]
         return state.shares_of(idx) * price if _valid_price(price) else 0.0
 
     # 第三步：先减持超配的目标股（受 T+1 与跌停约束）
@@ -663,7 +728,7 @@ def _rebalance_day(
             continue
         if not tradable(idx) or not sell_allowed(idx):
             continue
-        traded += state.sell(idx, t, excess / opens[idx, t], opens[idx, t], symbols, dates, trades)
+        traded += state.sell(idx, t, excess / execution_prices[idx, t], execution_prices[idx, t], symbols, dates, trades)
 
     # 第四步：买入/加仓低配的目标股（涨停不可买）
     for idx in ranked:
@@ -672,6 +737,6 @@ def _rebalance_day(
             continue
         if not buy_allowed(idx):
             continue
-        traded += state.buy(idx, t, gap, opens[idx, t], symbols, dates, trades)
+        traded += state.buy(idx, t, gap, execution_prices[idx, t], symbols, dates, trades)
 
     return traded

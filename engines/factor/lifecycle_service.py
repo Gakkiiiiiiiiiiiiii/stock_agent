@@ -6,6 +6,7 @@ from pathlib import Path
 
 from engines.factor.lifecycle import FactorLifecycleStatus
 from engines.factor.library import load_library, save_library
+from engines.factor.promotion_gate import PromotionGateResult
 from financial_agent.utils import project_root
 
 
@@ -25,6 +26,10 @@ class InvalidLifecycleTransition(ValueError):
     pass
 
 
+class PromotionGateRejected(InvalidLifecycleTransition):
+    pass
+
+
 class FactorLifecycleService:
     def __init__(self, library_path: str | Path | None = None, audit_path: str | Path | None = None) -> None:
         self.library_path = library_path
@@ -37,6 +42,7 @@ class FactorLifecycleService:
         reason: str,
         actor: str,
         research_run_id: str | None = None,
+        promotion_gate: PromotionGateResult | dict | None = None,
     ) -> dict:
         target = FactorLifecycleStatus(target_status).value
         library = load_library(self.library_path)
@@ -46,6 +52,11 @@ class FactorLifecycleService:
         source = str(factor.get("status") or FactorLifecycleStatus.DRAFT.value)
         if target != FactorLifecycleStatus.LEGACY_UNVERIFIED.value and target not in ALLOWED_TRANSITIONS.get(source, set()):
             raise InvalidLifecycleTransition(f"invalid factor lifecycle transition: {source} -> {target}")
+        gate_payload = promotion_gate.model_dump() if isinstance(promotion_gate, PromotionGateResult) else dict(promotion_gate or {})
+        if target == FactorLifecycleStatus.PAPER_TRADING.value:
+            if not gate_payload.get("passed"):
+                raise PromotionGateRejected("PAPER_TRADING requires a passed promotion gate")
+            factor["promotion_gate"] = gate_payload
         factor["status"] = target
         factor["validation_stage"] = target
         factor["updated_at"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -57,6 +68,7 @@ class FactorLifecycleService:
             "reason": reason,
             "actor": actor,
             "research_run_id": research_run_id,
+            "promotion_gate": gate_payload or None,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
         self.audit_path.parent.mkdir(parents=True, exist_ok=True)

@@ -8,8 +8,10 @@ metadata:
 spec:
   replicas: {{ $service.replicas }}
   strategy:
-    type: RollingUpdate
+    type: {{ if $service.singleton }}Recreate{{ else }}RollingUpdate{{ end }}
+    {{- if not $service.singleton }}
     rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+    {{- end }}
   selector: {matchLabels: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }}}}
   template:
     metadata: {labels: {app.kubernetes.io/name: {{ include "stock-agent.name" $ }}, app.kubernetes.io/component: {{ $name | quote }}}}
@@ -21,8 +23,9 @@ spec:
           command: {{ toJson $service.command }}
           envFrom: [{configMapRef: {name: {{ include "stock-agent.fullname" $ }}-config}}]
           resources:
-            requests: {{ toYaml $.Values.resources.requests | nindent 14 }}
-            limits: {{ toYaml $.Values.resources.limits | nindent 14 }}
+            {{- $resources := default $.Values.resources $service.resources }}
+            requests: {{ toYaml $resources.requests | nindent 14 }}
+            limits: {{ toYaml $resources.limits | nindent 14 }}
             {{- if $service.gpu }}
               nvidia.com/gpu: {{ $service.gpu }}
             {{- end }}

@@ -119,6 +119,8 @@ def lint_skill(skill_dir: Path, known_tools: set[str]) -> list[LintViolation]:
 
 
 def lint_skills(skill_root: Path, known_tools: set[str]) -> list[LintViolation]:
+    if (skill_root / "SKILL.yaml").exists():
+        return lint_skill(skill_root, known_tools)
     violations: list[LintViolation] = []
     for skill_dir in sorted(path for path in skill_root.iterdir() if path.is_dir()):
         violations.extend(lint_skill(skill_dir, known_tools))

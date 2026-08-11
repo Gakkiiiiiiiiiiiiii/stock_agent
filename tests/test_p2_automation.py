@@ -36,7 +36,7 @@ def test_daily_decision_plan_separates_task_type_from_agent_role():
     assert {task.task_type for task in tasks} == {"daily_market_decision"}
     assert {task.assigned_agent for task in tasks} >= {AgentRole.MARKET, AgentRole.PORTFOLIO, AgentRole.RISK}
     portfolio = next(task for task in tasks if task.assigned_agent == AgentRole.PORTFOLIO)
-    assert len(graph.dependencies(portfolio.task_id)) == 4
+    assert len(graph.dependencies(portfolio.task_id)) == 3
 
 
 def test_execution_is_idempotent_and_shadow_never_submits():

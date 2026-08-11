@@ -17,6 +17,7 @@ class SharedContext:
         self._tool_used = 0
         self._token_used = 0
         self._artifacts: dict[str, AgentArtifact] = {}
+        self._dependencies: dict[str, set[str]] = {}
         self._lock = Lock()
 
     def record(self, artifact: AgentArtifact) -> None:
@@ -43,6 +44,19 @@ class SharedContext:
             self._tool_used -= reserved_tools
             self._token_used -= reserved_tokens
         self.record(artifact)
+
+    def release_budget(self, tool_calls: int = 0, tokens: int = 0) -> None:
+        with self._lock:
+            self._tool_used = max(0, self._tool_used - tool_calls)
+            self._token_used = max(0, self._token_used - tokens)
+
+    def set_dependencies(self, dependencies: dict[str, set[str]]) -> None:
+        with self._lock:
+            self._dependencies = {task_id: set(values) for task_id, values in dependencies.items()}
+
+    def dependency_artifacts(self, task_id: str) -> dict[str, AgentArtifact]:
+        with self._lock:
+            return {dep: self._artifacts[dep] for dep in self._dependencies.get(task_id, set()) if dep in self._artifacts}
 
     def artifact(self, task_id: str) -> AgentArtifact | None:
         with self._lock:

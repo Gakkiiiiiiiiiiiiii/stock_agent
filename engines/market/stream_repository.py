@@ -30,5 +30,14 @@ class RedisMarketEventStream:
                 output.append((message_id, MarketEvent.model_validate_json(fields[b"event"] if b"event" in fields else fields["event"])))
         return output
 
+    def recent(self, count: int = 2_000) -> list[MarketEvent]:
+        """Read a bounded log for deterministic worker recovery before consume."""
+        records = self.client.xrevrange(self.stream_key, count=count)
+        output: list[MarketEvent] = []
+        for _, fields in reversed(records):
+            payload = fields[b"event"] if b"event" in fields else fields["event"]
+            output.append(MarketEvent.model_validate_json(payload))
+        return output
+
     def acknowledge(self, group: str, message_id: str) -> int:
         return self.client.xack(self.stream_key, group, message_id)

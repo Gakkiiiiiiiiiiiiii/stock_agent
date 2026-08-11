@@ -13,6 +13,7 @@ from storage.repositories.job_repository import JobTaskRepository
 from engines.decision.evaluation_clock import outcome_not_before
 from engines.market.market_clock import MarketClock
 from engines.market.trading_calendar import advance_trading_days
+from engines.versioning import get_version
 
 # 仅用于基准路由、不落库为独立列的决策属性（路由结果持久化在 benchmark_route 中）。
 _ROUTING_ONLY_KEYS = ("decision_type", "style", "sector", "market")
@@ -66,6 +67,11 @@ class DecisionService:
             payload["benchmark_symbol"] = route["primary_benchmark"]
         payload.setdefault("benchmark_route", route)
         payload.setdefault("benchmark_route_input", route_attrs)
+        payload.setdefault("market_feature_version", get_version("market_feature_version"))
+        payload.setdefault("opportunity_ranking_version", get_version("opportunity_ranking_version"))
+        payload.setdefault("portfolio_rule_version", get_version("portfolio_rule_version"))
+        payload.setdefault("benchmark_router_version", route.get("router_version") or get_version("benchmark_router_version"))
+        payload.setdefault("supervisor_version", "v1" if payload.get("agent_run_id") else None)
         decision = self.repository.create(**payload)
         jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at))
         return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs}

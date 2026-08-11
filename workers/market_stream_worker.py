@@ -45,7 +45,11 @@ def process_batch(stream: RedisMarketEventStream, engine: StreamingFeatureEngine
 def main() -> None:
     logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
     stream, engine, group, consumer = build_worker()
+    # Rebuild the bounded in-memory feature window from the durable stream.  It
+    # prevents an empty API state after a worker restart without replaying QMT.
+    engine = StreamingFeatureEngine.replay(stream.recent(), engine.allowed_lateness_seconds)
     state = RealtimeFeatureStateRepository(stream.client)
+    state.checkpoint(engine)
     while True:
         try:
             process_batch(stream, engine, group, consumer, state_repository=state)

@@ -3,11 +3,11 @@ image:
   tag: latest
   pullPolicy: IfNotPresent
 services:
-  api: {enabled: true, replicas: 2, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000, probe: {type: http, path: /health/ready, port: 8000}}
-  worker: {enabled: true, replicas: 1, command: ["python", "workers/job_worker.py"], probe: {type: none}}
-  retrieval: {enabled: true, replicas: 2, command: ["uvicorn", "services.retrieval_api:app", "--host", "0.0.0.0", "--port", "8010"], port: 8010, probe: {type: http, path: /health/ready, port: 8010}}
-  market-data: {enabled: true, replicas: 1, command: ["uvicorn", "services.market_data_api:app", "--host", "0.0.0.0", "--port", "8012"], singleton: true, port: 8012, probe: {type: http, path: /health/ready, port: 8012}}
-  execution: {enabled: true, replicas: 1, command: ["uvicorn", "services.execution_api:app", "--host", "0.0.0.0", "--port", "8011"], singleton: true, port: 8011, probe: {type: http, path: /health/ready, port: 8011}}
+  api: {enabled: true, replicas: 2, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000, probe: {type: http, path: /health/ready, port: 8000}, resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "2", memory: 2Gi}}}
+  worker: {enabled: true, replicas: 1, command: ["python", "workers/job_worker.py"], singleton: true, probe: {type: none}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
+  retrieval: {enabled: true, replicas: 2, command: ["uvicorn", "services.retrieval_api:app", "--host", "0.0.0.0", "--port", "8010"], port: 8010, probe: {type: http, path: /health/ready, port: 8010}, resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "2", memory: 2Gi}}}
+  market-data: {enabled: true, replicas: 1, command: ["uvicorn", "services.market_data_api:app", "--host", "0.0.0.0", "--port", "8012"], singleton: true, port: 8012, probe: {type: http, path: /health/ready, port: 8012}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
+  execution: {enabled: true, replicas: 1, command: ["uvicorn", "services.execution_api:app", "--host", "0.0.0.0", "--port", "8011"], singleton: true, port: 8011, probe: {type: http, path: /health/ready, port: 8011}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
   content-cpu: {enabled: true, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], probe: {type: none}}
   content-gpu: {enabled: false, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], gpu: 1, probe: {type: none}}
 resources:

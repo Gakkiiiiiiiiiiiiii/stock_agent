@@ -39,22 +39,36 @@ class Supervisor:
         if len(graph.tasks) > int(self.config["max_agents_per_run"]):
             raise ValueError("max_agents_per_run exceeded")
         shared = SharedContext(int(self.config["max_total_tool_calls"]), int(self.config["max_total_llm_tokens"]))
+        shared.set_dependencies({task_id: graph.dependencies(task_id) for task_id in graph.tasks})
         errors: list[dict] = []
         for layer in graph.topological_layers():
             with ThreadPoolExecutor(max_workers=min(len(layer), int(self.config["max_parallel_agents"]))) as pool:
-                futures = {pool.submit(self._run_one, graph.tasks[task_id], shared): task_id for task_id in layer}
+                futures = {}
+                for task_id in layer:
+                    task = graph.tasks[task_id]
+                    try:
+                        shared.reserve_budget(task.tool_budget, task.token_budget)
+                    except BudgetExceeded as exc:
+                        task.status = TaskStatus.BUDGET_EXHAUSTED
+                        errors.append({"task_id": task_id, "code": "BUDGET_EXHAUSTED", "message": str(exc)})
+                        continue
+                    futures[pool.submit(self._run_one, task, shared)] = (task_id, task.tool_budget, task.token_budget)
                 for future in as_completed(futures):
-                    task_id = futures[future]
+                    task_id, reserved_tools, reserved_tokens = futures[future]
                     try:
                         artifact = future.result()
-                        shared.record(artifact)
+                        shared.commit_budget(reserved_tools, reserved_tokens, artifact)
                     except BudgetExceeded as exc:
+                        shared.release_budget(reserved_tools, reserved_tokens)
                         graph.tasks[task_id].status = TaskStatus.BUDGET_EXHAUSTED
                         errors.append({"task_id": task_id, "code": "BUDGET_EXHAUSTED", "message": str(exc)})
                     except Exception as exc:  # noqa: BLE001
+                        shared.release_budget(reserved_tools, reserved_tokens)
                         graph.tasks[task_id].status = TaskStatus.FAILED
                         errors.append({"task_id": task_id, "code": type(exc).__name__, "message": str(exc)})
-        return {"artifacts": [item.model_dump(mode="json") for item in shared.artifacts()], "errors": errors, "usage": shared.usage()}
+        artifacts = shared.artifacts()
+        conflicts = self._detect_conflicts(artifacts)
+        return {"artifacts": [item.model_dump(mode="json") for item in artifacts], "errors": errors, "conflicts": [item.model_dump(mode="json") for item in conflicts], "usage": shared.usage()}
 
     def _run_one(self, task: AgentTask, shared: SharedContext) -> AgentArtifact:
         # task_type describes the business task (e.g. daily_market_decision),
@@ -82,3 +96,14 @@ class Supervisor:
             conflict.resolved_value = selected.get("value")
             conflict.resolved_by = str(selected.get("agent"))
         return conflict
+
+    def _detect_conflicts(self, artifacts: list[AgentArtifact]) -> list[AgentConflict]:
+        opinions: dict[str, list[dict]] = {}
+        for artifact in artifacts:
+            for dimension, value in artifact.conclusion.get("opinions", {}).items():
+                opinions.setdefault(str(dimension), []).append({"agent": artifact.agent.value, "value": value, "confidence": artifact.confidence})
+        conflicts = []
+        for dimension, values in opinions.items():
+            if len({repr(item["value"]) for item in values}) > 1:
+                conflicts.append(self.resolve_conflict(AgentConflict(dimension=dimension, opinions=values)))
+        return conflicts

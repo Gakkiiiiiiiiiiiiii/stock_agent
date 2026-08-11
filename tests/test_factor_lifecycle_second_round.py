@@ -5,6 +5,7 @@ import pytest
 import yaml
 
 from engines.factor.lifecycle_service import FactorLifecycleService, InvalidLifecycleTransition
+from engines.factor.promotion_gate import evaluate_promotion_gate
 from engines.factor.fitness import evaluate_factor
 from engines.factor.purged_split import build_purged_windows
 from engines.factor.purged_walkforward import run_purged_walkforward
@@ -17,14 +18,25 @@ def test_factor_status_transition(tmp_path):
         encoding="utf-8",
     )
     audit = tmp_path / "audit.jsonl"
+    gate = evaluate_promotion_gate(
+        walkforward={"passed": True, "window_pass_ratio": 0.8},
+        statistics={"passed": True},
+    )
     event = FactorLifecycleService(library_path=lib, audit_path=audit).transition(
-        "F001", "PAPER_TRADING", reason="paper precheck passed", actor="tester", research_run_id="R001"
+        "F001", "PAPER_TRADING", reason="paper precheck passed", actor="tester", research_run_id="R001", promotion_gate=gate
     )
     assert event["from_status"] == "OOS_PASS"
     assert event["to_status"] == "PAPER_TRADING"
     saved = yaml.safe_load(lib.read_text(encoding="utf-8"))
     assert saved["factors"][0]["status"] == "PAPER_TRADING"
     assert json.loads(audit.read_text(encoding="utf-8").splitlines()[0])["actor"] == "tester"
+
+
+def test_paper_transition_requires_promotion_gate(tmp_path):
+    lib = tmp_path / "lib.yaml"
+    lib.write_text(yaml.safe_dump({"factors": [{"id": "F001", "status": "OOS_PASS"}]}), encoding="utf-8")
+    with pytest.raises(InvalidLifecycleTransition, match="promotion gate"):
+        FactorLifecycleService(library_path=lib, audit_path=tmp_path / "audit.jsonl").transition("F001", "PAPER_TRADING", "skip", "tester")
 
 
 def test_invalid_lifecycle_transition_rejected(tmp_path):

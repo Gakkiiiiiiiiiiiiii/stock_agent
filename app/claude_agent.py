@@ -170,7 +170,7 @@ class ClaudeAgent:
         normal SkillExecutor remain the single final-report path."""
         from agent.supervisor import Supervisor, load_multi_agent_config
         from agent.plans.daily_market_decision import build_daily_market_decision_graph
-        from agent.specialists import FactorSpecialist, MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
+        from agent.specialists import MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
         from agent.contracts import AgentRole
 
         config = load_multi_agent_config()
@@ -179,7 +179,7 @@ class ClaudeAgent:
         graph = build_daily_market_decision_graph(query, token_budget=min(8_000, int(config.get("max_total_llm_tokens", 60_000))), tool_budget=10)
         specialists = {
             AgentRole.MARKET: MarketSpecialist(self.tool_registry, context), AgentRole.RESEARCH: ResearchSpecialist(self.tool_registry, context),
-            AgentRole.TECHNICAL: TechnicalSpecialist(self.tool_registry, context), AgentRole.FACTOR: FactorSpecialist(self.tool_registry, context),
+            AgentRole.TECHNICAL: TechnicalSpecialist(self.tool_registry, context),
             AgentRole.PORTFOLIO: PortfolioSpecialist(self.tool_registry, context), AgentRole.RISK: RiskSpecialist(self.tool_registry, context),
         }
         return Supervisor(specialists, config).run(graph)

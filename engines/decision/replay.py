@@ -17,12 +17,8 @@ benchmark_route 等）重放决策链中的**确定性**环节：
      并在 version_mismatch_details 中列出差异（replay_uses_current_code=True
      始终为真，提醒调用方这一点）。
   2. LLM 环节（skill 选择、thesis 生成等）不在回放范围内，只覆盖确定性产物。
-  3. 路由专用属性（decision_type / style / market）在 save_decision 时被弹出、
-     未随决策持久化；基准路由重建只能使用 symbols / themes / sector，其中
-     sector 在全部候选行业一致时从候选中恢复，否则按 None 处理（路由规则
-     会回落到 style/decision_type/default 分支）。
-  4. opportunity_ranking_version 未随决策单独持久化，记录侧恒为 None，
-     不参与版本比对。
+  3. 决策保存路由输入与所有确定性模块版本；旧记录缺失这些字段时才按候选
+     退化重建，并在返回中明确标记。
 
 "可比部分"（match 的判定范围，其余字段不参与比对）：
   - candidate_order：落库候选的符号顺序（候选均带 rank 字段时按 rank 升序，
@@ -149,11 +145,16 @@ class DecisionReplayService:
 
     @staticmethod
     def _route_attributes(decision: Any, candidates: list[dict]) -> dict:
-        """从持久化字段重建 BenchmarkRouter 输入（decision_type/style/market 未持久化）。"""
+        """Use the persisted router input; fall back only for old decisions."""
+        if decision.benchmark_route_input:
+            return dict(decision.benchmark_route_input)
         sectors = {str(item["sector"]) for item in candidates if item.get("sector")}
         return {
             "symbols": [str(item["symbol"]) for item in candidates if item.get("symbol")],
             "themes": list(decision.themes or []),
+            "decision_type": decision.decision_type,
+            "style": decision.style,
+            "market": decision.market,
             "sector": sectors.pop() if len(sectors) == 1 else None,
         }
 
@@ -175,9 +176,9 @@ class DecisionReplayService:
         benchmark_route = decision.benchmark_route or {}
         return {
             "market_feature_version": decision.market_feature_version,
-            "opportunity_ranking_version": None,  # 未随决策持久化，见模块 docstring 限制 4
-            "portfolio_rule_version": (portfolio_advice.get("summary") or {}).get("rules_version"),
-            "benchmark_router_version": benchmark_route.get("router_version"),
+            "opportunity_ranking_version": decision.opportunity_ranking_version,
+            "portfolio_rule_version": decision.portfolio_rule_version or (portfolio_advice.get("summary") or {}).get("rules_version"),
+            "benchmark_router_version": decision.benchmark_router_version or benchmark_route.get("router_version"),
             "skill_version": decision.skill_version,
             "skill_contract_hash": decision.skill_contract_hash,
         }
