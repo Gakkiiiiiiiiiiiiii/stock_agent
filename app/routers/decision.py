@@ -15,7 +15,7 @@ router = APIRouter()
 class DecisionReplayRequest(BaseModel):
     """决策回放请求体：original=按记录版本验证确定性，current=用当前算法对比。"""
 
-    mode: Literal["original", "current"] = "original"
+    mode: Literal["original", "current", "multi_agent"] = "original"
 
 
 @router.post("/api/v1/review/trade")

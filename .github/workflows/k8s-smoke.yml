@@ -1,0 +1,31 @@
+name: k8s-smoke
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 2 * * *"
+
+jobs:
+  helm-kind-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1.10.0
+      - name: Helm lint and render
+        run: |
+          helm lint deploy/helm/stock-agent
+          helm template stock-agent deploy/helm/stock-agent --set image.repository=stock-agent --set image.tag=ci > rendered.yaml
+          kubectl apply --dry-run=client -f rendered.yaml
+      - name: Build and load image
+        run: |
+          docker build -t stock-agent:ci -f Dockerfile .
+          kind load docker-image stock-agent:ci
+      - name: Install and verify manifests
+        run: |
+          helm install stock-agent deploy/helm/stock-agent --set image.repository=stock-agent --set image.tag=ci
+          kubectl rollout status deployment/stock-agent-api --timeout=180s
+          kubectl get deployment -o jsonpath='{range .items[*]}{.metadata.name}{":"}{.spec.strategy.type}{"\n"}{end}' | tee rollout-strategies.txt
+          grep 'market-data:Recreate' rollout-strategies.txt
+          grep 'execution:Recreate' rollout-strategies.txt
+          kubectl get cronjob

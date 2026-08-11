@@ -77,6 +77,10 @@ class DecisionRepository:
             session.refresh(decision)
             return decision
 
+    def attach_agent_run(self, decision_id: str, agent_run_id: str, supervisor_version: str = "v1") -> InvestmentDecision:
+        """Attach orchestration provenance after either tool or fallback save."""
+        return self.update(decision_id, agent_run_id=agent_run_id, supervisor_version=supervisor_version)
+
     def add_outcome(self, **payload) -> InvestmentDecisionOutcome:
         with session_scope() as session:
             outcome = InvestmentDecisionOutcome(**payload)

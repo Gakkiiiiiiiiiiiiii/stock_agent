@@ -24,6 +24,11 @@ class QmtLiveAdapter:
         response = self._request("POST", "/orders", order.model_dump(mode="json"))
         return str(response["broker_order_id"])
 
+    def healthcheck(self) -> dict:
+        if not self.enabled or not self.base_url:
+            raise RuntimeError("QMT_LIVE_EXECUTION_DISABLED")
+        return dict(self._request("GET", "/health") or {})
+
     def cancel(self, broker_order_id: str) -> None:
         self._request("POST", f"/orders/{broker_order_id}/cancel")
 

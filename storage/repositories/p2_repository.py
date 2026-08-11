@@ -32,6 +32,18 @@ class P2Repository:
             session.refresh(row)
             return row
 
+    def get_agent_run(self, run_id: str) -> AgentRun | None:
+        with session_scope() as session:
+            return session.get(AgentRun, run_id)
+
+    def list_subtasks(self, agent_run_id: str) -> list[AgentSubtask]:
+        with session_scope() as session:
+            return list(session.execute(select(AgentSubtask).where(AgentSubtask.agent_run_id == agent_run_id).order_by(AgentSubtask.created_at, AgentSubtask.id)).scalars())
+
+    def list_conflicts(self, agent_run_id: str) -> list[AgentConflictRecord]:
+        with session_scope() as session:
+            return list(session.execute(select(AgentConflictRecord).where(AgentConflictRecord.agent_run_id == agent_run_id).order_by(AgentConflictRecord.id)).scalars())
+
     def create_trade_intent(self, **payload) -> TradeIntentRecord:
         return self._add(TradeIntentRecord(**payload))
 
@@ -77,6 +89,13 @@ class P2Repository:
 
     def add_position_snapshot(self, **payload) -> PositionSnapshotRecord:
         return self._add(PositionSnapshotRecord(**payload))
+
+    def get_latest_position_snapshot(self, source: str | None = None) -> PositionSnapshotRecord | None:
+        with session_scope() as session:
+            query = select(PositionSnapshotRecord)
+            if source is not None:
+                query = query.where(PositionSnapshotRecord.source == source)
+            return session.execute(query.order_by(PositionSnapshotRecord.as_of.desc(), PositionSnapshotRecord.id.desc())).scalars().first()
 
     def add_reconciliation(self, **payload) -> ExecutionReconciliationRecord:
         return self._add(ExecutionReconciliationRecord(**payload))

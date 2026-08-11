@@ -42,8 +42,9 @@ from engines.versioning import get_version
 from storage.bootstrap import create_all
 from storage.repositories.market_feature_repository import MarketFeatureRepository
 from storage.repositories.research_repository import DecisionRepository
+from storage.repositories.p2_repository import P2Repository
 
-REPLAY_MODES = ("original", "current")
+REPLAY_MODES = ("original", "current", "multi_agent")
 
 #: 参与版本比对的算法版本键（skill_* 为内容身份，不参与 mismatch 判定）。
 _COMPARABLE_VERSION_KEYS = (
@@ -75,6 +76,7 @@ class DecisionReplayService:
 
         market_features, market_feature_source = self._resolve_market_features(decision, mode)
         replay_output, current_versions = self._run_chain(decision)
+        multi_agent = self._multi_agent_provenance(decision) if mode == "multi_agent" else None
 
         recorded_versions = self._recorded_versions(decision)
         mismatch_details = {
@@ -108,10 +110,30 @@ class DecisionReplayService:
                 "market_features": market_features,
                 "original_output": original_output,
                 "replay_output": replay_output,
+                "multi_agent": multi_agent,
                 "match": not diffs,
                 "diffs": diffs,
             }
         )
+
+    @staticmethod
+    def _multi_agent_provenance(decision: Any) -> dict:
+        if not decision.agent_run_id:
+            return {"available": False, "reason": "AGENT_RUN_NOT_ATTACHED"}
+        repository = P2Repository()
+        run = repository.get_agent_run(decision.agent_run_id)
+        if run is None:
+            return {"available": False, "reason": "AGENT_RUN_NOT_FOUND", "agent_run_id": decision.agent_run_id}
+        subtasks = repository.list_subtasks(run.id)
+        conflicts = repository.list_conflicts(run.id)
+        return {
+            "available": True,
+            "agent_run_id": run.id,
+            "status": run.status,
+            "usage": run.usage,
+            "artifacts": [{"task_id": item.id, "agent": item.agent, "status": item.status, "conclusion": item.conclusion} for item in subtasks],
+            "conflicts": [{"dimension": item.dimension, "resolved_value": item.resolved_value, "resolved_by": item.resolved_by} for item in conflicts],
+        }
 
     # ---- 确定性链重建 -------------------------------------------------------
 

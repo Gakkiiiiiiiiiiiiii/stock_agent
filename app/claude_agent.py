@@ -140,7 +140,7 @@ class ClaudeAgent:
         )
         self._emit(emit, "status", {"message": f"Running skill: {decision.skill.slug}"})
         report, tool_calls, trace_steps = self._run_skill(decision.skill, user_query, context, emit=emit)
-        decision_id = self._ensure_formal_decision(decision.skill, user_query, report, tool_calls)
+        decision_id = self._ensure_formal_decision(decision.skill, user_query, report, tool_calls, multi_agent_result)
         trace = {
             "selection_reason": decision.reason,
             "skill": _skill_identity_payload(decision.skill),
@@ -188,14 +188,16 @@ class ClaudeAgent:
         return Supervisor(specialists, config, repository=P2Repository()).run(graph)
 
     @staticmethod
-    def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]]) -> str | None:
+    def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]], multi_agent_result: dict[str, Any] | None = None) -> str | None:
         if skill.slug != "daily-market-decision":
             return None
         for call in tool_calls:
             if call.get("name") == "save_investment_decision":
                 output = call.get("output") or {}
                 if output.get("decision_id"):
-                    return str(output["decision_id"])
+                    decision_id = str(output["decision_id"])
+                    ClaudeAgent._attach_agent_run(decision_id, multi_agent_result)
+                    return decision_id
         from engines.decision.decision_service import DecisionService
 
         regime_call = next((item.get("output") or {} for item in reversed(tool_calls) if item.get("name") == "get_market_regime"), {})
@@ -210,7 +212,16 @@ class ClaudeAgent:
             thesis={"report": report},
             tool_trace=tool_calls,
         )
-        return str(saved["decision_id"])
+        decision_id = str(saved["decision_id"])
+        ClaudeAgent._attach_agent_run(decision_id, multi_agent_result)
+        return decision_id
+
+    @staticmethod
+    def _attach_agent_run(decision_id: str, multi_agent_result: dict[str, Any] | None) -> None:
+        run_id = (multi_agent_result or {}).get("agent_run_id")
+        if run_id:
+            from storage.repositories.research_repository import DecisionRepository
+            DecisionRepository().attach_agent_run(decision_id, str(run_id), supervisor_version="v1")
 
     def _choose_skill(
         self,

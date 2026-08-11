@@ -10,7 +10,8 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import asdict, is_dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
+from typing import Callable
 
 import numpy as np
 from pydantic import BaseModel
@@ -73,14 +74,17 @@ class _PortfolioState:
         return book.total_shares if book else 0.0
 
     def sell(self, idx: int, date_idx: int, shares: float, price: float,
-             symbols: Sequence[str], dates: Sequence, trades: list) -> float:
+             symbols: Sequence[str], dates: Sequence, trades: list, execute: Callable[[str, int, float, float], bool] | None = None) -> float:
         """卖出指定份额（受 T+1 可卖数量限制），返回成交金额。"""
         book = self.books.get(idx)
         if book is None:
             return 0.0
-        sold = book.pop_available(shares, date_idx)
+        sold = min(shares, book.available_shares(date_idx))
         if sold <= 0:
             return 0.0
+        if execute is not None and not execute("sell", idx, sold, price):
+            return 0.0
+        sold = book.pop_available(sold, date_idx)
         value = sold * price
         cost = cost_of(value, "sell")
         self.cash += value - cost
@@ -91,7 +95,7 @@ class _PortfolioState:
         return value
 
     def buy(self, idx: int, date_idx: int, value: float, price: float,
-            symbols: Sequence[str], dates: Sequence, trades: list) -> float:
+            symbols: Sequence[str], dates: Sequence, trades: list, execute: Callable[[str, int, float, float], bool] | None = None) -> float:
         """按金额买入（受现金约束），返回实际成交金额。"""
         value = min(value, self.cash)
         if value <= _MIN_TRADE_VALUE:
@@ -116,6 +120,8 @@ class _PortfolioState:
             cost = cost_of(value, "buy")
             if shares <= 0 or value + cost > self.cash + 1e-9:
                 return 0.0
+        if execute is not None and not execute("buy", idx, shares, price):
+            return 0.0
         self.cash -= value + cost
         book = self.books.setdefault(idx, PositionBook())
         book.add(shares, date_idx)
@@ -244,9 +250,8 @@ def run_topk_backtest(
         if should_rebalance:
             _check_score_time_contract(t, dates, score_metadata, allow_unsafe_without_metadata)
             before_stats = _snapshot_pl_stats(pl_stats)
-            trade_start = len(trades)
             traded_value = _rebalance_day(
-                t, state, scores, opens, execution_prices, highs, lows, closes, volumes, last_close,
+                t, state, scores, opens, execution_prices, highs, lows, closes, volumes, amount_values, last_close,
                 symbols, dates, trades, top_k, n_symbols,
                 meta_cells=meta_cells,
                 upper_cells=upper_cells,
@@ -255,8 +260,9 @@ def run_topk_backtest(
                 fail_on_ambiguous=fail_on_ambiguous,
                 fail_on_invalid_meta=fail_on_invalid_meta,
                 limit_order=model == ExecutionModel.LIMIT_PRICE,
+                execution_events=execution_events,
+                execution_model=model,
             )
-            _append_execution_events(execution_events, trades[trade_start:], dates, t, model)
             price_limit_daily_stats.append(_daily_pl_stats(dates[t], before_stats, pl_stats))
 
         equity = state.cash + sum(
@@ -358,22 +364,15 @@ def _event_datetime(value, *, close: bool = False) -> datetime:
     return parsed.replace(hour=15 if close else 9, minute=30, second=0, microsecond=0)
 
 
-def _append_execution_events(events: list[dict], trades: list[dict], dates: Sequence, t: int, model: ExecutionModel) -> None:
-    """Persist a replayable event chain for every actual simulated fill."""
-    signal_time = _event_datetime(dates[t - 1] if t else dates[t], close=True)
+def _execute_event_trade(events: list[dict], *, dates: Sequence, t: int, model: ExecutionModel, symbol: str, side: str, quantity: float, price: float, bar: dict) -> bool:
+    """Create a fill from the actual bar before mutating PortfolioState."""
+    signal_anchor = _event_datetime(dates[t - 1], close=True) if t else _event_datetime(dates[t], close=False) - timedelta(days=1)
     fill_time = _event_datetime(dates[t], close=model == ExecutionModel.NEXT_CLOSE)
-    if fill_time <= signal_time:
-        # A first-bar execution has no prior available signal; it remains in the
-        # trade ledger but intentionally has no executable event chain.
-        return
-    for trade in trades:
-        signal = SignalEvent(symbol=str(trade["symbol"]), side=str(trade["side"]).upper(), signal_time=signal_time)
-        order = schedule_order(signal, fill_time, model, float(trade["shares"]), limit_price=float(trade["price"]) if model == ExecutionModel.LIMIT_PRICE else None)
-        fill = resolve_fill(order, signal, {
-            "open": trade["price"], "close": trade["price"], "high": trade["price"], "low": trade["price"],
-            "vwap": trade["price"], "volume": trade["shares"], "amount": float(trade["shares"]) * float(trade["price"]),
-        }, fill_time)
-        events.extend([signal.model_dump(mode="json"), order.model_dump(mode="json"), fill.model_dump(mode="json")])
+    signal = SignalEvent(symbol=symbol, side=side.upper(), signal_time=signal_anchor)
+    order = schedule_order(signal, fill_time, model, quantity, limit_price=price if model == ExecutionModel.LIMIT_PRICE else None)
+    fill = resolve_fill(order, signal, bar, fill_time)
+    events.extend([signal.model_dump(mode="json"), order.model_dump(mode="json"), fill.model_dump(mode="json")])
+    return fill.fill_price is not None and fill.reject_reason is None
 
 
 def _snapshot_pl_stats(stats: dict) -> dict:
@@ -550,6 +549,7 @@ def _rebalance_day(
     lows: np.ndarray,
     closes: np.ndarray,
     volumes: np.ndarray,
+    amounts: np.ndarray | None,
     last_close: np.ndarray,
     symbols: Sequence[str],
     dates: Sequence,
@@ -563,6 +563,8 @@ def _rebalance_day(
     fail_on_ambiguous: bool = False,
     fail_on_invalid_meta: bool = True,
     limit_order: bool = False,
+    execution_events: list[dict] | None = None,
+    execution_model: ExecutionModel = ExecutionModel.NEXT_OPEN,
 ) -> float:
     """在调仓日 t 以开盘价执行调仓，返回当日成交总额（双边合计）。"""
     traded = 0.0
@@ -590,6 +592,14 @@ def _rebalance_day(
 
     context_cache: dict[int, TradeRuleContext] = {}
     cell_ambiguity: dict[int, dict[str, bool]] = {}
+
+    def execute(side: str, idx: int, quantity: float, price: float) -> bool:
+        bar = {
+            "open": opens[idx, t], "high": highs[idx, t], "low": lows[idx, t], "close": closes[idx, t],
+            "volume": volumes[idx, t], "amount": amounts[idx, t] if amounts is not None else None,
+            "vwap": execution_prices[idx, t] if execution_model == ExecutionModel.VWAP else None,
+        }
+        return _execute_event_trade(execution_events if execution_events is not None else [], dates=dates, t=t, model=execution_model, symbol=str(symbols[idx]), side=side, quantity=quantity, price=price, bar=bar)
 
     def _rule_context(idx: int) -> TradeRuleContext:
         # 同一调仓日同一标的只构建一次：Coverage 按唯一 Symbol-Date Cell 统计
@@ -721,7 +731,7 @@ def _rebalance_day(
             continue
         if not tradable(idx) or not sell_allowed(idx):
             continue
-        traded += state.sell(idx, t, state.shares_of(idx), execution_prices[idx, t], symbols, dates, trades)
+        traded += state.sell(idx, t, state.shares_of(idx), execution_prices[idx, t], symbols, dates, trades, execute)
 
     if not target:
         return traded
@@ -748,7 +758,7 @@ def _rebalance_day(
             continue
         if not tradable(idx) or not sell_allowed(idx):
             continue
-        traded += state.sell(idx, t, excess / execution_prices[idx, t], execution_prices[idx, t], symbols, dates, trades)
+        traded += state.sell(idx, t, excess / execution_prices[idx, t], execution_prices[idx, t], symbols, dates, trades, execute)
 
     # 第四步：买入/加仓低配的目标股（涨停不可买）
     for idx in ranked:
@@ -757,6 +767,6 @@ def _rebalance_day(
             continue
         if not buy_allowed(idx):
             continue
-        traded += state.buy(idx, t, gap, execution_prices[idx, t], symbols, dates, trades)
+        traded += state.buy(idx, t, gap, execution_prices[idx, t], symbols, dates, trades, execute)
 
     return traded

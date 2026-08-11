@@ -49,7 +49,20 @@ def ready(response: Response):
         with session_scope() as session:
             session.execute(text("SELECT 1"))
         current = service().status()
-        return {"status": "ok", "checks": {"postgres": "ok", "mode": current["mode"], "halted": current["halted"]}}
+        checks = {"postgres": "ok", "mode": current["mode"], "halted": current["halted"]}
+        if current["mode"] == ExecutionMode.LIVE.value:
+            adapter = service().adapter
+            try:
+                if adapter is None:
+                    raise RuntimeError("LIVE_ADAPTER_UNAVAILABLE")
+                adapter.healthcheck()
+                checks["qmt_execution"] = "ok"
+            except Exception:
+                checks["qmt_execution"] = "failed"
+        if checks.get("qmt_execution") == "failed":
+            response.status_code = 503
+            return {"status": "degraded", "checks": checks}
+        return {"status": "ok", "checks": checks}
     except Exception:
         response.status_code = 503
         return {"status": "degraded", "checks": {"postgres": "failed"}}

@@ -8,6 +8,7 @@ from engines.execution.models import ExecutionFill, ExecutionMode, ExecutionOrde
 from engines.execution.paper import PaperFillSimulator
 from engines.execution.qmt_adapter import BrokerAdapter
 from engines.execution.risk_gate import validate_trade_intent
+from engines.backtest.execution import cost_of
 
 
 def load_execution_config() -> dict:
@@ -37,6 +38,16 @@ class ExecutionService:
         self._halt_reason = saved_state.halt_reason if saved_state is not None else None
         self._paper_fills = PaperFillSimulator()
         self._positions: dict[str, int] = {}
+        self._cash = float(config.get("initial_cash", 1_000_000.0))
+        source = self.mode.value.lower()
+        snapshot = repository.get_latest_position_snapshot(source=source) if repository is not None else None
+        if snapshot is not None:
+            self._positions = {str(symbol): int(quantity) for symbol, quantity in (snapshot.positions or {}).items()}
+            self._cash = float(snapshot.cash)
+        elif self.mode == ExecutionMode.LIVE and self.adapter is not None:
+            broker_snapshot = self.adapter.snapshot()
+            self._positions = {str(symbol): int(quantity) for symbol, quantity in (broker_snapshot.get("positions") or {}).items()}
+            self._cash = float(broker_snapshot.get("cash") or 0.0)
 
     def create_order(self, intent: TradeIntent, context: dict, quantity: int, limit_price: float | None = None) -> ExecutionOrder:
         existing = self._orders.get(intent.idempotency_key())
@@ -114,7 +125,9 @@ class ExecutionService:
             self.repository.add_order_event(execution_order_id=stored.order.id, status=stored.order.status.value, payload=fill.model_dump(mode="json"))
         direction = 1 if stored.order.intent.side == "BUY" else -1
         self._positions[stored.order.intent.symbol] = self._positions.get(stored.order.intent.symbol, 0) + direction * fill.quantity
-        self.snapshot_positions(cash=0.0, positions=self._positions, source=self.mode.value.lower())
+        value = float(fill.quantity) * float(fill.price)
+        self._cash += (-value - cost_of(value, "buy")) if direction > 0 else (value - cost_of(value, "sell"))
+        self.snapshot_positions(cash=self._cash, positions=self._positions, source=self.mode.value.lower())
         return stored.order
 
     def order(self, client_order_id: str) -> ExecutionOrder | None:
@@ -164,7 +177,7 @@ class ExecutionService:
             self.repository.set_execution_runtime_state(self._halted, self._halt_reason)
 
     def status(self) -> dict:
-        return {"mode": self.mode.value, "halted": self._halted, "halt_reason": self._halt_reason}
+        return {"mode": self.mode.value, "halted": self._halted, "halt_reason": self._halt_reason, "cash": self._cash, "positions": dict(self._positions)}
 
     def reconcile(self, local: dict, broker: dict) -> dict:
         from datetime import UTC, datetime
