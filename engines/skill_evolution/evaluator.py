@@ -4,7 +4,7 @@ from pathlib import Path
 from financial_agent.utils import project_root
 
 def run_contract_lint(skill_root: str | Path | None = None) -> dict:
-    command = [sys.executable, "scripts/check_skill_contracts.py"]
+    command = [sys.executable, "-m", "scripts.check_skill_contracts"]
     if skill_root is not None:
         command.append(str(skill_root))
     completed = subprocess.run(command, cwd=project_root(), capture_output=True, text=True, timeout=120)

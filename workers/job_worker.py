@@ -1,8 +1,7 @@
 """job_task 表消费者（设计文档 §29 统一任务契约）。
 
 task_type 常量集中在 workers/job_types.py；派发经 JOB_HANDLERS 表驱动。
-历史类型字符串（factor_mine / knowledge_lifecycle_sweep / memory_lifecycle_sweep）
-持续被认领执行；memory_expire / memory_revalidation 复用 memory sweep 处理器。
+Content 与 Factor 任务由远程子系统 Worker 负责；本 Worker 仅执行 Agent 所属任务。
 
 幂等：入队侧由 JobTaskRepository.create(idempotency_key=...) 去重；执行侧
 market/sector 快照按 (键, trade_date, feature_version) upsert、retrieval
@@ -25,22 +24,6 @@ from workers.job_types import JOB_TASK_TYPES, JobType
 
 class LeaseLostError(RuntimeError):
     pass
-
-
-def _handle_factor_mine(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
-    from mcp_servers.factor_mining_server import mine_factors
-
-    return mine_factors(**payload, lease_guard=ensure_lease)
-
-
-def _handle_knowledge_lifecycle_sweep(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
-    from datetime import datetime
-
-    from engines.content.knowledge_lifecycle_service import KnowledgeLifecycleService
-
-    now = datetime.fromisoformat(payload["now"]) if payload.get("now") else None
-    limit = int(payload.get("limit") or 500)
-    return KnowledgeLifecycleService().expire_due_units(now=now, limit=limit)
 
 
 def _handle_memory_lifecycle_sweep(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
@@ -113,10 +96,8 @@ def _parse_datetime(value: Any) -> Any:
     return value
 
 
-#: task_type → 处理器。历史类型与 §29 新类型在此统一登记。
+#: task_type → Agent-owned 处理器。
 JOB_HANDLERS: dict[str, Callable[[dict[str, Any], Callable[[], None]], Any]] = {
-    JobType.FACTOR_MINE: _handle_factor_mine,
-    JobType.KNOWLEDGE_LIFECYCLE_SWEEP: _handle_knowledge_lifecycle_sweep,
     JobType.MEMORY_LIFECYCLE_SWEEP: _handle_memory_lifecycle_sweep,
     JobType.MEMORY_EXPIRE: _handle_memory_lifecycle_sweep,
     JobType.MEMORY_REVALIDATION: _handle_memory_lifecycle_sweep,

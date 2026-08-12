@@ -5,19 +5,11 @@ import json
 
 from fastapi import HTTPException
 
-from engines.content.knowledge_enums import (
-    KnowledgeKind,
-    LifecycleStatus,
-    TemporalClass,
-    VerificationStatus,
-)
-
 MAX_API_LIST_LIMIT = 200
-# 枚举统一（P0-11 / 设计文档 §36）：与 MCP / Lifecycle 共用 knowledge_enums 单一事实来源。
-VALID_KNOWLEDGE_KINDS = KnowledgeKind.values()
-VALID_TEMPORAL_CLASSES = TemporalClass.values()
-VALID_LIFECYCLE_STATUSES = LifecycleStatus.values()
-VALID_VERIFICATION_STATUSES = VerificationStatus.values()
+VALID_KNOWLEDGE_KINDS = {"CLAIM", "CATALYST", "RISK", "VALUATION", "EARNINGS", "FACT", "OPINION"}
+VALID_TEMPORAL_CLASSES = {"POINT_IN_TIME", "INTERVAL", "TIMELESS"}
+VALID_LIFECYCLE_STATUSES = {"ACTIVE", "VALIDATED", "EXPIRED", "SUPERSEDED", "REJECTED"}
+VALID_VERIFICATION_STATUSES = {"PENDING", "VERIFIED", "PARTIAL", "REJECTED", "UNVERIFIED"}
 
 
 def _safe_api_limit(value: int | None, *, default: int, maximum: int = MAX_API_LIST_LIMIT) -> tuple[int, list[str]]:

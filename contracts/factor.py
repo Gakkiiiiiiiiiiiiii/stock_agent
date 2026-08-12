@@ -13,6 +13,9 @@ class MiningJobRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     days: int | None = Field(default=None, ge=60)
     eval_window: int | None = Field(default=None, ge=1)
+    horizon: int = Field(default=5, ge=1, le=60)
+    candidates: list[dict] = Field(default_factory=list)
+    use_model: bool = False
 
 
 class MiningJobResponse(BaseModel):

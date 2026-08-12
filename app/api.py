@@ -5,7 +5,7 @@
 业务路由处理函数已全部迁移到 app/routers/，共享服务对象在 app/dependencies.py。
 
 向后兼容：orchestrator / admin_service / chat_history_service /
-content_ingest_service / knowledge_repository 与 VALID_* 枚举在此再导出，
+content_ingest_service 与 VALID_* 枚举在此再导出，
 既有 ``from app.api import app, orchestrator`` 等用法继续可用。
 """
 from __future__ import annotations
@@ -24,7 +24,6 @@ from app.dependencies import (  # noqa: F401  (re-export，兼容旧引用)
     chat_history_service,
     content_ingest_service,
     init_application,
-    knowledge_repository,
     orchestrator,
 )
 from app.routers import admin, agent, content, decision, execution, factor, market, portfolio, regime, retrieval, stream

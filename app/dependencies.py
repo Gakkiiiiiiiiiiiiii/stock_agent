@@ -5,10 +5,9 @@ import time
 from app.admin_service import AdminContentService
 from app.agent_orchestrator import AgentOrchestrator
 from app.chat_history_service import ChatHistoryService
-from engines.content.video_ingest_service import VideoIngestService
 from engines.retrieval.qdrant_client import FinancialQdrantClient
+from services.subsystems import get_content_client, get_factor_client
 from storage.bootstrap import create_all
-from storage.repositories.knowledge_repository import KnowledgeRepository
 
 
 def init_application() -> None:
@@ -36,5 +35,5 @@ def init_application() -> None:
 orchestrator = AgentOrchestrator()
 admin_service = AdminContentService()
 chat_history_service = ChatHistoryService()
-content_ingest_service = VideoIngestService()
-knowledge_repository = KnowledgeRepository()
+content_ingest_service = get_content_client()
+factor_client = get_factor_client()

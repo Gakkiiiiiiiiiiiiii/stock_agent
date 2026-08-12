@@ -13,10 +13,9 @@ class FakeContentService:
         assert kwargs["authorized_content"] is True
         return {"task_id": 6, "status": "pending"}
 
-    def get_video_detail(self, video_id, summary_mode="investment"):
+    def get_video_summary(self, video_id):
         assert video_id == 9
-        assert summary_mode == "investment"
-        return {"video": {"id": 9}, "summary": {"core_summary": "视频摘要"}, "segments": []}
+        return {"video_id": 9, "core_summary": "视频摘要"}
 
     def get_video_segments(self, video_id):
         assert video_id == 9
@@ -60,14 +59,14 @@ def test_get_video_summary_tool(monkeypatch):
     monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
     result = content_server.get_video_summary(9)
     assert result["found"] is True
-    assert result["summary"]["core_summary"] == "视频摘要"
+    assert result["core_summary"] == "视频摘要"
 
 
 def test_search_video_insights_uses_video_knowledge(monkeypatch):
     monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
     result = content_server.search_video_insights("黄金", top_k=3, themes=["黄金"])
     assert result["deprecated"] is True
-    assert result["filters"]["subject_key"] == ["黄金"]
+    assert result["filters"]["subject"] == ["黄金"]
     assert result["limit"] == 3
 
 
@@ -79,31 +78,26 @@ def test_video_knowledge_tools(monkeypatch):
     units = content_server.get_video_knowledge_units(9, filters={"subject_key": "券商"}, top_k=3)
     unit = content_server.get_knowledge_unit(99)
     conflicts = content_server.list_knowledge_conflicts("券商", status="ACTIVE")
-    assert search["filters"]["subject_key"] == "券商"
+    assert search["filters"]["subject"] == "券商"
     assert search["filters"]["predicate_key"] == "估值"
     assert search["intent"] == "current_state"
     assert search["limit"] == 2
-    assert current["domains"] == ["COMPANY"]
-    assert history["subject_key"] == "券商"
-    assert history["items"] == []
-    assert units["found"] is True
+    assert current["filters"]["subject"] == "券商"
+    assert history["filters"]["subject"] == "券商"
+    assert history["items"]
     assert units["limit"] == 3
     assert unit["found"] is True
     assert unit["evidence"][0]["evidence_text"] == "证据"
-    assert conflicts["items"][0]["conflict_group_id"] == "cg1"
+    assert conflicts["items"] == []
 
 
 def test_video_knowledge_mcp_contract_validation(monkeypatch):
     monkeypatch.setattr("mcp_servers.content_server.service", FakeContentService())
     empty = content_server.search_video_knowledge("", top_k=999)
     invalid = content_server.search_video_knowledge("券商", knowledge_kind="mystery", top_k=999)
-    invalid_units = content_server.get_video_knowledge_units(9, filters={"lifecycle_status": "bad"}, top_k=999)
-    invalid_conflicts = content_server.list_knowledge_conflicts(status="bad", top_k=999)
 
     assert empty["error"]["code"] == "EMPTY_QUERY"
     assert empty["items"] == []
     assert invalid["limit"] == 100
     assert invalid["error"]["code"] == "INVALID_FILTER"
     assert "top_k_clamped_to_100" in invalid["warnings"]
-    assert invalid_units["error"]["code"] == "INVALID_FILTER"
-    assert invalid_conflicts["error"]["code"] == "INVALID_FILTER"

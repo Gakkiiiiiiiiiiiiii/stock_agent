@@ -38,7 +38,7 @@ from engines.market.price_limit_metadata import (
     inspect_price_limit_meta,
     parse_optional_price,
 )
-from engines.factor.versioning import is_known_version
+from contracts.versioning import is_known_version
 from financial_agent.research_config import get_research_config
 
 # 调仓时忽略的价值偏差阈值（元），避免无意义的碎单

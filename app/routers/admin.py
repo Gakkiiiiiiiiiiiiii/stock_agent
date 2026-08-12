@@ -8,10 +8,8 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import dependencies
-from app.routers._shared import _parse_job_result
+from contracts.factor import MiningJobRequest
 from financial_agent.models import ThemeLogic
-from storage.repositories.job_repository import JobTaskRepository
-from workers.job_types import JobType
 
 router = APIRouter()
 
@@ -91,11 +89,6 @@ def admin_save_doc(request: KnowledgeDocUpdateRequest) -> dict:
 @router.delete("/api/v1/admin/docs/content")
 def admin_delete_doc(path: str, summary_mode: str = "investment") -> dict:
     try:
-        if path.startswith("video_summaries/"):
-            payload = dependencies.content_ingest_service.delete_video_summary_by_path(path, summary_mode=summary_mode)
-            if payload is not None:
-                return payload | {"path": path, "delete_mode": "video_summary"}
-            return dependencies.admin_service.delete_knowledge_doc(path) | {"delete_mode": "video_summary_file_only"}
         return dependencies.admin_service.delete_knowledge_doc(path) | {"delete_mode": "knowledge_doc"}
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"doc not found: {exc}") from exc
@@ -112,20 +105,16 @@ def admin_list_factors() -> dict:
 
 @router.post("/api/v1/admin/factors/mine")
 def admin_mine_factors(rounds: int | None = None, candidates_per_round: int | None = None) -> dict:
-    """提交持久化因子挖掘任务，实际执行由 workers/job_worker.py 领取。"""
-    payload = {key: value for key, value in {"rounds": rounds, "candidates_per_round": candidates_per_round}.items() if value is not None}
-    task = JobTaskRepository().create(JobType.FACTOR_MINE, payload)
-    return {"task_id": task["id"], "job_id": task["id"], "status": task["status"]}
+    """提交 stock_factor 远程挖掘任务。"""
+    return dependencies.factor_client.create_mining_job(
+        MiningJobRequest(rounds=rounds or 50, candidates_per_round=candidates_per_round or 20)
+    )
 
 
 @router.get("/api/v1/admin/factors/mine/{task_id}")
 def admin_mine_factors_status(task_id: str) -> dict:
-    """查询挖掘任务状态。"""
-    task = JobTaskRepository().get(task_id)
-    if task is None:
-        raise HTTPException(status_code=404, detail="task not found")
-    status_map = {"PENDING": "pending", "RUNNING": "running", "SUCCEEDED": "done", "FAILED_RETRYABLE": "failed", "FAILED_FINAL": "failed", "CANCELLED": "cancelled"}
-    return {"status": status_map.get(task["status"], task["status"]), "result": _parse_job_result(task.get("result_ref")), "error": task.get("error")}
+    """查询 stock_factor 远程挖掘任务。"""
+    return dependencies.factor_client.get_mining_job(task_id)
 
 
 @router.get("/api/v1/admin/skills")

@@ -9,10 +9,7 @@ dependencies = [
   "filelock>=3.15",
   "httpx>=0.27",
   "pandas>=2.2",
-  "playwright>=1.40",
   "psycopg[binary]>=3.2",
-  "pycryptodome>=3.19",
-  "qrcode>=8.2",
   "qdrant-client>=1.11",
   "redis>=5.0",
   "rich>=13.0",
@@ -37,14 +34,6 @@ test = [
   "redis>=5.0",
   "psycopg[binary]>=3.2",
   "filelock>=3.15",
-  "yt-dlp>=2025.1.26",
-]
-media = [
-  "faster-whisper>=1.1",
-  "opencc-python-reimplemented>=0.1.7",
-  "paddleocr>=3.3.1",
-  "pyannote.audio>=3.1",
-  "yt-dlp>=2025.1.26",
 ]
 ml = [
   "sentence-transformers>=3.0",
@@ -52,15 +41,11 @@ ml = [
 dev = [
   "pytest>=8.2",
   "filelock>=3.15",
-  "faster-whisper>=1.1",
-  "opencc-python-reimplemented>=0.1.7",
-  "paddleocr>=3.3.1",
   "sentence-transformers>=3.0",
-  "yt-dlp>=2025.1.26",
 ]
 
 [tool.setuptools.packages.find]
-include = ["agent*", "app*", "clients*", "contracts*", "engines*", "financial_agent*", "mcp_servers*", "services*", "storage*", "workers*", "xiaoe_hls_poc*"]
+include = ["agent*", "app*", "clients*", "contracts*", "engines*", "financial_agent*", "mcp_servers*", "services*", "storage*", "workers*"]
 exclude = ["artitect*", "config*", "docs*", "knowledge_base*", "skills*", "tests*"]
 
 [tool.pytest.ini_options]

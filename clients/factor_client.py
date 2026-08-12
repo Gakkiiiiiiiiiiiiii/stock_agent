@@ -1,10 +1,14 @@
-"""Factor service ports plus local and HTTP implementations."""
 from __future__ import annotations
 
 from typing import Any, Protocol
 
 from clients._http import SubsystemHttpClient
 from contracts.factor import AlphaScoreRequest, MiningJobRequest
+
+
+def _data(payload: dict[str, Any]) -> dict[str, Any]:
+    value = payload.get("data")
+    return value if isinstance(value, dict) else payload
 
 
 class FactorClient(Protocol):
@@ -16,46 +20,28 @@ class FactorClient(Protocol):
     def cancel_mining_job(self, job_id: str) -> dict[str, Any]: ...
 
 
-class LocalFactorClient:
-    """Temporary adapter that keeps the legacy factor engine available for rollback."""
-
-    def __init__(self, server: Any) -> None:
-        self._server = server
-
-    def create_mining_job(self, request: MiningJobRequest) -> dict[str, Any]:
-        return self._server.mine_factors(**request.model_dump(exclude_none=True))
-
-    def get_mining_job(self, job_id: str) -> dict[str, Any]:
-        return {"job_id": job_id, "status": "UNSUPPORTED_LOCAL"}
-
-    def list_factors(self, *, limit: int = 20) -> dict[str, Any]:
-        return self._server.list_factor_library(limit=limit)
-
-    def score_alpha(self, request: AlphaScoreRequest) -> dict[str, Any]:
-        return self._server.scan_alpha_factors(symbols=request.symbols or None)
-
-    def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self._server.evaluate_factor(**payload)
-
-    def cancel_mining_job(self, job_id: str) -> dict[str, Any]:
-        return {"job_id": job_id, "cancelled": False, "warning": "legacy factor jobs are managed by stock_agent"}
-
-
 class RemoteFactorClient(SubsystemHttpClient):
-    def create_mining_job(self, request: MiningJobRequest) -> dict[str, Any]:
-        return self.request("POST", "/api/v1/mining/jobs", payload=request.model_dump())
+    def create_mining_job(self, request: MiningJobRequest | None = None, **kwargs: Any) -> dict[str, Any]:
+        request = request or MiningJobRequest(**kwargs)
+        return _data(self.request("POST", "/api/v1/mining/jobs", payload=request.model_dump(exclude_none=True)))
 
     def get_mining_job(self, job_id: str) -> dict[str, Any]:
-        return self.request("GET", f"/api/v1/mining/jobs/{job_id}")
+        return _data(self.request("GET", f"/api/v1/mining/jobs/{job_id}"))
 
     def list_factors(self, *, limit: int = 20) -> dict[str, Any]:
-        return self.request("GET", "/api/v1/factors", params={"limit": limit})
+        payload = self.request("GET", "/api/v1/factors", params={"limit": limit})
+        return {"items": payload.get("items", []), "limit": payload.get("limit", limit)}
+
+    def get_factor(self, factor_id: str) -> dict[str, Any]:
+        return _data(self.request("GET", f"/api/v1/factors/{factor_id}"))
 
     def score_alpha(self, request: AlphaScoreRequest) -> dict[str, Any]:
-        return self.request("POST", "/api/v1/alpha/score", payload=request.model_dump())
+        return _data(self.request("POST", "/api/v1/alpha/score", payload=request.model_dump(exclude_none=True)))
 
     def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        return self.request("POST", "/api/v1/factors/evaluate", payload=payload)
+        if "universe" in payload and "symbols" not in payload:
+            payload = {**payload, "symbols": payload.pop("universe")}
+        return _data(self.request("POST", "/api/v1/factors/evaluate", payload=payload))
 
     def cancel_mining_job(self, job_id: str) -> dict[str, Any]:
-        return self.request("POST", f"/api/v1/mining/jobs/{job_id}/cancel")
+        return _data(self.request("POST", f"/api/v1/mining/jobs/{job_id}/cancel"))

@@ -16,13 +16,9 @@ def test_job_type_constants_cover_design_doc_list():
         "DECISION_REVIEW": "decision_review",
         "MEMORY_EXPIRE": "memory_expire",
         "MEMORY_REVALIDATION": "memory_revalidation",
-        "FACTOR_PAPER_TRACKING": "factor_paper_tracking",
         "MARKET_FEATURE_SNAPSHOT": "market_feature_snapshot",
         "SECTOR_FEATURE_SNAPSHOT": "sector_feature_snapshot",
         "RETRIEVAL_EVALUATION": "retrieval_evaluation",
-        "CONTENT_INGESTION": "content_ingestion",
-        "FACTOR_MINE": "factor_mine",
-        "KNOWLEDGE_LIFECYCLE_SWEEP": "knowledge_lifecycle_sweep",
         "MEMORY_LIFECYCLE_SWEEP": "memory_lifecycle_sweep",
     }
     for attr, value in expected.items():
@@ -52,6 +48,6 @@ def test_dispatch_accepts_new_and_legacy_type_strings(monkeypatch, isolated_data
 
 
 def test_external_queue_types_have_no_job_worker_handler():
-    """vector_index / content_ingestion / factor_paper_tracking 由独立队列消费，不经 job_worker。"""
+    """Agent vector_index is consumed by its dedicated queue."""
     for task_type in EXTERNAL_QUEUE_TYPES:
         assert task_type not in job_worker.JOB_HANDLERS

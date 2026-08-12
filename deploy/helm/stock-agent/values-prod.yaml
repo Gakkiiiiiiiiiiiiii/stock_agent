@@ -1,5 +1,4 @@
 services:
   api: {enabled: true, replicas: 3, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000}
-  content-gpu: {enabled: true, replicas: 1, command: ["python", "workers/content_ingest_worker.py"], gpu: 1}
 env:
   EXECUTION_MODE: LIVE

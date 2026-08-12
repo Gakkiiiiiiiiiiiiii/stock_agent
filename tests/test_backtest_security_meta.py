@@ -180,34 +180,6 @@ def test_backtest_security_meta_shape_validation():
         )
 
 
-def test_paper_worker_passes_quote_meta_to_can_buy_sell(tmp_path):
-    """模拟盘执行：T 日 Quote 中的实际涨停价优先于规则比例。"""
-    from workers import factor_paper_worker as fpw
-
-    symbols = ["600000.SH", "600001.SH"]
-    dates = ["2026-07-27", "2026-07-28"]
-    n = (2, 2)
-    panel = {
-        "open": np.full(n, 10.0),
-        "close": np.full(n, 10.0),
-        "volume": np.full(n, 1000.0),
-    }
-    panel["open"][0, 1] = 10.4  # 规则 10% 可买（涨停 11.0），Quote 实际涨停价 10.3 不可买
-    state_dir = tmp_path / "state"
-
-    control = fpw._advance_portfolio(panel, dates, symbols, ["600000.SH"], state_dir, "2026-07-28")
-    assert control["advanced"] is True
-    state = fpw._load_json(state_dir / "portfolio_state.json", {})
-    assert "600000.SH" in state["positions"]  # 无 Quote：按规则买入
-
-    state_dir2 = tmp_path / "state2"
-    quotes = {"600000.SH": {"upper_limit_price": 10.3, "lower_limit_price": 9.7, "name": "浦发银行"}}
-    result = fpw._advance_portfolio(panel, dates, symbols, ["600000.SH"], state_dir2, "2026-07-28", quotes=quotes)
-    assert result["advanced"] is True
-    state2 = fpw._load_json(state_dir2 / "portfolio_state.json", {})
-    assert "600000.SH" not in state2["positions"]  # 实际涨停价 10.3：开盘 10.4 买不进
-
-
 # ---------- Security Meta 实际限价与统计口径（v2.2.4 第九轮） ----------
 
 

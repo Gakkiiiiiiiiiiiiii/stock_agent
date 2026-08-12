@@ -128,7 +128,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
-      VIDEO_EXTERNAL_FACT_VERIFICATION: ${VIDEO_EXTERNAL_FACT_VERIFICATION:-1}
+      CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
+      FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
     ports:
       - "127.0.0.1:8000:8000"
     volumes:
@@ -143,7 +144,6 @@ services:
       - ./skills:/app/skills
       - ./storage:/app/storage
       - ./workers:/app/workers
-      - ./xiaoe_hls_poc:/app/xiaoe_hls_poc
       - ./pyproject.toml:/app/pyproject.toml:ro
       - ./README.md:/app/README.md:ro
     depends_on:
@@ -156,35 +156,6 @@ services:
       embedding:
         condition: service_healthy
       reranker:
-        condition: service_healthy
-
-  content_pipeline:
-    build: .
-    image: stock-agent-content-pipeline:0.1.0
-    container_name: stock-agent-content-pipeline
-    command: python workers/content_ingest_worker.py
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-change_me_agent_pass}@postgres:5432/${POSTGRES_DB:-financial_agent}
-      QDRANT_URL: http://qdrant:6333
-      REDIS_URL: redis://:${REDIS_PASSWORD:-change_me_redis_pass}@redis:6379/0
-      ASR_DEVICE: ${ASR_DEVICE:-cuda}
-      VIDEO_OCR_DEVICE: ${VIDEO_OCR_DEVICE:-gpu:0}
-    gpus: all
-    volumes:
-      - hf_cache:/root/.cache/huggingface
-      - ./app:/app/app
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./storage:/app/storage
-      - ./workers:/app/workers
-      - ./xiaoe_hls_poc:/app/xiaoe_hls_poc
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
 
   market_stream_worker:
@@ -223,18 +194,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
-      VIDEO_EXTERNAL_FACT_VERIFICATION: ${VIDEO_EXTERNAL_FACT_VERIFICATION:-1}
-      ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-large-v3}
-      ASR_DEVICE: ${ASR_DEVICE:-cuda}
-      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
-      ASR_USE_BATCHED: "${ASR_USE_BATCHED:-true}"
-      ASR_BATCH_SIZE: "${ASR_BATCH_SIZE:-4}"
-      ASR_BEAM_SIZE: "${ASR_BEAM_SIZE:-5}"
-      PYANNOTE_TOKEN: ${PYANNOTE_TOKEN:-}
-      HF_ENDPOINT: https://hf-mirror.com
-      HF_HUB_DISABLE_XET: "1"
-      FFMPEG_BIN: /usr/bin/ffmpeg
-      FFPROBE_BIN: /usr/bin/ffprobe
+      CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
+      FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
     volumes:
       - hf_cache:/root/.cache/huggingface
       - ./app:/app/app
@@ -279,14 +240,8 @@ services:
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
       QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
-      VIDEO_EXTERNAL_FACT_VERIFICATION: ${VIDEO_EXTERNAL_FACT_VERIFICATION:-1}
-      ASR_MODEL_SIZE: ${ASR_MODEL_SIZE:-large-v3}
-      ASR_DEVICE: ${ASR_DEVICE:-cuda}
-      ASR_COMPUTE_TYPE: ${ASR_COMPUTE_TYPE:-float16}
-      ASR_USE_BATCHED: "${ASR_USE_BATCHED:-true}"
-      ASR_BATCH_SIZE: "${ASR_BATCH_SIZE:-4}"
-      ASR_BEAM_SIZE: "${ASR_BEAM_SIZE:-5}"
-      PYANNOTE_TOKEN: ${PYANNOTE_TOKEN:-}
+      CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
+      FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
     volumes:
       - ./app:/app/app
       - ./agent:/app/agent

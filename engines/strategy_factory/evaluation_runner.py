@@ -8,7 +8,7 @@ import numpy as np
 
 from engines.strategy_factory.compiler import compile_strategy
 from engines.strategy_factory.evaluator import evaluate_strategy
-from engines.factor.purged_walkforward import run_purged_walkforward
+from engines.strategy_factory.walkforward import run_strategy_walkforward
 
 
 class StrategyEvaluationRunner:
@@ -24,7 +24,7 @@ class StrategyEvaluationRunner:
         drawdown = float(np.max(1 - curve / np.maximum(peak, 1e-9))) if len(curve) else 1.0
         metrics = {**result["statistics"], "max_drawdown": drawdown, "turnover": float(np.mean(result["backtest"]["daily_turnover"])) if result["backtest"]["daily_turnover"] else 0.0, "oos_days": len(dataset["dates"]), "excess_sharpe": result["statistics"].get("deflated_sharpe", 0.0)}
         if evaluation_type == "OOS":
-            walkforward = run_purged_walkforward(np.asarray(dataset["scores"]), np.asarray(dataset["closes"]))
+            walkforward = run_strategy_walkforward(np.asarray(dataset["scores"]), np.asarray(dataset["closes"]))
             metrics["purged_walkforward"] = walkforward
             metrics["oos_days"] = sum(len(item.get("test") or []) for item in walkforward.get("windows") or [])
             metrics["excess_sharpe"] = float(result["statistics"].get("deflated_sharpe", 0.0))
