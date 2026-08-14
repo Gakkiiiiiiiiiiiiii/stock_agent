@@ -1,0 +1,113 @@
+name: stock-three-repo-integration
+
+# Local end-to-end topology for the three independently deployable repositories.
+# Run from this directory: docker compose up --build
+services:
+  agent-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stock_agent
+      POSTGRES_USER: stock_agent
+      POSTGRES_PASSWORD: stock_agent
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_agent -d stock_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  agent-redis:
+    image: redis:7-alpine
+
+  agent-qdrant:
+    image: qdrant/qdrant:v1.12.6
+
+  agent-market-data:
+    build:
+      context: ../..
+      dockerfile: Dockerfile.core
+    command: ["uvicorn", "services.market_data_api:app", "--host", "0.0.0.0", "--port", "8012"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://stock_agent:stock_agent@agent-postgres:5432/stock_agent
+      QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
+      MARKET_DATA_REQUIRE_QMT: "false"
+    ports: ["8012:8012"]
+    depends_on:
+      agent-postgres:
+        condition: service_healthy
+
+  stock-content-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stock_content
+      POSTGRES_USER: stock_content
+      POSTGRES_PASSWORD: stock_content
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_content -d stock_content"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  stock-content-qdrant:
+    image: qdrant/qdrant:v1.12.6
+
+  stock-content:
+    build: ../../../stock_content
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://stock_content:stock_content@stock-content-postgres:5432/stock_content
+      CONTENT_QDRANT_URL: http://stock-content-qdrant:6333
+    ports: ["8100:8100"]
+    depends_on:
+      stock-content-postgres:
+        condition: service_healthy
+
+  stock-content-worker:
+    build: ../../../stock_content
+    command: ["stock-content-worker"]
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://stock_content:stock_content@stock-content-postgres:5432/stock_content
+      CONTENT_QDRANT_URL: http://stock-content-qdrant:6333
+    depends_on:
+      stock-content-postgres:
+        condition: service_healthy
+
+  stock-factor-postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: stock_factor
+      POSTGRES_USER: stock_factor
+      POSTGRES_PASSWORD: stock_factor
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_factor -d stock_factor"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  stock-factor:
+    build: ../../../stock_factor
+    environment:
+      FACTOR_DATABASE_URL: postgresql+psycopg://stock_factor:stock_factor@stock-factor-postgres:5432/stock_factor
+      MARKET_DATA_SERVICE_URL: http://agent-market-data:8012
+      CONTENT_SERVICE_URL: http://stock-content:8100
+    ports: ["8200:8200"]
+    depends_on:
+      agent-market-data:
+        condition: service_started
+      stock-content:
+        condition: service_started
+      stock-factor-postgres:
+        condition: service_healthy
+
+  stock-factor-worker:
+    build: ../../../stock_factor
+    command: ["stock-factor-worker"]
+    environment:
+      FACTOR_DATABASE_URL: postgresql+psycopg://stock_factor:stock_factor@stock-factor-postgres:5432/stock_factor
+      MARKET_DATA_SERVICE_URL: http://agent-market-data:8012
+      CONTENT_SERVICE_URL: http://stock-content:8100
+    depends_on:
+      agent-market-data:
+        condition: service_started
+      stock-content:
+        condition: service_started
+      stock-factor-postgres:
+        condition: service_healthy
