@@ -84,27 +84,25 @@ jobs:
           name: retrieval-evaluation
           path: artifacts/retrieval_eval/current
 
-  full-stack-e2e:
+  three-repo-e2e:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: '3.11'}
-      - name: Start real service dependencies
-        run: docker compose up -d postgres redis qdrant embedding reranker api vector_worker job_worker
-      - name: Wait for API readiness
-        run: python scripts/wait_full_stack.py --url http://127.0.0.1:8000/health/ready --timeout 180
-      - name: Full stack integration tests
-        run: |
-          pip install -e ".[test]"
-          RUN_FULL_STACK_E2E=1 pytest -q tests/integration/test_service_stack.py -m integration
+      - name: Start all bounded contexts
+        run: docker compose -f docker-compose.integration.yml up -d --build
+      - name: Wait for three-repository readiness
+        run: docker compose -f docker-compose.integration.yml exec -T stock-agent-api python scripts/wait_three_repo_stack.py
+      - name: Run remote-client integration tests
+        run: pip install -e ".[test]" && RUN_FULL_STACK_E2E=1 pytest -q tests/integration/test_service_stack.py -m integration
       - name: Collect service logs
         if: always()
-        run: docker compose logs --no-color > artifacts/full_stack_compose.log
+        run: docker compose -f docker-compose.integration.yml logs --no-color > artifacts/three_repo_compose.log
       - uses: actions/upload-artifact@v4
         if: always()
-        with: {name: full-stack-logs, path: artifacts/full_stack_compose.log}
+        with: {name: three-repo-logs, path: artifacts/three_repo_compose.log}
       - name: Stop stack
         if: always()
-        run: docker compose down -v
+        run: docker compose -f docker-compose.integration.yml down -v

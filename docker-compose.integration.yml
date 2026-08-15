@@ -20,6 +20,9 @@ services:
   market-data-service:
     build: { context: ., dockerfile: Dockerfile.core }
     command: uvicorn services.market_data_api:app --host 0.0.0.0 --port 8012
+    environment:
+      DATABASE_URL: postgresql://agent:agent@agent-postgres:5432/financial_agent
+    depends_on: [agent-postgres]
   stock-content-api:
     build: { context: ../stock_content }
     environment:
