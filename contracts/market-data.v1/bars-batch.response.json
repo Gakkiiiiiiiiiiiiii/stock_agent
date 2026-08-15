@@ -1,0 +1,1 @@
+{"contract_version":"market-data.v1","data":{"symbols":["CN.A.600519"],"dates":["2026-01-02"],"bars":{"open":[[1500.0]],"high":[[1510.0]],"low":[[1490.0]],"close":[[1505.0]],"volume":[[1000.0]],"amount":[[1505000.0]],"turnover":[[0.01]]},"data_version":"fixture-v1","data_snapshot_id":"market-fixture-v1","source":"fixture"}}
