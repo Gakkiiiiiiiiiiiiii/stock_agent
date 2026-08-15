@@ -103,8 +103,8 @@ jobs:
         run: docker compose -f docker-compose.integration.yml up -d --build
       - name: Wait for three-repository readiness
         run: docker compose -f docker-compose.integration.yml exec -T stock-agent-api python scripts/wait_three_repo_stack.py
-      - name: Run remote-client integration tests
-        run: pip install -e ".[test]" && RUN_FULL_STACK_E2E=1 pytest -q tests/integration/test_service_stack.py -m integration
+      - name: Run three-repository business E2E
+        run: docker compose -f docker-compose.integration.yml exec -T stock-agent-api python scripts/three_repo_business_e2e.py
       - name: Collect service logs
         if: always()
         run: docker compose -f docker-compose.integration.yml logs --no-color > artifacts/three_repo_compose.log
