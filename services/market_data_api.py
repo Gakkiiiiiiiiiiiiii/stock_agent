@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Response
 
@@ -56,7 +55,9 @@ def _batch_payload(request: BarsBatchRequest) -> dict:
         "dates": dates,
         "bars": bars,
         "data_version": data_version,
-        "data_snapshot_id": str(uuid4()),
+        # The identifier names the exact immutable response payload.  A UUID
+        # created per request makes historical factor research non-replayable.
+        "data_snapshot_id": f"mds-{data_version}",
         "source": source,
     }
 @app.get("/health/live")

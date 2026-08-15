@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 
 CONTENT_API_VERSION = "content.v1"
-CONTENT_FACTOR_SIGNAL_VERSION = "content-factor-signal.v1"
+CONTENT_FACTOR_SIGNAL_VERSION = "content-factor-signal.v2"
 
 
 class KnowledgeSearchRequest(BaseModel):
@@ -40,5 +40,5 @@ class ContentSignal(BaseModel):
 
 
 class ContentSignalResponse(BaseModel):
-    contract_version: Literal["content-factor-signal.v1"] = CONTENT_FACTOR_SIGNAL_VERSION
+    contract_version: Literal["content-factor-signal.v2"] = CONTENT_FACTOR_SIGNAL_VERSION
     items: list[ContentSignal] = Field(default_factory=list)
