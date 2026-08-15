@@ -71,7 +71,10 @@ def main() -> None:
     )
     assert signals["contract_version"] == "content-factor-signal.v2"
     assert signals["items"] and all(
-        item.get("evidence_ids") is not None for item in signals["items"]
+        item.get("evidence_ids") is not None
+        and item.get("content_attention_score") is not None
+        and item.get("available_from")
+        for item in signals["items"]
     )
 
     # Freeze on T-1 and execute on T.  This talks only to Factor's public

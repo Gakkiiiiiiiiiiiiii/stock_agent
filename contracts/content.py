@@ -1,11 +1,11 @@
 """Versioned, implementation-neutral contracts for the Content service."""
+
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field
-
 
 CONTENT_API_VERSION = "content.v1"
 CONTENT_FACTOR_SIGNAL_VERSION = "content-factor-signal.v2"
@@ -37,8 +37,14 @@ class ContentSignal(BaseModel):
     truth_status: str
     support_status: str
     review_status: str
+    evidence_ids: list[str] = Field(default_factory=list)
+    content_attention_score: float = 0.0
+    cross_video_consensus: float = 0.0
+    cross_video_disagreement: float = 0.0
 
 
 class ContentSignalResponse(BaseModel):
-    contract_version: Literal["content-factor-signal.v2"] = CONTENT_FACTOR_SIGNAL_VERSION
+    contract_version: Literal["content-factor-signal.v2"] = (
+        CONTENT_FACTOR_SIGNAL_VERSION
+    )
     items: list[ContentSignal] = Field(default_factory=list)
