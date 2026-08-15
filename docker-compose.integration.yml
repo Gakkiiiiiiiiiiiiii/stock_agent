@@ -73,3 +73,13 @@ services:
       CONTENT_SERVICE_URL: http://stock-content-api:8100
       FACTOR_SERVICE_URL: http://stock-factor-api:8200
     depends_on: [agent-postgres, agent-redis, agent-qdrant, embedding, reranker, stock-content-api, stock-factor-api]
+  stock-agent-vector-worker:
+    build: { context: ., dockerfile: Dockerfile.core }
+    command: python workers/vector_index_worker.py
+    environment:
+      DATABASE_URL: postgresql://agent:agent@agent-postgres:5432/financial_agent
+      REDIS_URL: redis://agent-redis:6379/0
+      QDRANT_URL: http://agent-qdrant:6333
+      EMBEDDING_BASE_URL: http://embedding:8001/v1
+      RERANKER_URL: http://reranker:8010
+    depends_on: [agent-postgres, agent-redis, agent-qdrant, embedding, reranker]
