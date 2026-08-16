@@ -12,19 +12,28 @@ endpoints:
       factor.factor_set_version 重放，不读取 latest market / latest factor set / latest
       content state；严格历史代码重放留待未来保存 git_commit/container_digest/config_hash。
     request:
-      mode: { type: string, enum: [original, current, multi_agent], default: original }
+      mode: { type: string, enum: [original, current, multi_agent, EXACT_REPLAY, COUNTERFACTUAL_REPLAY], default: original }
+      override: { type: object, required: false, description: "详细修改方案 §6：COUNTERFACTUAL_REPLAY 必填（policy_version/model/strategy 等）" }
     errors:
       404: DECISION_NOT_FOUND
+      422: COUNTERFACTUAL_OVERRIDE_REQUIRED
 decision_actions:
   # §25 Agent 输出必须收敛为结构化决策动作
   - APPROVE
   - APPROVE_WITH_ADJUSTMENT
   - VETO
 decision_snapshot:
-  # 收尾文档 §38 DecisionSnapshot 固定 Schema：四系统集成后的核心数据对象，支持 Replay
+  # 收尾文档 §38 + 详细修改方案 §5 DecisionSnapshot v2 固定 Schema
+  schema_version: decision.snapshot.v2
   fields:
     decision_id: string
     decision_time: datetime
+    runtime:
+      # 详细修改方案 §4：fallback 必须显式进入快照
+      runtime_mode: { type: string, enum: [PRIMARY_AGENT, DETERMINISTIC_FALLBACK, DEGRADED_AGENT, REPLAY] }
+      fallback_used: boolean
+      fallback_reason: { type: string, enum: [MODEL_UNAVAILABLE, MODEL_TIMEOUT, MODEL_ERROR, BUDGET_EXCEEDED, TOOL_UNAVAILABLE, MANUAL, null] }
+      supervisor_version: string
     market:
       snapshot_id: { type: string, description: "mds-xxx（market-data.v1）" }
       data_version: string
@@ -54,6 +63,29 @@ decision_snapshot:
       portfolio_rule_version: string
     risk:
       risk_rule_version: string
+    tools:
+      # 详细修改方案 §13：ToolResult 快照引用
+      tool_result_hashes: object
+    inputs:
+      market_snapshot_ids: array
+      content_snapshot_ids: array
+      research_experiment_ids: array
+      factor_set_ids: array
+    proposal:
+      # §7：LLM 只产生提案
+      action: string
+      candidates: array
+      suggested_weights: object
+      confidence: number
+    policy:
+      # §7：确定性 Policy Engine 审批结果
+      policy_version: string
+      checks: array
+      approved: boolean
+      adjusted_weights: object
+      rejections: array
+    output:
+      final_decision: string
     lineage:
       type: array
       # 收尾文档 §39：MARKET_SNAPSHOT / CONTENT_SNAPSHOT / RESEARCH_EXPERIMENT / FACTOR_SET / BACKTEST
@@ -63,6 +95,20 @@ decision_quality_rules:
   # §24 依赖服务不可用时必须显式降级，不得静默假装数据完整
   - 任一关键依赖（market/content/factor）不可用 => DEGRADED
   - 证据不完整 => LOW/MEDIUM，必须在输出中给出 reason 列表
+policy_engine:
+  # 详细修改方案 §7：LLM 输出 InvestmentProposal，确定性 Policy Engine 批准后才可执行
+  version: policy.v1
+  rules:
+    - SINGLE_POSITION_LIMIT
+    - INDUSTRY_EXPOSURE
+    - THEME_EXPOSURE
+    - LIQUIDITY
+    - DRAWDOWN_MODE
+    - RESTRICTED_UNIVERSE
+    - ST_SUSPENSION
+    - MINIMUM_EVIDENCE
+    - MINIMUM_CONFIDENCE
+    - FACTOR_COVERAGE
 dependencies:
   allowed: [quant HTTP, stock_factor HTTP, stock_content HTTP, Model API, PostgreSQL]
   forbidden: [quant Python import, stock_factor Python import, stock_content Python import]

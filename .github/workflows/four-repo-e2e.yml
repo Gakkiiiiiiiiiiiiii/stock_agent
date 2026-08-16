@@ -1,4 +1,7 @@
-# Cross-Repo E2E Workflow（收尾文档 §45）
+# Cross-Repo Release E2E Workflow（收尾文档 §45 + 详细修改方案 §20）
+#
+# 定位：Release E2E —— 读取 versions.lock.yaml 固定四仓 commit，保证发布可重现。
+# 主分支接口漂移检测由 four-repo-main-e2e.yml（Main Compatibility E2E）承担。
 #
 # 流程：Checkout 四仓（按 versions.lock）-> Build Docker -> Seed Fixture Data
 #       -> Start Compose -> Run Contract Tests -> Run four_repo_business_e2e.py -> Shutdown
@@ -7,7 +10,7 @@
 #   PR      -> smoke E2E（本 workflow，快速失败）
 #   Nightly -> full E2E（schedule，含完整回测窗口）
 #   Manual  -> full E2E + extended backtest（workflow_dispatch 输入扩展参数）
-name: four-repo-e2e
+name: four-repo-release-e2e
 
 on:
   pull_request:

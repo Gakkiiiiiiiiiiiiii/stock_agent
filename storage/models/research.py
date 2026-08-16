@@ -140,19 +140,27 @@ class InvestmentDecisionOutcome(Base):
 
 
 class DecisionSnapshot(Base):
-    """四系统集成核心数据对象 DecisionSnapshot（设计文档 §26 / §82）。"""
+    """四系统集成核心数据对象 DecisionSnapshot（设计文档 §26 / §82；详细修改方案 §5 v2）。"""
 
     __tablename__ = "decision_snapshots"
 
     snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
     decision_id: Mapped[str] = mapped_column(String(36), index=True)
     decision_time: Mapped[datetime | None] = mapped_column(DateTime)
+    # 详细修改方案 §5：v2 固定 Schema（runtime/proposal/policy/tools/inputs/output）。
+    schema_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     market: Mapped[dict] = mapped_column(JSON, default=dict)
     content: Mapped[dict] = mapped_column(JSON, default=dict)
     factor: Mapped[dict] = mapped_column(JSON, default=dict)
     strategy: Mapped[dict] = mapped_column(JSON, default=dict)
     agent: Mapped[dict] = mapped_column(JSON, default=dict)
     model: Mapped[dict] = mapped_column(JSON, default=dict)
+    runtime: Mapped[dict] = mapped_column(JSON, default=dict)
+    tools: Mapped[dict] = mapped_column(JSON, default=dict)
+    inputs: Mapped[dict] = mapped_column(JSON, default=dict)
+    proposal: Mapped[dict] = mapped_column(JSON, default=dict)
+    policy: Mapped[dict] = mapped_column(JSON, default=dict)
+    output: Mapped[dict] = mapped_column(JSON, default=dict)
     portfolio: Mapped[dict] = mapped_column(JSON, default=dict)
     risk: Mapped[dict] = mapped_column(JSON, default=dict)
     lineage: Mapped[list] = mapped_column(JSON, default=list)

@@ -44,7 +44,17 @@ from storage.repositories.market_feature_repository import MarketFeatureReposito
 from storage.repositories.research_repository import DecisionRepository, DecisionSnapshotRepository
 from storage.repositories.p2_repository import P2Repository
 
-REPLAY_MODES = ("original", "current", "multi_agent")
+REPLAY_MODES = ("original", "current", "multi_agent", "EXACT_REPLAY", "COUNTERFACTUAL_REPLAY")
+
+# 详细修改方案 §6：EXACT_REPLAY = 固定所有输入验证输出一致；
+# COUNTERFACTUAL_REPLAY = 相同输入 + 新 policy/model/strategy 反事实分析。
+_MODE_BASELINE = {
+    "original": "original",
+    "current": "current",
+    "multi_agent": "multi_agent",
+    "EXACT_REPLAY": "original",
+    "COUNTERFACTUAL_REPLAY": "current",
+}
 
 #: 参与版本比对的算法版本键（skill_* 为内容身份，不参与 mismatch 判定）。
 _COMPARABLE_VERSION_KEYS = (
@@ -67,7 +77,7 @@ class DecisionReplayService:
         self.market_features = market_features or MarketFeatureRepository()
         self.snapshots = DecisionSnapshotRepository()
 
-    def replay(self, decision_id: str, mode: str = "original") -> dict:
+    def replay(self, decision_id: str, mode: str = "original", overrides: dict | None = None) -> dict:
         if mode not in REPLAY_MODES:
             return {"error": "INVALID_REPLAY_MODE", "decision_id": decision_id, "mode": mode, "supported_modes": list(REPLAY_MODES)}
         create_all()
@@ -75,11 +85,17 @@ class DecisionReplayService:
         if decision is None:
             return {"error": "DECISION_NOT_FOUND", "decision_id": decision_id}
 
-        market_features, market_feature_source = self._resolve_market_features(decision, mode)
+        baseline = _MODE_BASELINE[mode]
+        counterfactual_overrides = dict(overrides or {}) if mode == "COUNTERFACTUAL_REPLAY" else None
+        if mode == "COUNTERFACTUAL_REPLAY" and not counterfactual_overrides:
+            return {"error": "COUNTERFACTUAL_OVERRIDE_REQUIRED", "decision_id": decision_id,
+                    "hint": "反事实重放必须提供 override（policy_version / model / strategy 等）"}
+
+        market_features, market_feature_source = self._resolve_market_features(decision, baseline)
         # §27：Replay 优先使用决策落库时的 DecisionSnapshot 版本锚点，而不是最新数据。
         decision_snapshot = self._load_decision_snapshot(decision_id)
-        multi_agent = self._multi_agent_provenance(decision) if mode == "multi_agent" else None
-        if mode == "multi_agent" and multi_agent and multi_agent.get("available"):
+        multi_agent = self._multi_agent_provenance(decision) if baseline == "multi_agent" else None
+        if baseline == "multi_agent" and multi_agent and multi_agent.get("available"):
             replay_output, current_versions = self._run_multi_agent_chain(decision, multi_agent)
         else:
             replay_output, current_versions = self._run_chain(decision)
@@ -92,7 +108,7 @@ class DecisionReplayService:
         }
         replay_versions = (
             {key: recorded_versions.get(key) for key in _COMPARABLE_VERSION_KEYS}
-            if mode == "original"
+            if baseline == "original"
             else dict(current_versions)
         )
 
@@ -102,7 +118,7 @@ class DecisionReplayService:
             "benchmark_route": dict(decision.benchmark_route or {}),
         }
         diffs = self._diff(original_output, replay_output)
-        if mode == "multi_agent" and multi_agent and multi_agent.get("available"):
+        if baseline == "multi_agent" and multi_agent and multi_agent.get("available"):
             recorded_regime = decision.market_regime
             replayed_regime = replay_output.get("multi_agent_context", {}).get("market_regime")
             if recorded_regime is not None and replayed_regime is not None and recorded_regime != replayed_regime:
@@ -112,25 +128,31 @@ class DecisionReplayService:
             if stored_risk_veto is not None and replayed_risk_veto is not None and stored_risk_veto != replayed_risk_veto:
                 diffs.append({"field": "risk_veto", "stored": stored_risk_veto, "replayed": replayed_risk_veto})
 
-        return self._json_safe(
-            {
-                "decision_id": decision_id,
-                "mode": mode,
-                "input_versions": recorded_versions,
-                "replay_versions": replay_versions,
-                "version_mismatch": bool(mismatch_details),
-                "version_mismatch_details": mismatch_details,
-                "replay_uses_current_code": True,
-                "market_feature_source": market_feature_source,
-                "market_features": market_features,
-                "decision_snapshot": decision_snapshot,
-                "original_output": original_output,
-                "replay_output": replay_output,
-                "multi_agent": multi_agent,
-                "match": not diffs,
-                "diffs": diffs,
+        result = {
+            "decision_id": decision_id,
+            "mode": mode,
+            "input_versions": recorded_versions,
+            "replay_versions": replay_versions,
+            "version_mismatch": bool(mismatch_details),
+            "version_mismatch_details": mismatch_details,
+            "replay_uses_current_code": True,
+            "market_feature_source": market_feature_source,
+            "market_features": market_features,
+            "decision_snapshot": decision_snapshot,
+            "original_output": original_output,
+            "replay_output": replay_output,
+            "multi_agent": multi_agent,
+            "match": not diffs,
+            "diffs": diffs,
+        }
+        if counterfactual_overrides is not None:
+            # §6：反事实分析：相同输入下“如果新规则当时存在，会做什么”。
+            result["counterfactual"] = {
+                "overrides": counterfactual_overrides,
+                "applied_versions": dict(current_versions),
+                "interpretation": "相同落库输入 + 当前/覆盖版本重算；diffs 表示新旧规则下的决策差异",
             }
-        )
+        return self._json_safe(result)
 
     def _load_decision_snapshot(self, decision_id: str) -> dict | None:
         snapshot = self.snapshots.get_for_decision(decision_id)

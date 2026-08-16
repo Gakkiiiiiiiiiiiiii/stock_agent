@@ -10,6 +10,7 @@ from storage.models import p2  # noqa: F401
 from storage.db import Base, get_engine
 from storage.models import vector  # noqa: F401
 from storage.models import research  # noqa: F401
+from storage.models import tool_result  # noqa: F401
 from financial_agent.utils import project_root
 
 

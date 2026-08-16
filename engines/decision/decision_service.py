@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from engines.decision.benchmark_router import BenchmarkRouter
+from engines.decision.runtime_mode import RuntimeMode, build_runtime_segment
 from engines.memory.service import MemoryService
 from financial_agent.config import load_yaml_config
 from storage.bootstrap import create_all
@@ -17,6 +18,9 @@ from engines.versioning import get_version
 
 # 仅用于基准路由、不落库为独立列的决策属性（路由结果持久化在 benchmark_route 中）。
 _ROUTING_ONLY_KEYS = ("decision_type", "style", "sector", "market")
+
+# 详细修改方案 §5：DecisionSnapshot v2 固定 Schema 版本。
+DECISION_SNAPSHOT_SCHEMA_V2 = "decision.snapshot.v2"
 
 
 def _evaluation_config() -> dict:
@@ -115,16 +119,53 @@ class DecisionService:
         portfolio.setdefault("portfolio_rule_version", decision.portfolio_rule_version)
         risk = dict(provided.get("risk") or {"risk_policy_version": provided.get("risk_policy_version")})
         risk.setdefault("risk_rule_version", risk.get("risk_policy_version") or provided.get("risk_rule_version"))
+        # 详细修改方案 §4：runtime 段必须显式（fallback 不得隐式）。
+        runtime = dict(provided.get("runtime") or {})
+        if not runtime.get("runtime_mode"):
+            mode = RuntimeMode.PRIMARY_AGENT if decision.agent_run_id else RuntimeMode.DETERMINISTIC_FALLBACK
+            runtime = build_runtime_segment(
+                mode,
+                fallback_reason=runtime.get("fallback_reason") or ("MANUAL" if mode == RuntimeMode.DETERMINISTIC_FALLBACK else None),
+                supervisor_version=decision.supervisor_version,
+            )
+        runtime.setdefault("supervisor_version", decision.supervisor_version)
+        # 详细修改方案 §5：proposal / policy / tools / inputs / output 段。
+        decision_action = (decision.thesis or {}).get("action") or (decision.portfolio_advice or {}).get("action")
+        proposal = dict(provided.get("proposal") or {})
+        proposal.setdefault("candidates", [str(item.get("symbol")) for item in (decision.candidates or []) if isinstance(item, dict) and item.get("symbol")])
+        proposal.setdefault("action", decision_action)
+        policy = dict(provided.get("policy") or {})
+        policy.setdefault("policy_version", risk.get("risk_rule_version") or portfolio.get("portfolio_policy_version"))
+        policy.setdefault("approved", decision_action not in (None, "REJECT", "VETO"))
+        tools = dict(provided.get("tools") or {})
+        inputs = dict(provided.get("inputs") or {
+            "market_snapshot_ids": [market.get("snapshot_id")] if market.get("snapshot_id") else [],
+            "content_snapshot_ids": [content.get("snapshot_id")] if content.get("snapshot_id") else [],
+            "research_experiment_ids": [factor.get("research_experiment_id")] if factor.get("research_experiment_id") else [],
+            "factor_set_ids": [factor.get("factor_set_version")] if factor.get("factor_set_version") else [],
+        })
+        output = dict(provided.get("output") or {
+            "final_decision": decision_action,
+            "portfolio_advice_actions": (decision.portfolio_advice or {}).get("actions"),
+            "benchmark_route": (decision.benchmark_route or {}).get("primary_benchmark"),
+        })
         lineage = self._derive_lineage(provided.get("lineage") or [], market, content, factor, strategy)
         snapshot_payload = {
             "decision_id": decision.id,
             "decision_time": decision.decision_as_of or decision.created_at,
+            "schema_version": DECISION_SNAPSHOT_SCHEMA_V2,
             "market": market,
             "content": content,
             "factor": factor,
             "strategy": strategy,
             "agent": agent,
             "model": model,
+            "runtime": runtime,
+            "tools": tools,
+            "inputs": inputs,
+            "proposal": proposal,
+            "policy": policy,
+            "output": output,
             "portfolio": portfolio,
             "risk": risk,
             "lineage": lineage,

@@ -14,9 +14,14 @@ router = APIRouter()
 
 
 class DecisionReplayRequest(BaseModel):
-    """决策回放请求体：original=按记录版本验证确定性，current=用当前算法对比。"""
+    """决策回放请求体（§27 + 详细修改方案 §6）。
 
-    mode: Literal["original", "current", "multi_agent"] = "original"
+    original/EXACT_REPLAY：固定落库输入验证确定性；current：当前算法对比；
+    COUNTERFACTUAL_REPLAY：相同输入 + override（policy_version/model/strategy）反事实分析。
+    """
+
+    mode: Literal["original", "current", "multi_agent", "EXACT_REPLAY", "COUNTERFACTUAL_REPLAY"] = "original"
+    override: dict | None = None
 
 
 class DecisionCreateRequest(BaseModel):
@@ -50,7 +55,8 @@ def review_trade(request: TradeReviewInput) -> dict:
 def replay_decision(decision_id: str, request: DecisionReplayRequest | None = None) -> dict:
     """决策回放（§27）：重放确定性决策链并与落库产物比对，决策不存在返回 404。"""
     mode = request.mode if request is not None else "original"
-    result = DecisionReplayService().replay(decision_id, mode=mode)
+    overrides = request.override if request is not None else None
+    result = DecisionReplayService().replay(decision_id, mode=mode, overrides=overrides)
     if result.get("error") == "DECISION_NOT_FOUND":
         raise HTTPException(status_code=404, detail="decision not found")
     return result

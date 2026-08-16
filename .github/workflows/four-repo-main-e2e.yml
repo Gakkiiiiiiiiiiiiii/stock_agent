@@ -1,0 +1,79 @@
+# Four-Repo Main Compatibility E2E（详细修改方案 §20）
+#
+# 定位：Main Compatibility E2E —— 四仓全部固定 main 分支，
+# Nightly 或接口变更时运行，用于发现主分支接口漂移。
+# 与 Release E2E（four-repo-e2e.yml，按 versions.lock 固定 commit）互补。
+name: four-repo-main-e2e
+
+on:
+  schedule:
+    - cron: "0 19 * * *" # Nightly（UTC）
+  workflow_dispatch:
+
+jobs:
+  four-repo-main-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout stock_agent (main)
+        uses: actions/checkout@v4
+        with:
+          path: stock_agent
+          ref: main
+
+      - name: Checkout sibling repos (main)
+        uses: actions/checkout@v4
+        with:
+          repository: Gakkiiiiiiiiiiiiii/stock_content
+          path: stock_content
+          ref: main
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: Gakkiiiiiiiiiiiiii/stock_factor
+          path: stock_factor
+          ref: main
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+      - uses: actions/checkout@v4
+        with:
+          repository: Gakkiiiiiiiiiiiiii/quant
+          path: quant
+          ref: main
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+
+      - name: Report main branch heads
+        shell: bash
+        run: |
+          for repo in stock_agent stock_content stock_factor quant; do
+            echo "$repo: $(git -C $repo rev-parse --short HEAD)"
+          done
+
+      - name: Set up Docker Compose stack
+        working-directory: stock_agent
+        run: docker compose -f deploy/integration/docker-compose.yml build
+
+      - name: Start stack
+        working-directory: stock_agent
+        run: docker compose -f deploy/integration/docker-compose.yml up -d
+
+      - name: Wait for readiness
+        working-directory: stock_agent
+        run: python scripts/wait_four_repo_stack.py
+
+      - name: Architecture tests
+        working-directory: stock_agent
+        run: python -m pytest tests/architecture -q || python -m pytest tests/test_architecture*.py -q
+
+      - name: Business E2E (main compatibility)
+        working-directory: stock_agent
+        run: python scripts/four_repo_business_e2e.py
+
+      - name: Collect logs on failure
+        if: failure()
+        working-directory: stock_agent
+        run: docker compose -f deploy/integration/docker-compose.yml logs --tail=200 > ../main-e2e-logs.txt || true
+
+      - name: Shutdown
+        if: always()
+        working-directory: stock_agent
+        run: docker compose -f deploy/integration/docker-compose.yml down -v

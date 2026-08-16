@@ -83,34 +83,3 @@ jobs:
         with:
           name: retrieval-evaluation
           path: artifacts/retrieval_eval/current
-
-  three-repo-e2e:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: stock_agent
-    steps:
-      - uses: actions/checkout@v4
-        with: {repository: Gakkiiiiiiiiiiiiii/stock_agent, ref: codex/subsystem-split, path: stock_agent}
-      - uses: actions/checkout@v4
-        with: {repository: Gakkiiiiiiiiiiiiii/stock_content, ref: codex/content-core-migration, path: stock_content}
-      - uses: actions/checkout@v4
-        with: {repository: Gakkiiiiiiiiiiiiii/stock_factor, ref: codex/factor-core-migration, path: stock_factor}
-      - uses: actions/setup-python@v5
-        with: {python-version: '3.11'}
-      - name: Start all bounded contexts
-        run: docker compose -f docker-compose.integration.yml up -d --build
-      - name: Wait for three-repository readiness
-        run: docker compose -f docker-compose.integration.yml exec -T stock-agent-api python scripts/wait_three_repo_stack.py
-      - name: Run three-repository business E2E
-        run: docker compose -f docker-compose.integration.yml exec -T stock-agent-api python scripts/three_repo_business_e2e.py
-      - name: Collect service logs
-        if: always()
-        run: docker compose -f docker-compose.integration.yml logs --no-color > artifacts/three_repo_compose.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with: {name: three-repo-logs, path: stock_agent/artifacts/three_repo_compose.log}
-      - name: Stop stack
-        if: always()
-        run: docker compose -f docker-compose.integration.yml down -v
