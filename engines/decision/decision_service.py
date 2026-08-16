@@ -4,6 +4,7 @@ from datetime import UTC, date, datetime
 import json
 from typing import Any
 
+from contracts.content import CONTENT_FACTOR_SIGNAL_VERSION
 from engines.decision.benchmark_router import BenchmarkRouter
 from engines.decision.runtime_mode import RuntimeMode, build_runtime_segment
 from engines.memory.service import MemoryService
@@ -93,7 +94,9 @@ class DecisionService:
         as_of = market.get("as_of") or decision.data_as_of or decision.decision_as_of or decision.created_at
         market["as_of"] = as_of.isoformat() if isinstance(as_of, datetime) else as_of
         content = dict(provided.get("content") or {})
-        content.setdefault("signal_contract", "content-factor-signal.v2")
+        # P0 A-04：默认 signal contract 为实际 provider 版本（来自真实响应的
+        # contract_version），否则用 main 主契约 v3；禁止默认 v2。
+        content.setdefault("signal_contract", content.get("contract_version") or CONTENT_FACTOR_SIGNAL_VERSION)
         factor = dict(provided.get("factor") or {})
         factor.setdefault("alpha_score_contract", "factor.v1")
         strategy = dict(provided.get("strategy") or {

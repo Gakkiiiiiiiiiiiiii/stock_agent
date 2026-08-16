@@ -34,6 +34,9 @@ import yaml
 
 from financial_agent.utils import project_root
 
+# 确保 repo 根目录可导入（contracts/ 不在 editable 包映射内，但属于仓内契约模块）。
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 MD_HEADING_RE = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)\s*$")
 MD_FORBIDDEN_HEADING_RE = re.compile(r"必须调用|工具清单|required tools|optional tools", re.IGNORECASE)
 MD_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*?)\s*$")

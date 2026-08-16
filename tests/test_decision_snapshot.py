@@ -56,6 +56,15 @@ def test_save_decision_persists_decision_snapshot(isolated_database):
     assert snapshot.risk["risk_policy_version"] == "risk-policy-v1"
     assert snapshot.lineage[0]["type"] == "MARKET_SNAPSHOT"
     assert snapshot.decision_quality == "HIGH"
+    # 详细修改方案 §4/§5：v2 Schema 与显式 runtime 段
+    assert snapshot.schema_version == "decision.snapshot.v2"
+    assert snapshot.runtime["runtime_mode"] == "DETERMINISTIC_FALLBACK"  # 无 agent_run_id
+    assert snapshot.runtime["fallback_used"] is True
+    assert snapshot.inputs["market_snapshot_ids"] == ["mds-xyz"]
+    assert snapshot.inputs["factor_set_ids"] == ["factor-set-abc"]
+    assert snapshot.proposal["candidates"] == ["600000.SH"]
+    assert snapshot.policy["policy_version"] == "risk-policy-v1"
+    assert "final_decision" in snapshot.output
 
 
 def test_save_decision_defaults_version_anchors_without_input(isolated_database):
@@ -74,3 +83,19 @@ def test_replay_returns_decision_snapshot(isolated_database):
     assert replay["decision_snapshot"]["market"]["snapshot_id"] == "mds-xyz"
     assert replay["decision_snapshot"]["factor"]["factor_set_version"] == "factor-set-abc"
     assert replay["decision_snapshot"]["decision_quality"] == "HIGH"
+
+
+def test_save_decision_records_primary_agent_runtime(isolated_database):
+    # 详细修改方案 §4：有 agent_run_id 时 runtime_mode = PRIMARY_AGENT，fallback_used=False
+    result = _save_decision(agent_run_id="run-1")
+    snapshot = DecisionSnapshotRepository().get_for_decision(result["decision_id"])
+    assert snapshot.runtime["runtime_mode"] == "PRIMARY_AGENT"
+    assert snapshot.runtime["fallback_used"] is False
+    assert snapshot.runtime["fallback_reason"] is None
+
+
+def test_save_decision_accepts_explicit_runtime(isolated_database):
+    runtime = {"runtime_mode": "DETERMINISTIC_FALLBACK", "fallback_used": True, "fallback_reason": "MODEL_UNAVAILABLE"}
+    result = _save_decision(decision_snapshot={**SNAPSHOT_INPUT, "runtime": runtime})
+    snapshot = DecisionSnapshotRepository().get_for_decision(result["decision_id"])
+    assert snapshot.runtime["fallback_reason"] == "MODEL_UNAVAILABLE"

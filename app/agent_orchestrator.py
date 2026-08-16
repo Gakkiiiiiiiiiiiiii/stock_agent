@@ -1,72 +1,37 @@
+"""AgentOrchestrator 兼容 Facade（P0 A-02）。
+
+所有 public 方法只委托唯一 ``DecisionRuntime``；public facade 禁止直接调用
+ClaudeAgent.run / LocalFallbackOrchestrator 的决策方法。ClaudeAgent 与
+LocalFallbackOrchestrator 只能作为 DecisionRuntime 内部 execution adapter：
+
+    LLM execution authority ≠ Decision authority
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import date
 
-from app.claude_agent import ClaudeAgent
-from app.fallback_orchestrator import LocalFallbackOrchestrator
+from app.decision_runtime import DecisionRuntime
 
 
 class AgentOrchestrator:
-    def __init__(self) -> None:
-        self.claude_agent = ClaudeAgent()
-        self.fallback = LocalFallbackOrchestrator()
+    """兼容 Facade：历史调用方（app.dependencies / routers）保持不变。"""
+
+    def __init__(self, runtime: DecisionRuntime | None = None) -> None:
+        self.runtime = runtime or DecisionRuntime()
+        # 仅暴露 runtime 内部 adapter 的属性引用（admin 工具审批等旧端点依赖），
+        # facade 的 public 方法不得通过它们发起任何决策调用。
+        self.claude_agent = self.runtime.claude_agent
+        self.fallback = self.runtime.fallback
 
     def analyze_stock(self, symbol: str, as_of: date | None = None, patterns: list[str] | None = None) -> dict:
-        if self.agent_enabled():
-            result = self.claude_agent.run(
-                user_query=f"分析股票 {symbol} 当前是否存在技术机会，并给出风险和操作条件。",
-                context={"symbol": symbol, "date": str(as_of) if as_of else None, "patterns": patterns},
-                force_skill="a-share-technical-analysis",
-            )
-            return {
-                "symbol": symbol,
-                "date": str(as_of) if as_of else None,
-                "orchestration": "claude-style-agent",
-                "selected_skill": result.selected_skill,
-                "selection_reason": result.selection_reason,
-                "tool_calls": result.tool_calls,
-                "trace": result.trace,
-                "report": result.report,
-            },
-        return self.fallback.analyze_stock(symbol, as_of=as_of, patterns=patterns)
+        return self.runtime.analyze_stock(symbol, as_of=as_of, patterns=patterns)
 
     def analyze_theme(self, theme_name: str) -> dict:
-        if self.agent_enabled():
-            result = self.claude_agent.run(
-                user_query=f"分析主题 {theme_name} 的投资逻辑是否成立，并输出催化、标的、触发和证伪条件。",
-                context={"theme_name": theme_name},
-                force_skill="industry-logic-research",
-            )
-            return {
-                "theme_name": theme_name,
-                "orchestration": "claude-style-agent",
-                "selected_skill": result.selected_skill,
-                "selection_reason": result.selection_reason,
-                "tool_calls": result.tool_calls,
-                "trace": result.trace,
-                "report": result.report,
-            }
-        return self.fallback.analyze_theme(theme_name)
+        return self.runtime.analyze_theme(theme_name)
 
     def daily_scan(self, scan_date: date | None = None, mode: str = "after_close") -> dict:
-        if self.agent_enabled():
-            result = self.claude_agent.run(
-                user_query=f"请完成 {str(scan_date or date.today())} {mode} 的每日市场扫描，输出强主题、候选方向、仓位建议和风险提示。",
-                context={"date": str(scan_date) if scan_date else None, "mode": mode},
-                force_skill="daily-market-decision",
-            )
-            return {
-                "date": str(scan_date or date.today()),
-                "mode": mode,
-                "orchestration": "claude-style-agent",
-                "selected_skill": result.selected_skill,
-                "selection_reason": result.selection_reason,
-                "tool_calls": result.tool_calls,
-                "trace": result.trace,
-                "report": result.report,
-            }
-        return self.fallback.daily_scan(scan_date=scan_date, mode=mode)
+        return self.runtime.daily_scan(scan_date=scan_date, mode=mode)
 
     def run_agent(
         self,
@@ -75,39 +40,7 @@ class AgentOrchestrator:
         skill: str | None = None,
         emit: Callable[[str, dict], None] | None = None,
     ) -> dict:
-        if self.agent_enabled():
-            result = self.claude_agent.run(user_query=query, context=context, force_skill=skill, emit=emit)
-            payload = {
-                "orchestration": "claude-style-agent",
-                "selected_skill": result.selected_skill,
-                "selection_reason": result.selection_reason,
-                "tool_calls": result.tool_calls,
-                "trace": result.trace,
-                "report": result.report,
-            }
-            if emit:
-                emit("done", payload)
-            return payload
-        payload = {
-            "orchestration": "local-fallback",
-            "warning": "主模型未配置，当前无法运行 Claude-style Agent。请配置 AGENT_MODEL_* 或 ANALYSIS_MODEL_* 为 DeepSeek/OpenAI-compatible 模型。",
-            "trace": {
-                "selection_reason": "Primary agent model is unavailable.",
-                "steps": [
-                    {
-                        "type": "warning",
-                        "title": "Model unavailable",
-                        "content": "AGENT_MODEL_* or ANALYSIS_MODEL_* is not configured, so the chat agent could not start.",
-                    }
-                ],
-            },
-        }
-        if emit:
-            emit("warning", {"message": payload["warning"]})
-            emit("trace", {"step": payload["trace"]["steps"][0]})
-            emit("done", payload)
-        return payload
+        return self.runtime.run(query, context=context, skill=skill, emit=emit)
 
-    @staticmethod
-    def agent_enabled() -> bool:
-        return ClaudeAgent().configured()
+    def agent_enabled(self) -> bool:
+        return self.runtime.agent_enabled()
