@@ -81,31 +81,74 @@ class DecisionService:
         return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs, "decision_snapshot_id": snapshot.snapshot_id}
 
     def _save_decision_snapshot(self, decision: Any, provided: dict[str, Any], decision_quality: str | None) -> Any:
-        """落库 DecisionSnapshot（§26）：把四系统版本锚点集中到单一可重放对象。"""
+        """落库 DecisionSnapshot（收尾文档 §38/§39）：固定 Schema + 可重放版本锚点与 lineage。"""
         market = dict(provided.get("market") or {})
         market.setdefault("snapshot_id", (decision.market_features or {}).get("data_snapshot_id"))
         market.setdefault("data_version", (decision.market_features or {}).get("data_version"))
+        market.setdefault("source", (decision.market_features or {}).get("source"))
+        as_of = market.get("as_of") or decision.data_as_of or decision.decision_as_of or decision.created_at
+        market["as_of"] = as_of.isoformat() if isinstance(as_of, datetime) else as_of
+        content = dict(provided.get("content") or {})
+        content.setdefault("signal_contract", "content-factor-signal.v2")
+        factor = dict(provided.get("factor") or {})
+        factor.setdefault("alpha_score_contract", "factor.v1")
+        strategy = dict(provided.get("strategy") or {
+            "strategy_version": f"{decision.skill_slug or 'skill'}@v{decision.skill_version}" if decision.skill_version else decision.skill_slug,
+            "skill_contract_hash": decision.skill_contract_hash,
+            "skill_markdown_hash": decision.skill_markdown_hash,
+        })
+        strategy.setdefault("strategy_id", decision.skill_slug)
+        agent = dict(provided.get("agent") or {
+            "agent_version": decision.supervisor_version,
+            "participating_agents": decision.participating_agents,
+        })
+        agent.setdefault("agent_run_id", decision.agent_run_id)
+        agent.setdefault("supervisor_version", decision.supervisor_version)
+        model = dict(provided.get("model") or {})
+        # 兼容旧输入：agent 段遗留的模型字段迁移到独立 model 段（§38）
+        model.setdefault("provider", agent.get("provider"))
+        model.setdefault("model", agent.get("model_name") or agent.get("model"))
+        model.setdefault("model_version", agent.get("model_version"))
+        model.setdefault("prompt_version", agent.get("prompt_version"))
+        portfolio = dict(provided.get("portfolio") or {})
+        portfolio.setdefault("portfolio_policy_version", decision.portfolio_rule_version)
+        portfolio.setdefault("portfolio_rule_version", decision.portfolio_rule_version)
+        risk = dict(provided.get("risk") or {"risk_policy_version": provided.get("risk_policy_version")})
+        risk.setdefault("risk_rule_version", risk.get("risk_policy_version") or provided.get("risk_rule_version"))
+        lineage = self._derive_lineage(provided.get("lineage") or [], market, content, factor, strategy)
         snapshot_payload = {
             "decision_id": decision.id,
             "decision_time": decision.decision_as_of or decision.created_at,
             "market": market,
-            "content": dict(provided.get("content") or {}),
-            "factor": dict(provided.get("factor") or {}),
-            "strategy": dict(provided.get("strategy") or {
-                "strategy_version": f"{decision.skill_slug or 'skill'}@v{decision.skill_version}" if decision.skill_version else decision.skill_slug,
-                "skill_contract_hash": decision.skill_contract_hash,
-                "skill_markdown_hash": decision.skill_markdown_hash,
-            }),
-            "agent": dict(provided.get("agent") or {
-                "agent_version": decision.supervisor_version,
-                "participating_agents": decision.participating_agents,
-            }),
-            "portfolio": dict(provided.get("portfolio") or {"portfolio_policy_version": decision.portfolio_rule_version}),
-            "risk": dict(provided.get("risk") or {"risk_policy_version": provided.get("risk_policy_version")}),
-            "lineage": list(provided.get("lineage") or []),
+            "content": content,
+            "factor": factor,
+            "strategy": strategy,
+            "agent": agent,
+            "model": model,
+            "portfolio": portfolio,
+            "risk": risk,
+            "lineage": lineage,
             "decision_quality": decision_quality or provided.get("decision_quality"),
         }
         return self.snapshots.save(**snapshot_payload)
+
+    @staticmethod
+    def _derive_lineage(provided: list, market: dict, content: dict, factor: dict, strategy: dict) -> list:
+        """收尾文档 §39：自动从各段版本锚点派生 lineage（MARKET_SNAPSHOT / CONTENT_SNAPSHOT / RESEARCH_EXPERIMENT / FACTOR_SET / BACKTEST）。"""
+        lineage = [dict(item) for item in provided if isinstance(item, dict)]
+        seen = {(item.get("type"), item.get("id")) for item in lineage}
+
+        def _append(entry_type: str, entry_id: Any) -> None:
+            if entry_id and (entry_type, entry_id) not in seen:
+                lineage.append({"type": entry_type, "id": entry_id})
+                seen.add((entry_type, entry_id))
+
+        _append("MARKET_SNAPSHOT", market.get("snapshot_id"))
+        _append("CONTENT_SNAPSHOT", content.get("snapshot_id"))
+        _append("RESEARCH_EXPERIMENT", factor.get("research_experiment_id"))
+        _append("FACTOR_SET", factor.get("factor_set_version"))
+        _append("BACKTEST", strategy.get("backtest_id"))
+        return lineage
 
     @staticmethod
     def schedule_evaluations(decision_id: str, decision_date: date) -> list[str]:

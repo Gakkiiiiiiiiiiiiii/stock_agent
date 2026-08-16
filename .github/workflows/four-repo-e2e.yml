@@ -1,0 +1,128 @@
+# Cross-Repo E2E Workflow（收尾文档 §45）
+#
+# 流程：Checkout 四仓（按 versions.lock）-> Build Docker -> Seed Fixture Data
+#       -> Start Compose -> Run Contract Tests -> Run four_repo_business_e2e.py -> Shutdown
+#
+# 触发策略（§45 建议）：
+#   PR      -> smoke E2E（本 workflow，快速失败）
+#   Nightly -> full E2E（schedule，含完整回测窗口）
+#   Manual  -> full E2E + extended backtest（workflow_dispatch 输入扩展参数）
+name: four-repo-e2e
+
+on:
+  pull_request:
+  schedule:
+    - cron: "30 18 * * *" # Nightly full E2E（UTC）
+  workflow_dispatch:
+    inputs:
+      extended_backtest:
+        description: "运行扩展回测窗口（manual full E2E）"
+        type: boolean
+        default: false
+
+env:
+  E2E_MODE: ${{ github.event_name == 'pull_request' && 'smoke' || 'full' }}
+
+jobs:
+  four-repo-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      # ---- Checkout Agent（本仓库）----
+      - name: Checkout stock_agent
+        uses: actions/checkout@v4
+        with:
+          path: stock_agent
+
+      # ---- 读取 Cross-Repo Version Lock（§44）----
+      - name: Read versions.lock
+        id: lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          LOCK=stock_agent/deploy/integration/versions.lock.yaml
+          extract() { awk -v repo="$1" '$1==repo":"{found=1;next} found && $1=="commit:"{print $2; exit}' "$LOCK"; }
+          extract_branch() { awk -v repo="$1" '$1==repo":"{found=1;next} found && $1=="branch:"{print $2; exit}' "$LOCK"; }
+          echo "content_commit=$(extract stock_content)" >> "$GITHUB_OUTPUT"
+          echo "content_branch=$(extract_branch stock_content)" >> "$GITHUB_OUTPUT"
+          echo "factor_commit=$(extract stock_factor)" >> "$GITHUB_OUTPUT"
+          echo "factor_branch=$(extract_branch stock_factor)" >> "$GITHUB_OUTPUT"
+          echo "quant_commit=$(extract quant)" >> "$GITHUB_OUTPUT"
+          echo "quant_branch=$(extract_branch quant)" >> "$GITHUB_OUTPUT"
+
+      # ---- Checkout Content / Factor / Quant ----
+      - name: Checkout stock_content
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/stock_content
+          ref: ${{ steps.lock.outputs.content_commit }}
+          path: stock_content
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+
+      - name: Checkout stock_factor
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/stock_factor
+          ref: ${{ steps.lock.outputs.factor_commit }}
+          path: stock_factor
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+
+      - name: Checkout quant
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/quant
+          ref: ${{ steps.lock.outputs.quant_commit }}
+          path: quant
+          token: ${{ secrets.FOUR_REPO_E2E_TOKEN || github.token }}
+
+      # ---- Build & Seed & Compose ----
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install host tooling
+        run: pip install httpx pyyaml
+
+      - name: Build Docker images
+        working-directory: stock_agent/deploy/integration
+        run: docker compose build
+
+      - name: Start Compose stack（不启动旧 Market Data/Backtest/Paper 服务，§43）
+        working-directory: stock_agent/deploy/integration
+        run: docker compose up -d
+
+      - name: Wait for stack readiness
+        working-directory: stock_agent
+        run: python scripts/wait_four_repo_stack.py
+        env:
+          QUANT_SERVICE_URL: http://localhost:8011
+
+      # ---- Contract Tests ----
+      - name: Run contract tests
+        working-directory: stock_agent
+        run: |
+          python -m pip install pytest
+          python -m pytest tests/architecture -q --basetemp=.pytest_tmp_e2e_arch
+
+      # ---- Business E2E（§41/§42）----
+      - name: Run four_repo_business_e2e.py
+        working-directory: stock_agent
+        run: python scripts/four_repo_business_e2e.py
+        env:
+          QUANT_SERVICE_URL: http://localhost:8011
+          CONTENT_SERVICE_URL: http://localhost:8100
+          FACTOR_SERVICE_URL: http://localhost:8200
+          AGENT_SERVICE_URL: http://localhost:8000
+          E2E_MODE: ${{ env.E2E_MODE }}
+
+      # ---- Shutdown（无论成败都收集诊断并停机）----
+      - name: Collect compose logs on failure
+        if: failure()
+        working-directory: stock_agent/deploy/integration
+        run: docker compose logs --tail=200
+
+      - name: Shutdown stack
+        if: always()
+        working-directory: stock_agent/deploy/integration
+        run: docker compose down -v

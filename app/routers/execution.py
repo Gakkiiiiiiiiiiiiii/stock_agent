@@ -1,17 +1,29 @@
-"""Execution API: accepts deterministic trade intents, never LLM broker calls."""
+"""Execution API: accepts deterministic trade intents, never LLM broker calls.
+
+收尾文档 §31：先保留兼容路径；AGENT_EXECUTION_AUTHORITY=quant 时，
+PAPER 订单内部转发 QuantExecutionClient -> quant trading.v1，
+Agent 不再作为本地 execution authority。
+"""
 from __future__ import annotations
 
+import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+from clients.quant_execution_client import QuantExecutionClient
 from engines.execution.models import ExecutionFill, ExecutionMode, TradeIntent
 from engines.execution.service import ExecutionService
 from storage.repositories.p2_repository import P2Repository
 
 router = APIRouter(prefix="/api/v1/execution", tags=["execution"])
 _services: dict[ExecutionMode, ExecutionService] = {}
+_quant_execution = QuantExecutionClient()
+
+
+def _execution_authority() -> str:
+    return os.getenv("AGENT_EXECUTION_AUTHORITY", "local").lower()
 
 
 def _service(mode: ExecutionMode) -> ExecutionService:
@@ -34,6 +46,17 @@ class FillRequest(BaseModel):
 
 @router.post("/orders")
 def create_order(request: CreateOrderRequest) -> dict:
+    if _execution_authority() == "quant":
+        # §31：Paper/执行权威在 quant trading.v1；Agent 只做兼容 proxy。
+        if request.mode == ExecutionMode.LIVE:
+            raise HTTPException(status_code=501, detail="EXECUTION_REJECTED: live authority not wired to quant")
+        try:
+            return _quant_execution.submit_paper_targets(
+                [{"symbol": request.intent.symbol, "target_weight": request.intent.target_weight}],
+                signal_time=datetime.now(UTC).isoformat(timespec="seconds"),
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=502, detail=f"EXECUTION_REJECTED: quant unavailable: {exc}") from exc
     order = _service(request.mode).create_order(request.intent, request.context, request.quantity, request.limit_price)
     return order.model_dump(mode="json")
 

@@ -152,6 +152,7 @@ class DecisionSnapshot(Base):
     factor: Mapped[dict] = mapped_column(JSON, default=dict)
     strategy: Mapped[dict] = mapped_column(JSON, default=dict)
     agent: Mapped[dict] = mapped_column(JSON, default=dict)
+    model: Mapped[dict] = mapped_column(JSON, default=dict)
     portfolio: Mapped[dict] = mapped_column(JSON, default=dict)
     risk: Mapped[dict] = mapped_column(JSON, default=dict)
     lineage: Mapped[list] = mapped_column(JSON, default=list)

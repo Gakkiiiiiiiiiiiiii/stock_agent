@@ -144,6 +144,7 @@ class DecisionReplayService:
             "factor": dict(snapshot.factor or {}),
             "strategy": dict(snapshot.strategy or {}),
             "agent": dict(snapshot.agent or {}),
+            "model": dict(snapshot.model or {}),
             "portfolio": dict(snapshot.portfolio or {}),
             "risk": dict(snapshot.risk or {}),
             "lineage": list(snapshot.lineage or []),

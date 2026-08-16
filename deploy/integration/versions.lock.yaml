@@ -1,0 +1,19 @@
+# Cross-Repo Version Lock（收尾文档 §44）
+# 四仓 E2E 的权威版本组合：workflow/脚本按本文件 checkout 各仓库，
+# 任一仓库推进契约变更时必须同步更新本锁文件。
+# 更新时间：2026-08-16（四系统集成收尾与研究完整性改造）
+stock_agent:
+  branch: codex/subsystem-split
+  commit: 639138c8bdc0
+
+stock_content:
+  branch: codex/content-core-migration
+  commit: 7476db9ce0c1
+
+stock_factor:
+  branch: codex/factor-core-migration
+  commit: 1c5674a65531
+
+quant:
+  branch: main
+  commit: 2999470016a9

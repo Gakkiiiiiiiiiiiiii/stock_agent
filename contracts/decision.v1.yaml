@@ -6,7 +6,11 @@ endpoints:
   - name: replay_decision
     method: POST
     path: /api/v1/decisions/{decision_id}/replay
-    description: "§27 Decision Replay：默认不读取最新数据，使用原始 Market/Content/Factor Snapshot、Config、Model Prompt 重放"
+    description: >-
+      §27/§40 Decision Replay：短期定义为 Deterministic Input Replay（非 Historical
+      Binary Replay）。优先使用 DecisionSnapshot.market.snapshot_id / content.snapshot_id /
+      factor.factor_set_version 重放，不读取 latest market / latest factor set / latest
+      content state；严格历史代码重放留待未来保存 git_commit/container_digest/config_hash。
     request:
       mode: { type: string, enum: [original, current, multi_agent], default: original }
     errors:
@@ -17,33 +21,43 @@ decision_actions:
   - APPROVE_WITH_ADJUSTMENT
   - VETO
 decision_snapshot:
-  # §26 DecisionSnapshot：四系统集成后的核心数据对象，支持 Replay
+  # 收尾文档 §38 DecisionSnapshot 固定 Schema：四系统集成后的核心数据对象，支持 Replay
   fields:
     decision_id: string
     decision_time: datetime
     market:
       snapshot_id: { type: string, description: "mds-xxx（market-data.v1）" }
       data_version: string
+      source: { type: string, example: qmt }
+      as_of: datetime
     content:
       snapshot_id: string
-      contract_version: { type: string, example: content-factor-signal.v2 }
+      knowledge_version: string
+      signal_contract: { type: string, example: content-factor-signal.v2 }
     factor:
       factor_set_version: string
-      factor_model_version: string
+      research_experiment_id: { type: string, description: "factor-exp-xxx（factor 状态机实验 ID）" }
+      alpha_score_contract: { type: string, example: factor.v1 }
     strategy:
+      strategy_id: string
       strategy_version: string
     agent:
-      agent_version: string
-      prompt_version: string
-      model_name: string
+      agent_run_id: string
+      supervisor_version: string
+      workflow_version: string
+    model:
+      provider: string
+      model: string
       model_version: string
+      prompt_version: string
     portfolio:
-      portfolio_policy_version: string
+      portfolio_rule_version: string
     risk:
-      risk_policy_version: string
+      risk_rule_version: string
     lineage:
-      type: object
-      description: 各子系统输入/输出与依赖调用链锚点
+      type: array
+      # 收尾文档 §39：MARKET_SNAPSHOT / CONTENT_SNAPSHOT / RESEARCH_EXPERIMENT / FACTOR_SET / BACKTEST
+      item: { type: object, fields: { type: string, id: string } }
     decision_quality: { type: string, enum: [HIGH, MEDIUM, LOW, DEGRADED] }
 decision_quality_rules:
   # §24 依赖服务不可用时必须显式降级，不得静默假装数据完整
