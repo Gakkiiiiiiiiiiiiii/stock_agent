@@ -48,6 +48,15 @@ jobs:
             echo "$repo: $(git -C $repo rev-parse --short HEAD)"
           done
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install agent dependencies (handshake / in-process governance scenarios)
+        working-directory: stock_agent
+        run: python -m pip install -e ".[test]"
+
       - name: Set up Docker Compose stack
         working-directory: stock_agent
         run: docker compose -f deploy/integration/docker-compose.yml build
@@ -59,6 +68,10 @@ jobs:
       - name: Wait for readiness
         working-directory: stock_agent
         run: python scripts/wait_four_repo_stack.py
+
+      - name: Contract Handshake (P0 X-02)
+        working-directory: stock_agent
+        run: python scripts/four_repo_contract_handshake.py
 
       - name: Architecture tests
         working-directory: stock_agent

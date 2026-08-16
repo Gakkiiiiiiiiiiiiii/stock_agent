@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from engines.decision.decision_service import DecisionService
 from engines.decision.replay import DecisionReplayService
 from financial_agent.models import TradeReviewInput
+from storage.repositories.research_repository import DecisionSnapshotRepository
 
 router = APIRouter()
 
@@ -48,6 +49,35 @@ def create_decision(request: DecisionCreateRequest) -> dict:
 @router.post("/api/v1/review/trade")
 def review_trade(request: TradeReviewInput) -> dict:
     return {"status": "accepted", "review": request.model_dump(), "note": "MVP 版本返回结构化复盘输入，数据库写入由后续迁移接入。"}
+
+
+@router.get("/api/v1/decisions/{decision_id}/snapshot")
+def get_decision_snapshot(decision_id: str) -> dict:
+    """P0 X-03：返回完整 DecisionSnapshot v2（schema/runtime/proposal/policy/output/lineage）。"""
+    snapshot = DecisionSnapshotRepository().get_for_decision(decision_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="decision snapshot not found")
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "decision_id": snapshot.decision_id,
+        "schema_version": snapshot.schema_version,
+        "market": dict(snapshot.market or {}),
+        "content": dict(snapshot.content or {}),
+        "factor": dict(snapshot.factor or {}),
+        "strategy": dict(snapshot.strategy or {}),
+        "agent": dict(snapshot.agent or {}),
+        "model": dict(snapshot.model or {}),
+        "runtime": dict(snapshot.runtime or {}),
+        "tools": dict(snapshot.tools or {}),
+        "inputs": dict(snapshot.inputs or {}),
+        "proposal": dict(snapshot.proposal or {}),
+        "policy": dict(snapshot.policy or {}),
+        "output": dict(snapshot.output or {}),
+        "portfolio": dict(snapshot.portfolio or {}),
+        "risk": dict(snapshot.risk or {}),
+        "lineage": list(snapshot.lineage or []),
+        "decision_quality": snapshot.decision_quality,
+    }
 
 
 @router.post("/api/v1/decision/{decision_id}/replay")

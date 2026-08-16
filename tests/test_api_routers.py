@@ -70,6 +70,7 @@ EXPECTED_ROUTES = {
     ("POST", "/api/v1/review/trade"),
     ("POST", "/api/v1/decision/{decision_id}/replay"),
     ("POST", "/api/v1/decisions/{decision_id}/replay"),
+    ("GET", "/api/v1/decisions/{decision_id}/snapshot"),
     ("POST", "/api/v1/decisions"),
     ("POST", "/api/v1/execution/orders"),
     ("POST", "/api/v1/execution/orders/{client_order_id}/submit"),

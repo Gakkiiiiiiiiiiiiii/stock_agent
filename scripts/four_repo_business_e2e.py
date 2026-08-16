@@ -1,8 +1,9 @@
-"""四仓业务 E2E（收尾文档 §41-§43）。
+"""四仓业务 E2E（收尾文档 §41-§43 + P0 X-03~X-06）。
 
-流程：Quant 不可变 Snapshot -> Content KnowledgeUnit/事实验证/Signal ->
+流程：Quant 不可变 Snapshot -> Content KnowledgeUnit/事实验证/Signal(v3) ->
       Factor Alpha Score/Factor Evidence -> Agent Portfolio/DecisionSnapshot ->
-      Quant Backtest -> Replay lineage/version/snapshot 验证。
+      Quant Backtest -> Replay lineage/version/snapshot 验证 ->
+      单一决策主链路（actionable decision）-> Risk VETO -> EXACT_REPLAY。
 
 §43：本 E2E 的 Compose 不启动旧 Agent Market Data Service / 旧 Agent Backtest
 Runtime / 旧 Factor Paper Authority；如果仍有代码依赖旧路径，CI 直接失败。
@@ -11,10 +12,14 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import time
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import httpx
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from clients.content_client import RemoteContentClient
 from contracts.content import ContentSignalRequest
@@ -79,6 +84,94 @@ def _wait_backtest(client: httpx.Client, backtest_id: str) -> dict:
     raise TimeoutError(f"backtest did not complete: {backtest_id}")
 
 
+def _run_inprocess_scenarios() -> None:
+    """X-05 Risk VETO + X-06 EXACT_REPLAY（固定 fixture/stub specialist，隔离临时库）。"""
+    tmp = Path(tempfile.mkdtemp(prefix="four-repo-e2e-agent-"))
+    os.environ["DATABASE_URL"] = f"sqlite:///{(tmp / 'agent.db').as_posix()}"
+
+    from storage.bootstrap import create_all
+    from storage.db import SessionLocal, get_engine
+
+    get_engine.cache_clear()
+    SessionLocal.configure(bind=get_engine())
+    create_all()
+
+    from app.decision_runtime import DecisionRuntime
+    from engines.decision.replay import DecisionReplayService
+    from storage.repositories.research_repository import DecisionSnapshotRepository
+    from storage.repositories.tool_result_repository import ToolResultRepository
+
+    # ------------------------------------------------------------- X-05 Risk VETO
+    _step("STEP 11: Risk VETO (fixed fixture: proposal=BUY, risk=VETO)")
+
+    class _VetoFallback:
+        def analyze_stock(self, symbol, as_of=None, patterns=None):
+            return {
+                "symbol": symbol,
+                "orchestration": "local-fallback",
+                "proposal": {"symbol": symbol, "action": "BUY", "proposed_weight": 1.0, "confidence": 0.9, "evidence_count": 5},
+                "risk": {"veto": True, "reason": "FOUR_REPO_E2E_VETO"},
+            }
+
+    class _NoModel:
+        def configured(self) -> bool:
+            return False
+
+        def run(self, **kwargs):
+            raise AssertionError("VETO 场景不得调用 LLM")
+
+    veto_runtime = DecisionRuntime(claude_agent=_NoModel(), fallback=_VetoFallback())
+    veto_result = veto_runtime.analyze_stock("600519.SH")
+    assert veto_result["final_decision"]["action"] == "VETO", "Risk VETO 必须覆盖 LLM BUY"
+    assert veto_result["final_decision"]["approved"] is False
+    veto_snapshot = DecisionSnapshotRepository().get_for_decision(veto_result["decision_id"])
+    assert veto_snapshot.proposal["action"] == "BUY", "snapshot 必须保留 LLM 原始 proposal"
+    assert veto_snapshot.policy["risk_veto"] is True, "policy 段必须记录 Risk VETO 结果"
+    assert veto_snapshot.output["final_decision"] == "VETO", "output.final_decision == VETO"
+    _step("  LLM Proposal(BUY) != Final Decision Authority(VETO) OK")
+
+    # ----------------------------------------------------------- X-06 EXACT_REPLAY
+    _step("STEP 12: EXACT_REPLAY (no live tool calls, reuse ToolResultSnapshot)")
+
+    adapter_calls = {"count": 0}
+
+    class _ReplayFallback:
+        def analyze_stock(self, symbol, as_of=None, patterns=None):
+            adapter_calls["count"] += 1
+            return {
+                "symbol": symbol,
+                "orchestration": "local-fallback",
+                "market_snapshot_id": "mds-e2e-exact-1",
+                "content_signal_response": {
+                    "contract_version": "content-factor-signal.v3",
+                    "items": [{"content_snapshot_id": "cs-e2e-exact-1", "claim_id": "claim-e2e", "evidence_refs": ["ev-e2e"]}],
+                },
+                "proposal": {"symbol": symbol, "action": "BUY", "proposed_weight": 0.05, "confidence": 0.8, "evidence_count": 3},
+            }
+
+    replay_runtime = DecisionRuntime(claude_agent=_NoModel(), fallback=_ReplayFallback())
+    first = replay_runtime.analyze_stock("600519.SH")
+    assert adapter_calls["count"] == 1
+    assert first["decision_snapshot_id"], "normal run must produce decision_snapshot_id"
+    tool_repo = ToolResultRepository()
+    objective = f"分析股票 600519.SH 当前是否存在技术机会，并给出风险和操作条件。"
+    tool_snapshot = tool_repo.find_by_request("decision_runtime.analyze_stock", {"objective": objective})
+    assert tool_snapshot is not None, "ToolResultSnapshot must be persisted on normal run"
+
+    replayed = DecisionReplayService().replay(first["decision_id"], mode="EXACT_REPLAY")
+    assert not replayed.get("error"), f"EXACT_REPLAY failed: {replayed.get('error')}"
+    assert replayed["mode"] == "EXACT_REPLAY"
+    stored = replayed["decision_snapshot"] or {}
+    assert stored["market"]["snapshot_id"] == "mds-e2e-exact-1", "replay must reuse original market snapshot id"
+    assert stored["content"]["snapshot_id"] == "cs-e2e-exact-1", "replay must reuse original content snapshot id"
+    assert adapter_calls["count"] == 1, "EXACT_REPLAY must not re-invoke live execution adapters"
+    replayed_tool = tool_repo.find_by_request("decision_runtime.analyze_stock", {"objective": objective})
+    assert replayed_tool is not None and replayed_tool.tool_result_id == tool_snapshot.tool_result_id, (
+        "EXACT_REPLAY must reuse the persisted ToolResultSnapshot"
+    )
+    _step("  EXACT_REPLAY reuses snapshots/tool results without live calls OK")
+
+
 def main() -> None:
     with httpx.Client(timeout=60) as client:
         _step("STEP 0: health checks")
@@ -94,7 +187,7 @@ def main() -> None:
         snapshot = _data(client.post(f"{QUANT}/api/v1/market/snapshots", json={"symbols": SYMBOLS, "start": START, "end": END}))
         snapshot_id = snapshot["snapshot_id"]
         assert snapshot_id, "snapshot_id required (§42)"
-        assert snapshot.get("data_version"), "data_version required (§42)"
+        assert snapshot.get("data_version"), "data_version required (§42/X-03)"
         # §42：snapshot is immutable —— 两次读取 manifest hash 必须一致。
         first = _data(client.get(f"{QUANT}/api/v1/market/snapshots/{snapshot_id}"))
         second = _data(client.get(f"{QUANT}/api/v1/market/snapshots/{snapshot_id}"))
@@ -102,7 +195,7 @@ def main() -> None:
         _step(f"  snapshot={snapshot_id} data_version={snapshot['data_version']}")
 
         # ------------------------------------------------------------------
-        _step("STEP 2-4: Content ingest -> KnowledgeUnit -> Fact Verification -> Signal")
+        _step("STEP 2-4: Content ingest -> KnowledgeUnit -> Fact Verification -> Signal(v3)")
         content = RemoteContentClient(CONTENT)
         task = content.enqueue_bilibili(
             bv_id="BV1fourRepoFixture",
@@ -125,12 +218,23 @@ def main() -> None:
                 end=(window_end + timedelta(minutes=1)).isoformat(),
             )
         )
-        assert signals["contract_version"] == "content-factor-signal.v2", "signal.contract_version (§42)"
+        # P0 X-03：main 主契约必须是 v3，且 content_snapshot_id / claim/evidence lineage 非空。
+        assert signals["contract_version"] == "content-factor-signal.v3", "signal.contract_version must be v3 on main"
+        items = signals.get("items") or []
+        assert items, "content signals must not be empty"
+        content_snapshot_ids = sorted({str(item.get("content_snapshot_id")) for item in items if item.get("content_snapshot_id")})
+        assert content_snapshot_ids, "v3 signals must carry content_snapshot_id (no silent snapshot failure)"
+        content_snapshot_id = content_snapshot_ids[0]
+        assert any(item.get("claim_id") or item.get("evidence_refs") for item in items), (
+            "claim/evidence lineage must not be empty for claim fixture"
+        )
+        _step(f"  content_snapshot_id={content_snapshot_id} signal_contract={signals['contract_version']}")
 
         # ------------------------------------------------------------------
         _step("STEP 5: Factor Alpha Score / Factor Evidence from Quant Discovery Snapshot")
         alpha = _data(client.post(f"{FACTOR}/api/v1/alpha/score", json={"symbols": SYMBOLS, "as_of": END}))
-        assert alpha.get("factor_set_version"), "factor_set_version required (§42)"
+        factor_set_version = alpha.get("factor_set_version")
+        assert factor_set_version, "factor_set identity required (X-03: not just HTTP 200)"
         assert alpha.get("market_snapshot_id") == snapshot_id, "factor market_snapshot_id == quant snapshot (§42)"
         # 用确定性公式在 quant 快照上产出 Factor Evidence（非 fallback 数据源）。
         evaluation = _data(
@@ -141,6 +245,7 @@ def main() -> None:
         )
         assert evaluation.get("metrics"), "factor evidence metrics required (§42)"
         assert evaluation.get("data_snapshot_id") == snapshot_id, "factor evidence must come from quant snapshot"
+        research_experiment_id = alpha.get("research_experiment_id") or evaluation.get("research_experiment_id")
 
         # ------------------------------------------------------------------
         _step("STEP 6: Agent portfolio risk boundary")
@@ -172,11 +277,12 @@ def main() -> None:
         )
         completed_backtest = _wait_backtest(client, backtest["backtest_id"])
         assert completed_backtest["status"] == "COMPLETED", "backtest status == COMPLETED (§42)"
+        assert completed_backtest.get("market_snapshot_id", snapshot_id) == snapshot_id, "backtest bound to same market snapshot"
         metrics = _data(client.get(f"{QUANT}/api/v1/backtests/{backtest['backtest_id']}/metrics"))
         assert "quality_flags" in metrics, "quality_flags must be explicitly returned (§42)"
 
         # ------------------------------------------------------------------
-        _step("STEP 9: Agent DecisionSnapshot (§38)")
+        _step("STEP 9: Agent DecisionSnapshot v2 with full lineage (§38/X-03)")
         decision = client.post(
             f"{AGENT}/api/v1/decisions",
             json={
@@ -190,10 +296,24 @@ def main() -> None:
                 "market_features": {"data_snapshot_id": snapshot_id, "data_version": snapshot["data_version"], "source": "quant"},
                 "decision_snapshot": {
                     "market": {"snapshot_id": snapshot_id, "data_version": snapshot["data_version"], "source": "quant"},
-                    "content": {"signal_contract": signals["contract_version"]},
-                    "factor": {"factor_set_version": alpha["factor_set_version"], "alpha_score_contract": "factor.v1"},
+                    "content": {"signal_contract": signals["contract_version"], "snapshot_id": content_snapshot_id},
+                    "factor": {
+                        "factor_set_version": factor_set_version,
+                        "alpha_score_contract": "factor.v1",
+                        "research_experiment_id": research_experiment_id,
+                    },
                     "strategy": {"strategy_id": "four-repo-e2e", "backtest_id": backtest["backtest_id"]},
                     "model": {"provider": "fixture", "model": "four-repo-e2e", "model_version": "v1", "prompt_version": "v1"},
+                    "runtime": {"runtime_mode": "DETERMINISTIC_FALLBACK", "fallback_used": True, "fallback_reason": "MANUAL", "supervisor_version": "four-repo-e2e"},
+                    "proposal": {"candidates": ["600519.SH"], "action": "BUY"},
+                    "policy": {"policy_version": "policy.v1", "approved": True, "final_action": "BUY"},
+                    "inputs": {
+                        "market_snapshot_ids": [snapshot_id],
+                        "content_snapshot_ids": [content_snapshot_id],
+                        "research_experiment_ids": [research_experiment_id] if research_experiment_id else [],
+                        "factor_set_ids": [factor_set_version],
+                    },
+                    "output": {"final_decision": "BUY"},
                 },
                 "decision_quality": "HIGH",
             },
@@ -203,6 +323,35 @@ def main() -> None:
         decision_id = decision_payload["decision_id"]
         assert decision_payload.get("decision_snapshot_id"), "decision_snapshot required (§42)"
 
+        # X-03：完整 DecisionSnapshot v2 快照读取（schema/runtime/proposal/policy/output + lineage）。
+        stored_snapshot = _data(client.get(f"{AGENT}/api/v1/decisions/{decision_id}/snapshot"))
+        assert stored_snapshot["schema_version"] == "decision.snapshot.v2", "DecisionSnapshot schema_version v2 required"
+        assert stored_snapshot["runtime"].get("runtime_mode"), "runtime.runtime_mode required"
+        assert stored_snapshot["proposal"], "proposal segment required"
+        assert stored_snapshot["policy"], "policy segment required (本次真实执行结果)"
+        assert stored_snapshot["output"].get("final_decision"), "output/final_decision required"
+        lineage_pairs = {(item.get("type"), item.get("id")) for item in stored_snapshot.get("lineage") or []}
+        assert ("MARKET_SNAPSHOT", snapshot_id) in lineage_pairs, "MARKET_SNAPSHOT lineage required"
+        assert ("CONTENT_SNAPSHOT", content_snapshot_id) in lineage_pairs, "CONTENT_SNAPSHOT lineage required"
+        assert ("FACTOR_SET", factor_set_version) in lineage_pairs, "FACTOR_SET lineage required"
+        assert ("BACKTEST", backtest["backtest_id"]) in lineage_pairs, "BACKTEST lineage required"
+        assert stored_snapshot["inputs"]["content_snapshot_ids"] == [content_snapshot_id]
+
+        # ------------------------------------------------------------------
+        _step("STEP 9b: Single decision path - actionable analyze_stock (X-04)")
+        actionable = client.post(f"{AGENT}/api/v1/analyze/stock", json={"symbol": "600519.SH"})
+        actionable.raise_for_status()
+        actionable_payload = actionable.json()
+        assert actionable_payload.get("decision_id"), "actionable decision must carry decision_id"
+        assert actionable_payload.get("decision_snapshot_id"), "actionable decision must carry decision_snapshot_id"
+        assert actionable_payload.get("runtime_mode"), "runtime_mode must be explicit"
+        assert actionable_payload.get("policy") is not None, "policy governance result required"
+        assert actionable_payload.get("final_decision"), "final_decision required"
+        actionable_snapshot = _data(client.get(f"{AGENT}/api/v1/decisions/{actionable_payload['decision_id']}/snapshot"))
+        assert actionable_snapshot["schema_version"] == "decision.snapshot.v2"
+        assert actionable_snapshot["runtime"]["runtime_mode"] == actionable_payload["runtime_mode"]
+        _step(f"  actionable decision={actionable_payload['decision_id']} mode={actionable_payload['runtime_mode']}")
+
         # ------------------------------------------------------------------
         _step("STEP 10: Replay -> verify lineage/version/snapshot (§39)")
         replay = client.post(f"{AGENT}/api/v1/decisions/{decision_id}/replay", json={"mode": "original"})
@@ -211,11 +360,17 @@ def main() -> None:
         stored = replay_payload.get("decision_snapshot") or {}
         assert stored, "replay must return decision_snapshot (§42)"
         assert stored["market"]["snapshot_id"] == snapshot_id, "agent snapshot anchored to quant snapshot (§42)"
+        assert stored["content"].get("snapshot_id") == content_snapshot_id, "content snapshot preserved in replay"
+        assert stored.get("runtime", {}).get("runtime_mode"), "runtime segment preserved in replay"
+        assert stored.get("proposal") and stored.get("policy"), "proposal/policy segments preserved in replay"
         lineage = stored.get("lineage") or []
         assert {"type": "MARKET_SNAPSHOT", "id": snapshot_id} in [
             {"type": item.get("type"), "id": item.get("id")} for item in lineage
         ], "market snapshot lineage preserved (§42)"
         assert any(item.get("type") == "BACKTEST" and item.get("id") == backtest["backtest_id"] for item in lineage)
+
+        # ------------------------------------------------------------------
+        _run_inprocess_scenarios()
 
         _step("ALL FOUR-REPO BUSINESS ASSERTIONS PASSED")
 
