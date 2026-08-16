@@ -72,6 +72,22 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+SERVICE_NAME = "stock_agent"
+SERVICE_VERSION = "0.1.0"
+CONTRACT_VERSIONS = ["decision.v1", "market-data.v1", "factor.v1", "content.v1", "backtest.v1", "trading.v1"]
+
+
+@app.get("/health/version")
+def health_version() -> dict:
+    # §106 Release Version：每个服务暴露自身版本与契约版本清单。
+    return {
+        "service": SERVICE_NAME,
+        "service_version": SERVICE_VERSION,
+        "git_commit": os.getenv("AGENT_GIT_COMMIT", "unknown"),
+        "contract_versions": CONTRACT_VERSIONS,
+    }
+
+
 @app.get("/health/live")
 def health_live() -> dict:
     return {"status": "ok"}

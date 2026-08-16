@@ -7,6 +7,7 @@ from typing import Callable
 from financial_agent.config import load_yaml_config
 
 from agent.contracts import AgentArtifact, AgentConflict, AgentRole, AgentTask, TaskStatus
+from agent.decision_quality import compute_decision_quality
 from agent.shared_context import BudgetExceeded, SharedContext
 from agent.task_graph import TaskGraph
 
@@ -81,6 +82,9 @@ class Supervisor:
         artifacts = shared.artifacts()
         conflicts = self._detect_conflicts(artifacts)
         usage = shared.usage()
+        artifact_payloads = [item.model_dump(mode="json") for item in artifacts]
+        # §63：决策质量必须显式评估，依赖服务不可用时标记 DEGRADED。
+        decision_quality = compute_decision_quality(artifact_payloads, errors)
         if run is not None:
             for conflict in conflicts:
                 self.repository.add_conflict(
@@ -88,7 +92,7 @@ class Supervisor:
                     resolution_policy=conflict.resolution_policy, resolved_value={"value": conflict.resolved_value}, resolved_by=conflict.resolved_by,
                 )
             self.repository.update_agent_run(run.id, status="FAILED" if errors else "SUCCESS", usage=usage)
-        return {"agent_run_id": run.id if run is not None else None, "artifacts": [item.model_dump(mode="json") for item in artifacts], "errors": errors, "conflicts": [item.model_dump(mode="json") for item in conflicts], "usage": usage}
+        return {"agent_run_id": run.id if run is not None else None, "artifacts": artifact_payloads, "errors": errors, "conflicts": [item.model_dump(mode="json") for item in conflicts], "usage": usage, "decision_quality": decision_quality}
 
     def _persist_subtask(self, run, artifact: AgentArtifact) -> None:
         if run is not None:

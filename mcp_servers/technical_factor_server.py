@@ -173,28 +173,33 @@ def _merge_alpha_factors(items: list[dict]) -> None:
         if not symbols:
             return
         result = factor_mining_server.scan_alpha_factors(symbols)
-        alpha_items = result.get("items") or []
+        # factor.v1 新契约使用 scores/score/rank；兼容旧 items/alpha_score 结构。
+        alpha_items = result.get("scores") or result.get("items") or []
         if not alpha_items:
             return
-        by_symbol = {entry["symbol"]: entry for entry in alpha_items}
-        n = len(alpha_items)
+        by_symbol = {entry["symbol"]: entry for entry in alpha_items if entry.get("symbol")}
+        n = len(by_symbol)
         top_cutoff = max(1, n // 10)
         for item in items:
             entry = by_symbol.get(item.get("symbol"))
             if entry is None or "signals" not in item:
                 continue
-            item["alpha_score"] = entry["alpha_score"]
-            item["alpha_rank"] = entry["alpha_rank"]
-            if entry["alpha_rank"] <= top_cutoff:
-                score = max(0, min(100, round(100 * (1 - (entry["alpha_rank"] - 1) / max(n - 1, 1)))))
+            entry_score = entry.get("score", entry.get("alpha_score"))
+            entry_rank = entry.get("rank", entry.get("alpha_rank"))
+            if entry_score is None or entry_rank is None:
+                continue
+            item["alpha_score"] = entry_score
+            item["alpha_rank"] = entry_rank
+            if entry_rank <= top_cutoff:
+                score = max(0, min(100, round(100 * (1 - (entry_rank - 1) / max(n - 1, 1)))))
                 item["signals"].append({
                     "pattern": "ALPHA_TOP",
                     "triggered": True,
                     "score": score,
                     "entry_type": "横截面因子优选",
                     "evidence": [
-                        f"因子合成 alpha 分数 {entry['alpha_score']}，截面排名 {entry['alpha_rank']}/{n}",
-                        f"基于 {entry.get('factor_count', 0)} 个样本内挖掘因子等权合成",
+                        f"因子合成 alpha 分数 {entry_score}，截面排名 {entry_rank}/{n}",
+                        f"基于 factor_set={result.get('factor_set_version') or '未知'} 等权合成",
                     ],
                     "risk": ["样本内挖掘因子，存在过拟合风险，【待核验】"],
                     "confirm_condition": None,

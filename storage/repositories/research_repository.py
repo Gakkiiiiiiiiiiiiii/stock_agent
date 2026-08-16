@@ -7,6 +7,7 @@ from sqlalchemy import select
 from storage.db import session_scope
 from storage.models.research import (
     DecisionReview,
+    DecisionSnapshot,
     InvestmentDecision,
     InvestmentDecisionOutcome,
     MarketRegimeHistory,
@@ -168,3 +169,27 @@ class DecisionRepository:
             session.flush()
             session.refresh(review)
             return review
+
+
+class DecisionSnapshotRepository:
+    """DecisionSnapshot 持久化（设计文档 §26/§82）：决策可重放的版本锚点。"""
+
+    def save(self, **payload) -> DecisionSnapshot:
+        with session_scope() as session:
+            snapshot = DecisionSnapshot(**payload)
+            session.add(snapshot)
+            session.flush()
+            session.refresh(snapshot)
+            return snapshot
+
+    def get(self, snapshot_id: str) -> DecisionSnapshot | None:
+        with session_scope() as session:
+            return session.get(DecisionSnapshot, snapshot_id)
+
+    def get_for_decision(self, decision_id: str) -> DecisionSnapshot | None:
+        with session_scope() as session:
+            return session.execute(
+                select(DecisionSnapshot)
+                .where(DecisionSnapshot.decision_id == decision_id)
+                .order_by(DecisionSnapshot.created_at.desc())
+            ).scalars().first()

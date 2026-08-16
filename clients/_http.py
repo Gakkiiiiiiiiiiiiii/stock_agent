@@ -17,6 +17,11 @@ class SubsystemHttpClient:
 
     def request(self, method: str, path: str, *, payload: dict[str, Any] | None = None, params: dict[str, Any] | None = None) -> dict[str, Any]:
         trace_id = str((payload or {}).get("trace_id") or uuid4())
+        # §32：统一 Trace Headers，出站调用透传 trace/decision/caller。
+        headers = {"X-Trace-Id": trace_id, "X-Caller-Service": "stock_agent"}
+        decision_id = (payload or {}).get("decision_id")
+        if decision_id:
+            headers["X-Decision-Id"] = str(decision_id)
         last_error: Exception | None = None
         for attempt in range(self.retries + 1):
             try:
@@ -25,7 +30,7 @@ class SubsystemHttpClient:
                     f"{self.base_url}{path}",
                     json=payload,
                     params={key: value for key, value in (params or {}).items() if value is not None},
-                    headers={"X-Trace-Id": trace_id},
+                    headers=headers,
                     timeout=httpx.Timeout(connect=min(self.timeout_seconds, 5.0), read=self.timeout_seconds, write=self.timeout_seconds, pool=5.0),
                 )
                 if response.status_code not in {408, 429, 502, 503, 504}:

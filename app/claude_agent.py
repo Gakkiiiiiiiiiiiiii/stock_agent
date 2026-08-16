@@ -170,7 +170,7 @@ class ClaudeAgent:
         normal SkillExecutor remain the single final-report path."""
         from agent.supervisor import Supervisor, load_multi_agent_config
         from agent.plans.daily_market_decision import build_daily_market_decision_graph
-        from agent.specialists import MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
+        from agent.specialists import FactorSpecialist, MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
         from storage.bootstrap import create_all
         from storage.repositories.p2_repository import P2Repository
         from agent.contracts import AgentRole
@@ -182,6 +182,7 @@ class ClaudeAgent:
         specialists = {
             AgentRole.MARKET: MarketSpecialist(self.tool_registry, context), AgentRole.RESEARCH: ResearchSpecialist(self.tool_registry, context),
             AgentRole.TECHNICAL: TechnicalSpecialist(self.tool_registry, context),
+            AgentRole.FACTOR: FactorSpecialist(self.tool_registry, context),
             AgentRole.PORTFOLIO: PortfolioSpecialist(self.tool_registry, context), AgentRole.RISK: RiskSpecialist(self.tool_registry, context),
         }
         create_all()

@@ -34,9 +34,10 @@ def test_daily_decision_plan_separates_task_type_from_agent_role():
     graph = build_daily_market_decision_graph("daily")
     tasks = list(graph.tasks.values())
     assert {task.task_type for task in tasks} == {"daily_market_decision"}
-    assert {task.assigned_agent for task in tasks} >= {AgentRole.MARKET, AgentRole.PORTFOLIO, AgentRole.RISK}
+    # §24：Factor Specialist 已挂入 DAG，与 Market/Research/Technical 并行。
+    assert {task.assigned_agent for task in tasks} >= {AgentRole.MARKET, AgentRole.FACTOR, AgentRole.PORTFOLIO, AgentRole.RISK}
     portfolio = next(task for task in tasks if task.assigned_agent == AgentRole.PORTFOLIO)
-    assert len(graph.dependencies(portfolio.task_id)) == 3
+    assert len(graph.dependencies(portfolio.task_id)) == 4
 
 
 def test_execution_is_idempotent_and_shadow_never_submits():

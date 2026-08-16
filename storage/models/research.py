@@ -139,6 +139,26 @@ class InvestmentDecisionOutcome(Base):
     realized_metrics: Mapped[dict] = mapped_column(JSON, default=dict)
 
 
+class DecisionSnapshot(Base):
+    """四系统集成核心数据对象 DecisionSnapshot（设计文档 §26 / §82）。"""
+
+    __tablename__ = "decision_snapshots"
+
+    snapshot_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid4()))
+    decision_id: Mapped[str] = mapped_column(String(36), index=True)
+    decision_time: Mapped[datetime | None] = mapped_column(DateTime)
+    market: Mapped[dict] = mapped_column(JSON, default=dict)
+    content: Mapped[dict] = mapped_column(JSON, default=dict)
+    factor: Mapped[dict] = mapped_column(JSON, default=dict)
+    strategy: Mapped[dict] = mapped_column(JSON, default=dict)
+    agent: Mapped[dict] = mapped_column(JSON, default=dict)
+    portfolio: Mapped[dict] = mapped_column(JSON, default=dict)
+    risk: Mapped[dict] = mapped_column(JSON, default=dict)
+    lineage: Mapped[list] = mapped_column(JSON, default=list)
+    decision_quality: Mapped[str | None] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
 class DecisionReview(Base):
     __tablename__ = "decision_review"
 

@@ -26,17 +26,30 @@ class MiningJobResponse(BaseModel):
 class AlphaScoreRequest(BaseModel):
     symbols: list[str] = Field(default_factory=list)
     as_of: str | None = None
+    # 设计文档 §14.2：可选因子集（当前 factor 服务仅支持 production 全集）
+    factor_set: str | None = "production"
+
+
+class AlphaScoreEvidence(BaseModel):
+    factor_id: str
+    contribution: float | None = None
 
 
 class AlphaScore(BaseModel):
+    """§14.2 On-demand Alpha Score 单项。"""
+
     symbol: str
-    alpha_score: float
-    alpha_rank: int
-    factor_count: int
+    score: float | None = None
+    rank: int | None = None
+    evidence: list[AlphaScoreEvidence] = Field(default_factory=list)
 
 
 class AlphaScoreResponse(BaseModel):
     as_of: str | None = None
-    factor_version: str | None = None
+    factor_set_version: str | None = None
+    market_snapshot_id: str | None = None
     data_version: str | None = None
-    items: list[AlphaScore] = Field(default_factory=list)
+    data_snapshot_id: str | None = None
+    scores: list[AlphaScore] = Field(default_factory=list)
+    # 兼容旧结构的精简条目 {symbol, score}
+    items: list[dict] = Field(default_factory=list)

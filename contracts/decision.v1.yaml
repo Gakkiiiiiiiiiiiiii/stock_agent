@@ -1,0 +1,54 @@
+# decision.v1 Contract（设计文档 §25 / §26 / §27）
+# Producer: stock_agent   Consumers: quant（Execution/Paper）、审计/Replay
+contract_version: decision.v1
+service: stock_agent
+endpoints:
+  - name: replay_decision
+    method: POST
+    path: /api/v1/decisions/{decision_id}/replay
+    description: "§27 Decision Replay：默认不读取最新数据，使用原始 Market/Content/Factor Snapshot、Config、Model Prompt 重放"
+    request:
+      mode: { type: string, enum: [original, current, multi_agent], default: original }
+    errors:
+      404: DECISION_NOT_FOUND
+decision_actions:
+  # §25 Agent 输出必须收敛为结构化决策动作
+  - APPROVE
+  - APPROVE_WITH_ADJUSTMENT
+  - VETO
+decision_snapshot:
+  # §26 DecisionSnapshot：四系统集成后的核心数据对象，支持 Replay
+  fields:
+    decision_id: string
+    decision_time: datetime
+    market:
+      snapshot_id: { type: string, description: "mds-xxx（market-data.v1）" }
+      data_version: string
+    content:
+      snapshot_id: string
+      contract_version: { type: string, example: content-factor-signal.v2 }
+    factor:
+      factor_set_version: string
+      factor_model_version: string
+    strategy:
+      strategy_version: string
+    agent:
+      agent_version: string
+      prompt_version: string
+      model_name: string
+      model_version: string
+    portfolio:
+      portfolio_policy_version: string
+    risk:
+      risk_policy_version: string
+    lineage:
+      type: object
+      description: 各子系统输入/输出与依赖调用链锚点
+    decision_quality: { type: string, enum: [HIGH, MEDIUM, LOW, DEGRADED] }
+decision_quality_rules:
+  # §24 依赖服务不可用时必须显式降级，不得静默假装数据完整
+  - 任一关键依赖（market/content/factor）不可用 => DEGRADED
+  - 证据不完整 => LOW/MEDIUM，必须在输出中给出 reason 列表
+dependencies:
+  allowed: [quant HTTP, stock_factor HTTP, stock_content HTTP, Model API, PostgreSQL]
+  forbidden: [quant Python import, stock_factor Python import, stock_content Python import]

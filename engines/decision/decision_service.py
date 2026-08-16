@@ -8,7 +8,7 @@ from engines.decision.benchmark_router import BenchmarkRouter
 from engines.memory.service import MemoryService
 from financial_agent.config import load_yaml_config
 from storage.bootstrap import create_all
-from storage.repositories.research_repository import DecisionRepository
+from storage.repositories.research_repository import DecisionRepository, DecisionSnapshotRepository
 from storage.repositories.job_repository import JobTaskRepository
 from engines.decision.evaluation_clock import outcome_not_before
 from engines.market.market_clock import MarketClock
@@ -48,9 +48,12 @@ class DecisionService:
     def __init__(self, repository: DecisionRepository | None = None, memory_service: MemoryService | None = None) -> None:
         self.repository = repository or DecisionRepository()
         self.memory_service = memory_service or MemoryService()
+        self.snapshots = DecisionSnapshotRepository()
 
     def save_decision(self, **payload: Any) -> dict:
         create_all()
+        snapshot_input = payload.pop("decision_snapshot", None) or {}
+        decision_quality = payload.pop("decision_quality", None)
         route_attrs = {key: payload.pop(key) for key in _ROUTING_ONLY_KEYS if key in payload}
         # Persist every router input so replay can reconstruct the historical
         # benchmark decision rather than silently using today's defaults.
@@ -73,8 +76,36 @@ class DecisionService:
         payload.setdefault("benchmark_router_version", route.get("router_version") or get_version("benchmark_router_version"))
         payload.setdefault("supervisor_version", "v1" if payload.get("agent_run_id") else None)
         decision = self.repository.create(**payload)
+        snapshot = self._save_decision_snapshot(decision, snapshot_input, decision_quality)
         jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at))
-        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs}
+        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs, "decision_snapshot_id": snapshot.snapshot_id}
+
+    def _save_decision_snapshot(self, decision: Any, provided: dict[str, Any], decision_quality: str | None) -> Any:
+        """落库 DecisionSnapshot（§26）：把四系统版本锚点集中到单一可重放对象。"""
+        market = dict(provided.get("market") or {})
+        market.setdefault("snapshot_id", (decision.market_features or {}).get("data_snapshot_id"))
+        market.setdefault("data_version", (decision.market_features or {}).get("data_version"))
+        snapshot_payload = {
+            "decision_id": decision.id,
+            "decision_time": decision.decision_as_of or decision.created_at,
+            "market": market,
+            "content": dict(provided.get("content") or {}),
+            "factor": dict(provided.get("factor") or {}),
+            "strategy": dict(provided.get("strategy") or {
+                "strategy_version": f"{decision.skill_slug or 'skill'}@v{decision.skill_version}" if decision.skill_version else decision.skill_slug,
+                "skill_contract_hash": decision.skill_contract_hash,
+                "skill_markdown_hash": decision.skill_markdown_hash,
+            }),
+            "agent": dict(provided.get("agent") or {
+                "agent_version": decision.supervisor_version,
+                "participating_agents": decision.participating_agents,
+            }),
+            "portfolio": dict(provided.get("portfolio") or {"portfolio_policy_version": decision.portfolio_rule_version}),
+            "risk": dict(provided.get("risk") or {"risk_policy_version": provided.get("risk_policy_version")}),
+            "lineage": list(provided.get("lineage") or []),
+            "decision_quality": decision_quality or provided.get("decision_quality"),
+        }
+        return self.snapshots.save(**snapshot_payload)
 
     @staticmethod
     def schedule_evaluations(decision_id: str, decision_date: date) -> list[str]:

@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, Response
 PUBLIC_PATHS = {
     "/health/live",
     "/health/ready",
+    "/health/version",
     "/metrics",
 }
 
@@ -62,6 +63,11 @@ async def security_and_trace_middleware(request: Request, call_next: Callable):
     METRICS[f"api_status_{response.status_code}_total"] += 1
     response.headers["x-trace-id"] = trace_id
     response.headers["x-elapsed-ms"] = str(elapsed_ms)
+    # §32：统一 Trace Headers，全链路保持同一 trace_id 并透传 decision/caller。
+    if request.headers.get("x-decision-id"):
+        response.headers["x-decision-id"] = request.headers["x-decision-id"]
+    if request.headers.get("x-caller-service"):
+        response.headers["x-caller-service"] = request.headers["x-caller-service"]
     return response
 
 

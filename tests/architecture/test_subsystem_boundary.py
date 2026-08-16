@@ -38,3 +38,35 @@ def test_factor_mcp_adapter_does_not_import_factor_engine():
         elif isinstance(node, ast.Import):
             direct.update(alias.name for alias in node.names)
     assert not {name for name in direct if name == "engines.factor" or name.startswith("engines.factor")}
+
+
+_CODE_DIRS = (
+    "agent",
+    "app",
+    "clients",
+    "contracts",
+    "engines",
+    "financial_agent",
+    "mcp_servers",
+    "services",
+    "storage",
+    "workers",
+)
+
+
+def test_agent_integrates_other_repos_only_via_http():
+    # §6.3：agent 对 quant/factor/content 只能走 HTTP 契约，
+    # 禁止 import 其他仓库的 Python 实现（quant_demo / stock_factor / stock_content）。
+    imports: set[str] = set()
+    for dirname in _CODE_DIRS:
+        path = ROOT / dirname
+        if path.exists():
+            imports |= _imports(path)
+    forbidden = {
+        name
+        for name in imports
+        if name.startswith("quant_demo")
+        or name.startswith("stock_factor")
+        or name.startswith("stock_content")
+    }
+    assert not forbidden

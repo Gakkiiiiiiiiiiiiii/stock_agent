@@ -24,6 +24,7 @@ def review_trade(request: TradeReviewInput) -> dict:
 
 
 @router.post("/api/v1/decision/{decision_id}/replay")
+@router.post("/api/v1/decisions/{decision_id}/replay")  # §27 规范路径别名
 def replay_decision(decision_id: str, request: DecisionReplayRequest | None = None) -> dict:
     """决策回放（§27）：重放确定性决策链并与落库产物比对，决策不存在返回 404。"""
     mode = request.mode if request is not None else "original"

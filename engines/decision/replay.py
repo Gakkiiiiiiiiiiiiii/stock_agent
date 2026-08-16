@@ -41,7 +41,7 @@ from engines.portfolio.pipeline import run_portfolio_pipeline
 from engines.versioning import get_version
 from storage.bootstrap import create_all
 from storage.repositories.market_feature_repository import MarketFeatureRepository
-from storage.repositories.research_repository import DecisionRepository
+from storage.repositories.research_repository import DecisionRepository, DecisionSnapshotRepository
 from storage.repositories.p2_repository import P2Repository
 
 REPLAY_MODES = ("original", "current", "multi_agent")
@@ -65,6 +65,7 @@ class DecisionReplayService:
     ) -> None:
         self.repository = repository or DecisionRepository()
         self.market_features = market_features or MarketFeatureRepository()
+        self.snapshots = DecisionSnapshotRepository()
 
     def replay(self, decision_id: str, mode: str = "original") -> dict:
         if mode not in REPLAY_MODES:
@@ -75,6 +76,8 @@ class DecisionReplayService:
             return {"error": "DECISION_NOT_FOUND", "decision_id": decision_id}
 
         market_features, market_feature_source = self._resolve_market_features(decision, mode)
+        # §27：Replay 优先使用决策落库时的 DecisionSnapshot 版本锚点，而不是最新数据。
+        decision_snapshot = self._load_decision_snapshot(decision_id)
         multi_agent = self._multi_agent_provenance(decision) if mode == "multi_agent" else None
         if mode == "multi_agent" and multi_agent and multi_agent.get("available"):
             replay_output, current_versions = self._run_multi_agent_chain(decision, multi_agent)
@@ -120,6 +123,7 @@ class DecisionReplayService:
                 "replay_uses_current_code": True,
                 "market_feature_source": market_feature_source,
                 "market_features": market_features,
+                "decision_snapshot": decision_snapshot,
                 "original_output": original_output,
                 "replay_output": replay_output,
                 "multi_agent": multi_agent,
@@ -127,6 +131,24 @@ class DecisionReplayService:
                 "diffs": diffs,
             }
         )
+
+    def _load_decision_snapshot(self, decision_id: str) -> dict | None:
+        snapshot = self.snapshots.get_for_decision(decision_id)
+        if snapshot is None:
+            return None
+        return {
+            "snapshot_id": snapshot.snapshot_id,
+            "decision_time": snapshot.decision_time,
+            "market": dict(snapshot.market or {}),
+            "content": dict(snapshot.content or {}),
+            "factor": dict(snapshot.factor or {}),
+            "strategy": dict(snapshot.strategy or {}),
+            "agent": dict(snapshot.agent or {}),
+            "portfolio": dict(snapshot.portfolio or {}),
+            "risk": dict(snapshot.risk or {}),
+            "lineage": list(snapshot.lineage or []),
+            "decision_quality": snapshot.decision_quality,
+        }
 
     @staticmethod
     def _multi_agent_provenance(decision: Any) -> dict:
