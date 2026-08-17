@@ -69,6 +69,10 @@ jobs:
         working-directory: stock_agent
         run: python scripts/wait_four_repo_stack.py
 
+      - name: Seed fixture market data (§5.3)
+        working-directory: stock_agent
+        run: python scripts/four_repo_seed_fixture.py
+
       - name: Contract Handshake (P0 X-02)
         working-directory: stock_agent
         run: python scripts/four_repo_contract_handshake.py

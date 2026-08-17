@@ -5,6 +5,7 @@ WORKDIR /app
 COPY pyproject.toml README.md ./
 COPY app ./app
 COPY agent ./agent
+COPY clients ./clients
 COPY config ./config
 COPY engines ./engines
 COPY financial_agent ./financial_agent

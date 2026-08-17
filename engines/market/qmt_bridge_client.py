@@ -227,6 +227,10 @@ class QmtBridgeClient:
         return data.get("data", {}) or {}
 
     def _run(self, command: str, *extra_args: str, timeout_seconds: int | None = None) -> dict[str, Any]:
+        # §5.1：集成栈内 QMT 不作为内置服务；显式禁用时快速失败（交给上层降级），
+        # 避免在无 QMT 环境中无限重试/阻塞决策链路。
+        if os.getenv("QMT_BRIDGE_DISABLED", "").strip().lower() in {"1", "true", "yes"}:
+            raise QmtBridgeError("QMT bridge disabled (QMT_BRIDGE_DISABLED)")
         self._ensure_runtime_paths()
         cmd = [
             str(self.python_path),

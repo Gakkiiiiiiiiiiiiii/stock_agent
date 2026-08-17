@@ -101,6 +101,10 @@ jobs:
         env:
           QUANT_SERVICE_URL: http://localhost:8011
 
+      - name: Seed fixture market data (§5.3)
+        working-directory: stock_agent
+        run: python scripts/four_repo_seed_fixture.py
+
       # ---- Contract Tests ----
       - name: Run contract tests
         working-directory: stock_agent

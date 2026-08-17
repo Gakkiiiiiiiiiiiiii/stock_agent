@@ -37,9 +37,14 @@ def apply_sql_migrations() -> None:
             sql = path.read_text(encoding="utf-8")
             _ensure_migration_sql_compatible(path, sql, backend)
             for statement in [part.strip() for part in sql.split(";") if part.strip()]:
+                # 每条语句独立 savepoint：Postgres 中任何语句失败都会中止当前事务，
+                # 必须先回滚 savepoint 才能继续（SQLite 无此问题，语义一致）。
+                savepoint = conn.begin_nested()
                 try:
                     conn.exec_driver_sql(statement)
+                    savepoint.commit()
                 except Exception as exc:  # noqa: BLE001
+                    savepoint.rollback()
                     message = str(exc).lower()
                     if "duplicate column" in message or ("already exists" in message and "column" in message):
                         continue

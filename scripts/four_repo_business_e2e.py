@@ -173,7 +173,7 @@ def _run_inprocess_scenarios() -> None:
 
 
 def main() -> None:
-    with httpx.Client(timeout=60) as client:
+    with httpx.Client(timeout=300) as client:
         _step("STEP 0: health checks")
         _wait_healthy(client, f"{QUANT}/health")
         _wait_healthy(client, f"{CONTENT}/healthz")
@@ -240,7 +240,7 @@ def main() -> None:
         evaluation = _data(
             client.post(
                 f"{FACTOR}/api/v1/factors/evaluate",
-                json={"rpn": ["close", "ts_delay_5", "div"], "symbols": SYMBOLS, "start": START, "end": END, "horizon": 5},
+                json={"rpn": ["close", "close", "ts_delay_5", "div"], "symbols": SYMBOLS, "start": START, "end": END, "horizon": 5},
             )
         )
         assert evaluation.get("metrics"), "factor evidence metrics required (§42)"

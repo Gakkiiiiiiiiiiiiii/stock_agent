@@ -29,10 +29,11 @@ def main() -> None:
     while pending and time.monotonic() < deadline:
         for endpoint in tuple(pending):
             try:
-                with urlopen(endpoint, timeout=3) as response:  # fixed local Compose endpoints
+                with urlopen(endpoint, timeout=30) as response:  # fixed local Compose endpoints
                     if response.status < 500:
                         pending.remove(endpoint)
-            except URLError:
+            except (URLError, OSError, TimeoutError):
+                # 启动中的服务可能直接断开连接（RemoteDisconnected 等）：继续重试。
                 pass
         if pending:
             time.sleep(2)

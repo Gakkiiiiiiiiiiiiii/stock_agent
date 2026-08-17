@@ -70,6 +70,21 @@ services:
       quant:
         condition: service_started
 
+  # P0 X-07：任务处理 worker（API 只负责任务入队/查询）。
+  stock-content-worker:
+    build:
+      context: ../../../stock_content
+    command: ["python", "-m", "stock_content.workers.content_worker"]
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://postgres:postgres@content-postgres:5432/stock_content
+      QUANT_SERVICE_URL: http://quant:8011
+      CONTENT_EXTERNAL_FACT_PROVIDER: quant
+    depends_on:
+      content-postgres:
+        condition: service_healthy
+      quant:
+        condition: service_started
+
   factor-postgres:
     image: postgres:16-alpine
     environment:
@@ -126,9 +141,9 @@ services:
 
   stock-agent:
     build:
-      context: ../../..
+      context: ../..
     env_file:
-      - path: ../../../.env
+      - path: ../../.env
         required: false
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-agent}:${POSTGRES_PASSWORD:-change_me_agent_pass}@agent-postgres:5432/${POSTGRES_DB:-financial_agent}
@@ -138,6 +153,10 @@ services:
       QUANT_SERVICE_URL: http://quant:8011
       MARKET_DATA_SERVICE_URL: http://quant:8011
       QDRANT_URL: http://qdrant:6333
+      # §5.1：集成栈无 QMT Bridge，禁止直连重试阻塞决策链路。
+      QMT_BRIDGE_DISABLED: "true"
+      # §43：集成栈只包含 postgres/qdrant，embedding/reranker 不在栈内。
+      READY_REQUIRED_CHECKS: api,postgres,qdrant
     ports:
       - "${AGENT_PORT:-8000}:8000"
     depends_on:

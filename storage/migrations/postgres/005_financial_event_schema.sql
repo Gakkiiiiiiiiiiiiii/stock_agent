@@ -1,3 +1,18 @@
+-- P0 X-07：video_chunk/financial_event 引用的 video_asset 必须先存在（SQLite 不校验 FK，Postgres 会硬失败）。
+CREATE TABLE IF NOT EXISTS video_asset (
+    id BIGSERIAL PRIMARY KEY,
+    title VARCHAR(512),
+    source_type VARCHAR(32),
+    source_uri TEXT,
+    file_hash VARCHAR(128),
+    duration_ms BIGINT,
+    language VARCHAR(32),
+    video_type VARCHAR(64),
+    status VARCHAR(32),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS video_chunk (
     id BIGSERIAL PRIMARY KEY,
     video_id BIGINT NOT NULL REFERENCES video_asset(id),
