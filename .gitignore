@@ -40,3 +40,6 @@ storage/runtime/xiaoe_hls_poc/
 storage/runtime/**/*.tmp
 artifacts/runtime/**
 *.log
+
+# Codex local run artifacts
+.codex-runs/
