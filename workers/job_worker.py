@@ -36,23 +36,25 @@ def _handle_memory_lifecycle_sweep(payload: dict[str, Any], ensure_lease: Callab
 
 
 def _handle_decision_outcome(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
-    from datetime import date
+    from datetime import UTC, datetime, time
+    from engines.decision.outcome_service import OutcomeService
 
-    from engines.decision.decision_service import DecisionService
-    from engines.decision.outcome_evaluator import DecisionOutcomeEvaluator
-
-    service = DecisionService()
-    decision_result = service.get_decision(payload["decision_id"])
-    if not decision_result.get("found"):
-        raise ValueError("DECISION_NOT_FOUND")
-    metrics = DecisionOutcomeEvaluator().evaluate(decision_result["decision"], date.fromisoformat(payload["evaluation_date"]))
-    return service.record_outcome(payload["decision_id"], date.fromisoformat(payload["evaluation_date"]), int(payload["horizon_days"]), **metrics)
+    measured = payload.get("measured_at") or payload.get("evaluation_date")
+    if isinstance(measured, str) and len(measured) == 10:
+        measured = datetime.combine(datetime.fromisoformat(measured).date(), time(16), tzinfo=UTC)
+    elif isinstance(measured, str):
+        measured = datetime.fromisoformat(measured.replace("Z", "+00:00"))
+    if not isinstance(measured, datetime):
+        raise ValueError("OUTCOME_MEASURED_AT_REQUIRED")
+    return OutcomeService().refresh(decision_id=payload["decision_id"], horizon=str(payload.get("horizon") or f"T+{payload.get('horizon_days', 1)}"), measured_at=measured).model_dump(mode="json")
 
 
 def _handle_decision_review(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
-    from engines.decision.review_runner import DecisionReviewRunner
-
-    return DecisionReviewRunner().run(payload["decision_id"], int(payload.get("horizon_days", 5)))
+    from engines.decision.review_service import ReviewService
+    refs = list(payload.get("outcome_refs") or [])
+    if not refs:
+        raise ValueError("OUTCOME_REFS_REQUIRED")
+    return ReviewService().save_review(decision_id=payload["decision_id"], outcome_refs=refs).model_dump(mode="json")
 
 
 def _handle_market_feature_snapshot(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
@@ -103,8 +105,6 @@ JOB_HANDLERS: dict[str, Callable[[dict[str, Any], Callable[[], None]], Any]] = {
     JobType.MEMORY_REVALIDATION: _handle_memory_lifecycle_sweep,
     JobType.DECISION_OUTCOME: _handle_decision_outcome,
     JobType.DECISION_REVIEW: _handle_decision_review,
-    JobType.MARKET_FEATURE_SNAPSHOT: _handle_market_feature_snapshot,
-    JobType.SECTOR_FEATURE_SNAPSHOT: _handle_sector_feature_snapshot,
     JobType.RETRIEVAL_EVALUATION: _handle_retrieval_evaluation,
 }
 

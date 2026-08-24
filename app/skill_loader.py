@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-from app.skill_contract import SkillExecutionContract, SkillOutputContract
+from app.skill_contract import FreshnessPolicy, SkillExecutionContract, SkillGovernanceContract, SkillOutputContract
 
 from financial_agent.utils import project_root
 
@@ -21,6 +21,10 @@ class SkillDefinition(BaseModel):
     skill_markdown_hash: str | None = None
     execution: SkillExecutionContract = Field(default_factory=SkillExecutionContract)
     output: SkillOutputContract = Field(default_factory=SkillOutputContract)
+    required_evidence: list[str] = Field(default_factory=list)
+    required_specialists: list[str] = Field(default_factory=list)
+    governance: SkillGovernanceContract = Field(default_factory=SkillGovernanceContract)
+    freshness: dict[str, FreshnessPolicy] = Field(default_factory=dict)
 
     @property
     def instructions(self) -> str:
@@ -79,6 +83,10 @@ def load_skills(skill_root: Path | None = None) -> list[SkillDefinition]:
                 skill_markdown_hash=_markdown_hash(body),
                 execution=contract.get("execution", {}),
                 output=contract.get("output", {}),
+                required_evidence=contract.get("required_evidence", []),
+                required_specialists=contract.get("required_specialists", []),
+                governance=contract.get("governance", {}),
+                freshness=contract.get("freshness", {}),
             )
         )
     return skills

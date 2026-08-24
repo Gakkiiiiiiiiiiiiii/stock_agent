@@ -1,6 +1,8 @@
 """P0 A-07：Policy/Risk 治理集成测试（最终决策权归 Policy/Risk，不归 LLM）。"""
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from app.decision_runtime import DecisionRuntime
 from storage.repositories.research_repository import DecisionSnapshotRepository
 
@@ -98,21 +100,35 @@ def test_suitability_fail_blocks_actionable_advice():
 
 
 def test_final_decision_matches_persisted_snapshot(isolated_database):
+    now = datetime(2026, 1, 2, 16, tzinfo=UTC)
+
+    class _FrozenGateway:
+        def collect(self, requests, *, decision_time, trace=None):
+            del requests, decision_time, trace
+            return [], []
+
     runtime = DecisionRuntime(
         claude_agent=_StubClaudeAgent(),
-        fallback=type("_F", (), {"analyze_stock": lambda self, symbol, as_of=None, patterns=None: {
-            "symbol": symbol,
-            "orchestration": "local-fallback",
-            "proposal": {"symbol": symbol, "action": "BUY", "proposed_weight": 0.05, "confidence": 0.8, "evidence_count": 3},
-        }})(),
+        evidence_gateway=_FrozenGateway(),
+        trusted_fallback=lambda **_: {"proposal": {"symbol": "600000.SH", "action": "HOLD", "confidence": 0.8}},
+        clock=lambda: now,
     )
 
-    result = runtime.analyze_stock("600000.SH")
+    result = runtime.decide(
+        task_type="daily-market-decision", objective="formal snapshot integration", subjects=["600000.SH"],
+        context={"skill": "daily-market-decision"}, as_of=now,
+    )
 
-    snapshot = DecisionSnapshotRepository().get_for_decision(result["decision_id"])
-    assert snapshot.policy["final_action"] == result["final_decision"]["action"]
-    assert snapshot.policy["approved"] == result["final_decision"]["approved"]
-    assert snapshot.policy["policy_version"] == result["policy"]["policy_version"]
-    assert snapshot.proposal["action"] == result["proposal"]["action"]
-    assert snapshot.output["final_decision"] == result["final_decision"]["action"]
-    assert snapshot.tools.get("tool_result_ids"), "tools 段必须引用持久化 ToolResultSnapshot"
+    snapshot = DecisionSnapshotRepository().get_v3_for_decision(result["decision_id"])
+    assert snapshot is not None
+    decision = result["decision"]
+    assert snapshot.proposal["proposal_id"] == decision["proposal_id"]
+    assert snapshot.proposal["payload"]["action"] == decision["investment_action"]
+    assert snapshot.policy["policy_result_id"] == decision["policy_result_id"]
+    assert snapshot.output["final_decision"]["decision_action"] == decision["decision_action"]
+    assert snapshot.output["bundle_id"] == result["bundle_id"] == decision["bundle_id"]
+    lineage = {(item["type"], item["id"]) for item in snapshot.lineage}
+    assert ("BUNDLE", result["bundle_id"]) in lineage
+    assert ("PROPOSAL", decision["proposal_id"]) in lineage
+    assert ("POLICY", decision["policy_result_id"]) in lineage
+    assert ("FINAL_DECISION", decision["decision_id"]) in lineage

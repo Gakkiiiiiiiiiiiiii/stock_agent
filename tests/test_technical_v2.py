@@ -78,15 +78,13 @@ def test_legacy_patterns_not_default(monkeypatch):
     tools = {item["name"] for item in ClaudeToolRegistry().anthropic_tools()}
     assert "detect_pattern_signal" not in tools
     assert "scan_stock_signals" not in tools
-    assert "calc_profile_indicators" in tools
-    assert "evaluate_technical_rules" in tools
-    assert "scan_technical_rules" in tools
+    assert "get_technical_evidence" in tools
+    assert not tools.intersection({"calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules"})
 
 
-def test_skill_uses_profile_tools():
-    # P0-02: SKILL.yaml is the machine-executable truth; SKILL.md no longer lists tools.
+def test_skill_uses_remote_technical_evidence():
+    # P0-02: the skill consumes quant evidence; local indicator production is retired.
     contract = yaml.safe_load((Path("skills/a-share-technical-analysis/SKILL.yaml")).read_text(encoding="utf-8"))
     tools = contract["execution"]["required_tools"] + contract["execution"].get("optional_tools", [])
-    assert "calc_profile_indicators" in tools
-    assert "evaluate_technical_rules" in tools
-    assert "detect_pattern_signal" not in tools
+    assert "get_technical_evidence" in tools
+    assert not set(tools).intersection({"calc_profile_indicators", "evaluate_technical_rules", "scan_technical_rules", "detect_pattern_signal"})

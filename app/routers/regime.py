@@ -4,35 +4,31 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import APIRouter
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, field_validator
+
+from app import dependencies
 
 router = APIRouter()
 
 
 class MarketRegimeRequest(BaseModel):
-    snapshot: dict | None = None
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str | None = None
     as_of: datetime | None = None
-    up_count: int | None = None
-    down_count: int | None = None
-    index_return_5d: float | None = None
-    index_return_20d: float | None = None
-    top_theme_strength: float | None = None
-    limit_up_count: int | None = None
-    index_volatility: float | None = None
-    index_volatility_20d: float | None = None
-    index_drawdown_20d: float | None = None
-    limit_down_count: int | None = None
-    previous_regime: str | None = None
-    high_position_loss_ratio: float | None = None
-    high_position_limit_down_ratio: float | None = None
-    high_position_breakdown_ratio: float | None = None
-    high_position_big_negative_count: int | None = None
-    retreat_days: int | None = None
-    force_refresh: bool = False
+
+    @field_validator("as_of")
+    @classmethod
+    def _require_aware_as_of(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("as_of must include an explicit timezone")
+        return value
 
 
 @router.post("/api/v1/market/regime")
 def market_regime(request: MarketRegimeRequest) -> dict:
-    from mcp_servers.market_regime_server import get_market_regime
-
-    return get_market_regime(**request.model_dump())
+    try:
+        return dependencies.quant_client.get_market_regime(as_of=request.as_of.isoformat() if request.as_of else None)
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=503, content={"status": "degraded", "dependency": "quant", "reason_code": "DEPENDENCY_UNAVAILABLE", "detail": type(exc).__name__})

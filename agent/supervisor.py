@@ -99,7 +99,7 @@ class Supervisor:
             self.repository.add_subtask(
                 id=artifact.task_id, agent_run_id=run.id, agent=artifact.agent.value, status=artifact.status.value,
                 conclusion=artifact.conclusion, evidence_refs=artifact.evidence_refs, confidence=artifact.confidence,
-                usage={"tool_calls": artifact.tool_calls, "token_used": artifact.token_used, "latency_ms": artifact.latency_ms},
+                usage={"tool_calls": artifact.tool_calls, "token_used": artifact.token_used, "latency_ms": artifact.latency_ms}, unknowns=getattr(artifact, "unknowns", []), artifact_hash=getattr(artifact, "artifact_hash", None),
             )
 
     def _persist_failed_subtask(self, run, task: AgentTask, status: TaskStatus, error: str) -> None:

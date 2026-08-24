@@ -2,8 +2,8 @@ version: 2
 slug: a-share-technical-analysis
 name: A股技术分析
 execution:
-  required_tools: [get_kline, calc_profile_indicators, evaluate_technical_rules, get_market_regime, evaluate_portfolio_risk]
-  optional_tools: [get_sector_strength, search_theme_logic, retrieve_relevant_context]
+  required_tools: [get_technical_evidence, get_market_regime, get_portfolio_risk_inputs]
+  optional_tools: [get_sector_strength, search_content_knowledge]
   max_tool_rounds: 10
   require_regime: true
 output:

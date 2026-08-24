@@ -4,6 +4,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import BaseModel
 
+from app import dependencies
+
 router = APIRouter()
 
 
@@ -16,6 +18,4 @@ class RetrievalRequest(BaseModel):
 
 @router.post("/api/v1/retrieval/context")
 def retrieve_context(request: RetrievalRequest) -> dict:
-    from mcp_servers.retrieval_server import retrieve_relevant_context
-
-    return retrieve_relevant_context(query=request.query, task_type=request.task_type, filters=request.filters, top_k=request.top_k)
+    return dependencies.content_client.search_video_knowledge(request.query, filters=request.filters, limit=request.top_k, intent=request.task_type)

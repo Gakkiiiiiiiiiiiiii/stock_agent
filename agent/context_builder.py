@@ -6,14 +6,16 @@ from agent.runtime_context import AgentRuntimeContext
 from engines.memory.memory_retriever import retrieve_memory
 from storage.repositories.research_repository import MarketRegimeRepository
 from storage.repositories.vector_repository import MemoryRepository
+from engines.market.trading_clock import TradingClock, get_default_clock
 
 
 class ContextBuilder:
     """Builds stable agent context without requiring the LLM to rediscover stored state."""
 
-    def __init__(self, memory_repository: MemoryRepository | None = None, regime_repository: MarketRegimeRepository | None = None) -> None:
+    def __init__(self, memory_repository: MemoryRepository | None = None, regime_repository: MarketRegimeRepository | None = None, clock: TradingClock | None = None) -> None:
         self.memory_repository = memory_repository or MemoryRepository()
         self.regime_repository = regime_repository or MarketRegimeRepository()
+        self.clock = clock or get_default_clock()
 
     def build(self, query: str, provided: dict | None = None, market_code: str = "CN_A") -> dict:
         provided = provided or {}
@@ -30,7 +32,7 @@ class ContextBuilder:
         except Exception:
             strategy, decisions, preferences = [], [], []
         runtime = AgentRuntimeContext(
-            query=query, as_of=datetime.now(UTC), market_regime=regime,
+            query=query, as_of=self.clock.now("CN_A"), market_regime=regime,
             strategy_memories=strategy, decision_memories=decisions,
             user_preferences={str((item.get("record") or {}).get("id")): item.get("record") for item in preferences},
             current_positions=list(provided.get("current_positions") or []),

@@ -2,8 +2,8 @@ version: 2
 slug: post-trade-review
 name: 交易复盘
 execution:
-  required_tools: [search_strategy_memory]
-  optional_tools: [retrieve_relevant_context]
+  required_tools: [search_decision_memory]
+  optional_tools: []
   max_tool_rounds: 8
   require_memory_lookup: true
 output:

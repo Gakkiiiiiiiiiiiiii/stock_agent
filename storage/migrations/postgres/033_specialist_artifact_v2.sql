@@ -1,0 +1,2 @@
+ALTER TABLE agent_subtask ADD COLUMN IF NOT EXISTS unknowns JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE agent_subtask ADD COLUMN IF NOT EXISTS artifact_hash VARCHAR(64);

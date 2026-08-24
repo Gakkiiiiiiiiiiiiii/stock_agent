@@ -11,4 +11,5 @@ class MarketSpecialist(ToolSpecialist):
         regime = result["get_market_regime"].get("regime") if isinstance(result.get("get_market_regime"), dict) else None
         if regime is not None:
             result["opinions"] = {"market_regime": regime}
-        return self.artifact(task, result, tool_calls=3)
+        refs = [value.get("evidence_id") for value in result.values() if isinstance(value, dict) and value.get("evidence_id")]
+        return self.artifact(task, result, tool_calls=3, evidence_refs=refs)

@@ -22,7 +22,11 @@ from pydantic import BaseModel, Field
 from engines.decision.benchmark_router import THEME_BASKET, BenchmarkRouter
 from engines.market.market_clock import MarketClock
 from engines.market.trading_calendar import advance_trading_days
-from mcp_servers.market_data_server import get_kline
+from clients.quant_client import RemoteQuantClient
+
+# Test/legacy adapter injection point.  No production MCP import is allowed;
+# production composition uses RemoteQuantClient or another injected source.
+get_kline = None
 
 
 class PriceObservation(BaseModel):
@@ -37,8 +41,11 @@ class PriceObservation(BaseModel):
 class DecisionOutcomeEvaluator:
     """Outcome evaluator with a NEXT_SESSION_OPEN anchor to prevent look-ahead."""
 
-    def __init__(self, benchmark_router: BenchmarkRouter | None = None) -> None:
+    def __init__(self, benchmark_router: BenchmarkRouter | None = None, *, price_source=None, calendar=None, clock=None) -> None:
         self.benchmark_router = benchmark_router or BenchmarkRouter()
+        self.price_source = price_source or RemoteQuantClient()
+        self.calendar = calendar
+        self.clock = clock
 
     def evaluate(self, decision: dict, evaluation_date: date) -> dict:
         candidates = [item for item in (decision.get("candidates") or []) if isinstance(item, dict) and item.get("symbol")]
@@ -126,12 +133,17 @@ class DecisionOutcomeEvaluator:
             flags.append(flag)
             return None, None
 
-    @classmethod
-    def _symbol_window(cls, symbol: str, entry_date: date, exit_date: date) -> tuple[float, dict, list[tuple[date, dict]]]:
-        result = get_kline(symbol=symbol, start_date=entry_date.isoformat(), end_date=exit_date.isoformat(), freq="1d")
+    def _symbol_window(self, symbol: str, entry_date: date, exit_date: date) -> tuple[float, dict, list[tuple[date, dict]]]:
+        source = get_kline if callable(get_kline) else self.price_source
+        if callable(source) and source is not self.price_source:
+            result = source(symbol=symbol, start_date=entry_date.isoformat(), end_date=exit_date.isoformat(), freq="1d")
+        else:
+            result = source.get_bars([symbol], entry_date.isoformat(), exit_date.isoformat())
         rows = result.get("records") or result.get("data") or result.get("rows") or result.get("kline") or []
+        if isinstance(rows, dict):
+            rows = rows.get(symbol) or rows.get("records") or rows.get("rows") or []
         dated_rows = sorted(
-            ((cls._row_date(row), row) for row in rows if isinstance(row, dict) and cls._row_date(row) is not None),
+            ((self._row_date(row), row) for row in rows if isinstance(row, dict) and self._row_date(row) is not None),
             key=lambda item: item[0],
         )
         entry_row = next((row for row_date, row in dated_rows if row_date == entry_date and row.get("open") is not None), None)

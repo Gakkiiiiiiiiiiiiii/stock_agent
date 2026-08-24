@@ -1,29 +1,33 @@
-version: 2
+version: 3
 slug: daily-market-decision
 name: 每日市场决策
+required_evidence:
+  - MARKET_SNAPSHOT
+  - MARKET_REGIME
+  - SECTOR_STRENGTH
+  - PORTFOLIO_POSITION
+  - PORTFOLIO_RISK
+required_specialists:
+  - MARKET
+  - RESEARCH
+  - TECHNICAL
+  - FACTOR
+  - PORTFOLIO
+  - RISK
+governance:
+  require_risk: true
+  require_policy: true
+freshness:
+  market:
+    require_same_trading_day: true
+    max_age_minutes: 30
 execution:
-  required_tools:
-    - get_market_snapshot
-    - get_market_regime
-    - route_strategy
-    - get_sector_strength
-    - evaluate_portfolio_risk
-    - search_strategy_memory
-    - save_investment_decision
-  optional_tools:
-    - search_video_insights
-    - retrieve_relevant_context
-    - rank_themes_by_score
-    - scan_technical_rules
-    - scan_alpha_factors
   max_tool_rounds: 12
   require_fresh_market_data: true
   require_memory_lookup: true
   require_regime: true
-  freshness:
-    require_same_trading_day: true
-    max_age_minutes: 30
 output:
+  proposal_schema: investment-proposal.v2
   required_sections:
     - 市场环境
     - 风格判断

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from agent.contracts import AgentRole, AgentTask
+from agent.contracts import AgentRole, AgentTask, SpecialistStatus
 from agent.specialists.base import ToolSpecialist
 
 
@@ -14,4 +14,7 @@ class PortfolioSpecialist(ToolSpecialist):
             candidates = list(technical.get("candidates") or technical.get("ranked") or candidates)
         payload = {"candidates": candidates, "positions": list(self.context.get("positions") or []), "context": {**dict(self.context.get("portfolio_context") or {}), "upstream": upstream}}
         result = self.call("construct_portfolio_v2", payload)
-        return self.artifact(task, {"portfolio": result, "upstream_artifacts": upstream, "opinions": {"portfolio": result.get("targets") if isinstance(result, dict) else result}}, tool_calls=1)
+        if not isinstance(result, dict) or not result.get("targets") and not result.get("target_context"):
+            return self.artifact(task, {"target_context": result or {}, "upstream_artifacts": upstream}, ["PORTFOLIO_CONTEXT_UNAVAILABLE"], 1, status=SpecialistStatus.DEGRADED)
+        refs = list(result.get("evidence_refs") or [])
+        return self.artifact(task, {"target_context": result, "upstream_artifacts": upstream, "opinions": {"portfolio": result.get("targets")}}, tool_calls=1, evidence_refs=refs)

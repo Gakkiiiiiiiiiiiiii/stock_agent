@@ -4,8 +4,7 @@ name: 市场状态与策略路由
 execution:
   required_tools:
     - get_market_regime
-    - route_strategy
-    - search_strategy_memory
+    - search_decision_memory
   max_tool_rounds: 8
   require_memory_lookup: true
   require_regime: true

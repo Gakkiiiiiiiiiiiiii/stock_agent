@@ -4,9 +4,8 @@
 以及 app.include_router(...) 挂载各域路由（app/routers/）。
 业务路由处理函数已全部迁移到 app/routers/，共享服务对象在 app/dependencies.py。
 
-向后兼容：orchestrator / admin_service / chat_history_service /
-content_ingest_service 与 VALID_* 枚举在此再导出，
-既有 ``from app.api import app, orchestrator`` 等用法继续可用。
+向后兼容：orchestrator / admin_service / chat_history_service 与
+VALID_* 枚举在此再导出，既有 ``from app.api import app, orchestrator`` 等用法继续可用。
 """
 from __future__ import annotations
 
@@ -22,11 +21,10 @@ from sqlalchemy import text
 from app.dependencies import (  # noqa: F401  (re-export，兼容旧引用)
     admin_service,
     chat_history_service,
-    content_ingest_service,
     init_application,
     orchestrator,
 )
-from app.routers import admin, agent, content, decision, execution, factor, market, portfolio, regime, retrieval, stream
+from app.routers import admin, agent, content, decision, factor, market, portfolio, regime, retrieval
 from app.routers._shared import (  # noqa: F401  (re-export，兼容旧引用)
     MAX_API_LIST_LIMIT,
     VALID_KNOWLEDGE_KINDS,
@@ -35,7 +33,6 @@ from app.routers._shared import (  # noqa: F401  (re-export，兼容旧引用)
     VALID_VERIFICATION_STATUSES,
 )
 from app.security import render_metrics, security_and_trace_middleware
-from engines.market.qmt_bridge_client import QmtBridgeClient
 from storage.db import session_scope
 
 logger = logging.getLogger(__name__)
@@ -47,7 +44,7 @@ async def lifespan(_: FastAPI):
     yield
 
 
-app = FastAPI(title="Financial Analysis Agent", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Stock Agent Investment Decision Authority", version="0.2.0", lifespan=lifespan)
 app.middleware("http")(security_and_trace_middleware)
 
 # 域路由挂载（§28）：routers 只做 参数解析 → 前置校验 → 调服务 → HTTP 响应。
@@ -61,8 +58,6 @@ for _router in (
     factor.router,
     content.router,
     admin.router,
-    execution.router,
-    stream.router,
 ):
     app.include_router(_router)
 
@@ -73,8 +68,13 @@ def health() -> dict:
 
 
 SERVICE_NAME = "stock_agent"
-SERVICE_VERSION = "0.1.0"
-CONTRACT_VERSIONS = ["decision.v1", "market-data.v1", "factor.v1", "content.v1", "backtest.v1", "trading.v1"]
+SERVICE_VERSION = "0.2.0"
+CONTRACT_VERSIONS = [
+    "evidence.v1", "decision-input.v1", "investment-proposal.v2", "investment-decision.v2",
+    "decision.snapshot.v3", "replay.v1", "replay.v2", "decision-outcome.v1", "decision-review.v1",
+    "decision-memory.v1", "market-data.v1", "factor.v1", "content.v1", "backtest.v1",
+    "specialist-artifact.v2", "evidence-synthesis.v1", "decision-quality.v2",
+]
 
 
 @app.get("/health/version")
@@ -112,21 +112,14 @@ def _ready_checks() -> dict[str, str]:
     required = _required_ready_checks()
     checks = {"api": "ok"}
     checks["postgres"] = _check_postgres()
-    checks["qdrant"] = _check_http(f"{os.getenv('QDRANT_URL', 'http://localhost:6333').rstrip('/')}/collections", api_key=os.getenv("QDRANT_API_KEY"))
     checks["redis"] = _check_redis(os.getenv("REDIS_URL", ""))
-    checks["embedding"] = _check_embedding()
-    checks["reranker"] = _check_http(f"{os.getenv('RERANKER_URL', 'http://localhost:8010').rstrip('/')}/health")
-    if "qmt" in required or os.getenv("READY_CHECK_OPTIONAL_QMT", "false").lower() in {"1", "true", "yes"}:
-        checks["qmt"] = _check_qmt()
-    else:
-        checks["qmt"] = "skipped"
     return checks
 
 
 def _required_ready_checks() -> set[str]:
     configured = os.getenv("READY_REQUIRED_CHECKS")
     if configured is None:
-        required = {"api", "postgres", "qdrant", "embedding", "reranker"}
+        required = {"api", "postgres"}
         if os.getenv("REDIS_URL"):
             required.add("redis")
         return required
@@ -171,15 +164,6 @@ def _check_redis(redis_url: str) -> str:
         return "ok" if client.ping() else "failed"
     except Exception as exc:  # noqa: BLE001
         logger.warning("ready check failed: redis: %s", exc)
-        return "failed"
-
-
-def _check_qmt() -> str:
-    try:
-        QmtBridgeClient().healthcheck()
-        return "ok"
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("ready check failed: qmt: %s", exc)
         return "failed"
 
 

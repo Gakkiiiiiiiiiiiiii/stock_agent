@@ -12,11 +12,33 @@ endpoints:
       factor.factor_set_version 重放，不读取 latest market / latest factor set / latest
       content state；严格历史代码重放留待未来保存 git_commit/container_digest/config_hash。
     request:
-      mode: { type: string, enum: [original, current, multi_agent, EXACT_REPLAY, COUNTERFACTUAL_REPLAY], default: original }
+      mode: { type: string, enum: [original, current, multi_agent, EXACT_REPLAY, MODEL_REPLAY, SKILL_REPLAY, POLICY_REPLAY, WORKFLOW_REPLAY, COUNTERFACTUAL_REPLAY], default: original }
       override: { type: object, required: false, description: "详细修改方案 §6：COUNTERFACTUAL_REPLAY 必填（policy_version/model/strategy 等）" }
     errors:
       404: DECISION_NOT_FOUND
       422: COUNTERFACTUAL_OVERRIDE_REQUIRED
+  - name: replay_decision_v2
+    method: POST
+    path: /api/v2/decisions/{decision_id}/replay
+    description: >-
+      Replay v2 从已持久化的 DecisionSnapshot v3 加载并校验不可变
+      DecisionInputBundle、Evidence、模型/Skill/Policy/Workflow 身份和 lineage；
+      不读取 latest 数据，不调用外部 client 或本地事实生产器。
+    request:
+      mode: { type: string, enum: [EXACT_REPLAY, MODEL_REPLAY, SKILL_REPLAY, POLICY_REPLAY, WORKFLOW_REPLAY, COUNTERFACTUAL_REPLAY] }
+      overrides: { type: object, required: false, description: "仅允许当前 mode 的替换项；反事实仅允许 market_regime/risk_parameter/portfolio_state/strategy/policy" }
+      snapshot_id: { type: string, required: false, description: "可选的显式 snapshot 锚点" }
+    replay_invariants:
+      EXACT_REPLAY: { fixed: [bundle, evidence, model_identity, skill_identity, policy_version, workflow_version], changed: [proposal, policy_evaluation, final, output] }
+      MODEL_REPLAY: { fixed: [bundle, evidence, skill_identity, policy_version, workflow_version], changed: [model_identity, proposal, policy_evaluation, final, output] }
+      SKILL_REPLAY: { fixed: [bundle, evidence, model_identity, policy_version, workflow_version], changed: [skill_identity, proposal, policy_evaluation, final, output] }
+      POLICY_REPLAY: { fixed: [bundle, evidence, model_identity, skill_identity, workflow_version, proposal_hash], changed: [policy_version, policy_evaluation, final, output] }
+      WORKFLOW_REPLAY: { fixed: [bundle, evidence, model_identity, skill_identity, policy_version], changed: [workflow_version, specialists, conflicts, proposal, policy_evaluation, final, output] }
+      COUNTERFACTUAL_REPLAY: { fixed: [bundle, evidence, model_identity, skill_identity, workflow_version], changed: [market_regime, risk_parameter, portfolio_state, strategy, policy, final, output] }
+    errors:
+      404: DECISION_NOT_FOUND
+      409: REPLAY_INPUT_INVALID
+      422: REPLAY_SNAPSHOT_REQUIRED
 decision_actions:
   # §25 Agent 输出必须收敛为结构化决策动作
   - APPROVE

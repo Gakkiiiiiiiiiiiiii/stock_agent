@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from engines.decision.conflict_resolver import (
+    ConflictOpinion,
     CONFLICT_TYPES,
     DOMAIN_AUTHORITY,
     resolve_conflicts_v2,
 )
+import pytest
 
 
 def test_domain_authority_resolves_conflict():
@@ -84,3 +86,36 @@ def test_empty_conflicts_proceed():
     result = resolve_conflicts_v2([])
     assert result["final_action"] == "proceed"
     assert result["resolutions"] == []
+
+
+def test_real_agent_alias_domain_owner_beats_higher_confidence_fallback():
+    result = resolve_conflicts_v2([{
+        "type": "SIGNAL_CONFLICT",
+        "dimension": "factor_direction",
+        "options": [
+            {"agent": "FactorAgent", "value": "bearish", "confidence": 0.2},
+            {"agent": "MarketAgent", "value": "bullish", "confidence": 0.99},
+        ],
+    }])
+    assert result["resolutions"][0]["resolved_by"] == "FactorAgent"
+    assert result["resolutions"][0]["resolved_value"] == "bearish"
+
+
+def test_risk_agent_veto_beats_higher_confidence_buy():
+    result = resolve_conflicts_v2([{
+        "type": "SIGNAL_CONFLICT",
+        "dimension": "risk_overlay",
+        "options": [
+            {"agent": "FactorAgent", "value": "BUY", "confidence": 0.99},
+            {"agent": "RiskAgent", "value": "VETO", "confidence": 0.2, "veto": True},
+        ],
+    }])
+    assert result["vetoed"] is True
+    assert result["final_action"] == "veto"
+    assert result["resolutions"][0]["resolved_by"] == "RiskAgent"
+
+
+def test_conflict_values_are_deep_immutable():
+    opinion = ConflictOpinion(agent="FactorAgent", value={"nested": [1]})
+    with pytest.raises(TypeError):
+        opinion.value["nested"].append(2)

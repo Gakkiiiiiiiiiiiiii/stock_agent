@@ -11,6 +11,7 @@ from storage.db import Base, get_engine
 from storage.models import vector  # noqa: F401
 from storage.models import research  # noqa: F401
 from storage.models import tool_result  # noqa: F401
+from storage.models import decision_input  # noqa: F401
 from financial_agent.utils import project_root
 
 
@@ -26,6 +27,8 @@ def apply_sql_migrations() -> None:
         return
     backend = _migration_backend(engine.url.get_backend_name())
     with engine.begin() as conn:
+        if backend == "sqlite":
+            conn.exec_driver_sql("PRAGMA foreign_keys=ON")
         conn.exec_driver_sql(
             "CREATE TABLE IF NOT EXISTS schema_migration (version VARCHAR(128) PRIMARY KEY, applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"
         )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from storage.db import Base
@@ -168,6 +168,30 @@ class DecisionSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
 
+class DecisionSnapshotV3Record(Base):
+    """Append-only v3 snapshot; the canonical contract is stored as JSON."""
+
+    __tablename__ = "decision_snapshot_v3"
+
+    snapshot_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), unique=True, index=True)
+    schema_version: Mapped[str] = mapped_column(String(40), default="decision.snapshot.v3")
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("decision_input_bundle.bundle_id"), unique=True, index=True)
+    snapshot_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class DecisionBundleBindingRecord(Base):
+    """Database-level one-to-one anchor for a formal decision/bundle pair."""
+
+    __tablename__ = "decision_bundle_binding"
+
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), primary_key=True)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("decision_input_bundle.bundle_id"), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
 class DecisionReview(Base):
     __tablename__ = "decision_review"
 
@@ -189,3 +213,71 @@ class DecisionReview(Base):
     review_model: Mapped[str | None] = mapped_column(String(128))
     attribution_json: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
+
+
+class DecisionOutcomeRecord(Base):
+    """D7 immutable outcome contract, separate from the legacy evaluator row."""
+
+    __tablename__ = "decision_outcome_v2"
+
+    outcome_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), index=True)
+    outcome_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class DecisionReviewV2Record(Base):
+    """Structured D7 review, independent of legacy review persistence."""
+
+    __tablename__ = "decision_review_v2"
+
+    review_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), index=True)
+    review_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class DecisionMemoryRecord(Base):
+    """Agent-owned memory table; never mixed with external evidence tables."""
+
+    __tablename__ = "decision_memory_v2"
+
+    memory_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    memory_type: Mapped[str] = mapped_column(String(40), index=True)
+    memory_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    dedupe_key: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(24), default="PROPOSED")
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class SpecialistArtifactRecord(Base):
+    __tablename__ = "specialist_artifact_v2"
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), index=True)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("decision_input_bundle.bundle_id"), index=True)
+    artifact_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class InvestmentProposalV2Record(Base):
+    __tablename__ = "investment_proposal_v2"
+    proposal_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), index=True)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("decision_input_bundle.bundle_id"), index=True)
+    proposal_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))
+
+
+class PolicyEvaluationRecord(Base):
+    __tablename__ = "policy_evaluation_v2"
+    policy_result_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    decision_id: Mapped[str] = mapped_column(ForeignKey("investment_decision.id"), index=True)
+    bundle_id: Mapped[str] = mapped_column(ForeignKey("decision_input_bundle.bundle_id"), index=True)
+    result_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(UTC))

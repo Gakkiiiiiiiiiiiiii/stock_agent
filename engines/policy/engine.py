@@ -5,10 +5,13 @@ LLM 不具备风险/交易规则权威：任何提案都必须通过本引擎才
 """
 from __future__ import annotations
 
+from contracts.decision import PolicyEvaluation
+from contracts.proposal import InvestmentProposalV2
 from engines.policy.models import ApprovedDecision, InvestmentProposal, PolicyContext
-from engines.policy.rules import POLICY_RULES, PolicyLimits
+from engines.policy.rules import POLICY_RULES, PolicyLimits, evaluate_v2_checks
 
 POLICY_ENGINE_VERSION = "policy.v1"
+POLICY_ENGINE_V2_VERSION = "policy.v2"
 
 # 硬性否决规则：命中即整体拒绝（不做降权）。
 HARD_REJECTION_RULES = frozenset(
@@ -23,8 +26,30 @@ class PolicyEngine:
         self.limits = limits or PolicyLimits()
         self.policy_version = policy_version
 
-    def evaluate(self, proposal: InvestmentProposal, context: PolicyContext | None = None) -> ApprovedDecision:
+    def evaluate(self, proposal: InvestmentProposal | InvestmentProposalV2, context: PolicyContext | None = None) -> ApprovedDecision | PolicyEvaluation:
         context = context or PolicyContext()
+        if isinstance(proposal, InvestmentProposalV2):
+            checks, adjusted = evaluate_v2_checks(
+                proposal, context, self.limits, policy_version=self.policy_version if self.policy_version != POLICY_ENGINE_VERSION else POLICY_ENGINE_V2_VERSION,
+            )
+            has_reject = any(check.severity == "REJECT" and not check.passed for check in checks)
+            actionable = proposal.target_weight is not None or proposal.weight_delta is not None
+            reduction = proposal.action in {"SELL", "REDUCE", "EXIT"}
+            if not actionable:
+                weight_valid = True
+            elif reduction:
+                weight_valid = adjusted is not None and adjusted >= 0
+            else:
+                weight_valid = adjusted is not None and adjusted > 0
+            approved = not has_reject and weight_valid
+            return PolicyEvaluation.build(
+                policy_result_id=f"pe-{proposal.proposal_id}-{self.policy_version if self.policy_version != POLICY_ENGINE_VERSION else POLICY_ENGINE_V2_VERSION}",
+                policy_version=self.policy_version if self.policy_version != POLICY_ENGINE_VERSION else POLICY_ENGINE_V2_VERSION,
+                checks=checks,
+                approved=approved,
+                original_value=proposal.target_weight if proposal.target_weight is not None else proposal.weight_delta,
+                adjusted_value=adjusted,
+            )
         checks = [rule(proposal, context, self.limits) for rule in POLICY_RULES]
         rejections = [check.rule for check in checks if not check.passed and check.rule in HARD_REJECTION_RULES]
         # 软规则：只要给出了更低的 adjusted_weight 即视为降权调整（无论 passed）。
@@ -52,4 +77,4 @@ class PolicyEngine:
         )
 
 
-__all__ = ["PolicyEngine", "POLICY_ENGINE_VERSION", "HARD_REJECTION_RULES", "SOFT_ADJUSTMENT_RULES"]
+__all__ = ["PolicyEngine", "POLICY_ENGINE_VERSION", "POLICY_ENGINE_V2_VERSION", "HARD_REJECTION_RULES", "SOFT_ADJUSTMENT_RULES"]

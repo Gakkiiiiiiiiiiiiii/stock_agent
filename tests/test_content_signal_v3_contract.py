@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
+from app import dependencies
+from app.api import app
 from app.decision_runtime import LEGACY_SIGNAL_CONTRACT_VERSION, DecisionRuntime
 from contracts.content import (
     CONTENT_FACTOR_SIGNAL_LEGACY_VERSION,
@@ -12,6 +17,7 @@ from contracts.content import (
     ContentSignalResponse,
     ContentSignalLegacyResponse,
 )
+from contracts.evidence import DependencyStatus, DependencyStatusValue, Evidence, EvidenceQuality, EvidenceType, SourceSystem
 from storage.repositories.research_repository import DecisionSnapshotRepository
 
 CONTRACT_DIR = Path(__file__).resolve().parent.parent / "contracts" / "content-factor-signal.v3"
@@ -61,20 +67,106 @@ class _V3Fallback:
             "orchestration": "local-fallback",
             "market_snapshot_id": "mds-agent-1",
             "market_data_version": "sha256:agent",
-            "content_signal_response": _v3_response_payload(),
         }
 
 
+class _FormalEvidenceGateway:
+    """Offline test adapter for the formal bundle path; no producer calls."""
+
+    def collect(self, requests, *, decision_time, trace=None):
+        del requests, trace
+        rows = [
+            (EvidenceType.MARKET_SNAPSHOT, "market", {"snapshot_id": "mds-agent-1", "close": 123.0}),
+            (EvidenceType.MARKET_REGIME, "market", {"regime": "neutral"}),
+            (EvidenceType.SECTOR_STRENGTH, "market", {"items": [{"sector": "consumer", "strength": 0.2}]}),
+            (EvidenceType.PORTFOLIO_POSITION, "portfolio", {"positions": [], "gross_exposure": 0.0, "net_exposure": 0.0}),
+            (EvidenceType.PORTFOLIO_RISK, "portfolio", {"risk_score": 0.1, "veto": False}),
+            (EvidenceType.KNOWLEDGE_CLAIM, "CN.A.600519", {"content_snapshot_id": "cs-fixture", "claim_id": "claim-fixture", "evidence_refs": ["evidence-fixture"], "claim": "frozen content claim"}),
+        ]
+        evidence = [
+            Evidence(
+                evidence_type=evidence_type,
+                source_system=SourceSystem.CONTENT if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else SourceSystem.QUANT,
+                source_ref=f"quant:test:{evidence_type.value.lower()}",
+                subject_type="portfolio" if subject == "portfolio" else "market",
+                subject_key=subject,
+                as_of=decision_time,
+                available_at=decision_time,
+                snapshot_id="cs-fixture" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else ("mds-agent-1" if subject == "market" else "portfolio-1"),
+                contract_version="content-factor-signal.v3" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else "market-data.v1",
+                payload=payload,
+                quality_status=EvidenceQuality.VERIFIED,
+                confidence=1.0,
+            )
+            for evidence_type, subject, payload in rows
+        ]
+        status = DependencyStatus(
+            system=SourceSystem.QUANT,
+            status=DependencyStatusValue.OK,
+            checked_at=decision_time,
+            contract_version="market-data.v1",
+            service_version="quant-test",
+            snapshot_id="mds-agent-1",
+        )
+        content_status = DependencyStatus(
+            system=SourceSystem.CONTENT,
+            status=DependencyStatusValue.OK,
+            checked_at=decision_time,
+            contract_version="content-factor-signal.v3",
+            service_version="content-test",
+            snapshot_id="cs-fixture",
+        )
+        return evidence, [status, content_status]
+
+
+def _formal_fallback(**kwargs):
+    del kwargs
+    return {
+        "proposal": {"symbol": "CN.A.600519", "action": "HOLD", "confidence": 0.7},
+    }
+
+
 def test_v3_signal_enters_decision_snapshot_lineage(isolated_database):
-    runtime = DecisionRuntime(claude_agent=_StubClaudeAgent(), fallback=_V3Fallback())
+    now = datetime.now(UTC).replace(microsecond=0)
+    runtime = DecisionRuntime(
+        claude_agent=_StubClaudeAgent(),
+        fallback=_V3Fallback(),
+        evidence_gateway=_FormalEvidenceGateway(),
+        trusted_fallback=_formal_fallback,
+        clock=lambda: now,
+    )
+    # Legacy v1 remains narrative-only and cannot create a formal decision.
+    legacy = runtime.analyze_stock("CN.A.600519")
+    assert legacy["actionable"] is False
+    assert "decision_id" not in legacy
 
-    result = runtime.analyze_stock("CN.A.600519")
+    class _Facade:
+        def __init__(self, value):
+            self.runtime = value
 
-    snapshot = DecisionSnapshotRepository().get_for_decision(result["decision_id"])
-    assert snapshot.content["signal_contract"] == "content-factor-signal.v3"
-    assert snapshot.content["snapshot_id"] == "cs-fixture"
-    assert snapshot.inputs["content_snapshot_ids"] == ["cs-fixture"], "v3 content snapshot 必须真实进入 content_snapshot_ids"
-    assert snapshot.inputs["market_snapshot_ids"] == ["mds-agent-1"]
+    # Exercise the public formal route rather than calling the runtime's
+    # compatibility facade directly.
+    original_orchestrator = dependencies.orchestrator
+    dependencies.orchestrator = _Facade(runtime)
+    try:
+        response = TestClient(app).post(
+            "/api/v2/decisions",
+            json={
+                "task_type": "daily-market-decision",
+                "objective": "验证内容信号进入正式决策快照",
+                "subjects": ["CN.A.600519"],
+                "context": {"skill": "daily-market-decision"},
+                "as_of": now.isoformat(),
+            },
+        )
+    finally:
+        dependencies.orchestrator = original_orchestrator
+    assert response.status_code == 200, response.text
+    result = response.json()
+
+    snapshot = DecisionSnapshotRepository().get_v3_for_decision(result["decision_id"])
+    assert snapshot is not None
+    assert snapshot.schema_version == "decision.snapshot.v3"
     lineage = {(item["type"], item["id"]) for item in snapshot.lineage}
     assert ("CONTENT_SNAPSHOT", "cs-fixture") in lineage
     assert ("MARKET_SNAPSHOT", "mds-agent-1") in lineage

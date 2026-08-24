@@ -3,7 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from app.tools.definitions import ToolDefinition
-from mcp_servers import retrieval_server
+from storage.repositories.research_repository import DecisionMemoryRepository
 
 
 class SearchMemoryInput(BaseModel):
@@ -15,11 +15,20 @@ class SearchMemoryInput(BaseModel):
 
 def build_memory_tools() -> list[ToolDefinition]:
     def search(payload: dict) -> dict:
-        return retrieval_server.search_memory(**payload)
+        query = str(payload.get("query", "")).lower()
+        types = set(payload.get("memory_types") or [])
+        rows = DecisionMemoryRepository().list_active(limit=int(payload.get("top_k", 5)))
+        items = []
+        for memory in rows:
+            if types and memory.memory_type not in types:
+                continue
+            if query and query not in memory.content.lower():
+                continue
+            evidence = memory.to_evidence()
+            items.append({"memory_id": memory.memory_id, "content": memory.content, "memory_type": memory.memory_type, "weight": min(memory.weight, 0.25), "source_system": "stock_agent", "evidence_type": "DECISION_MEMORY", "evidence": evidence.model_dump(mode="json")})
+        return {"items": items, "source_system": "stock_agent", "evidence_type": "DECISION_MEMORY"}
 
     return [
-        ToolDefinition(name="search_memory", description="Search long-term memory records and rank by relevance, importance, confidence, recency, regime, and outcome.", input_model=SearchMemoryInput, executor=search, category="memory"),
-        ToolDefinition(name="search_strategy_memory", description="Search strategy experience memories only.", input_model=SearchMemoryInput, executor=lambda payload: search(payload | {"memory_types": ["STRATEGY_EXPERIENCE"]}), category="memory"),
-        ToolDefinition(name="search_decision_memory", description="Search prior decision memories only.", input_model=SearchMemoryInput, executor=lambda payload: search(payload | {"memory_types": ["DECISION"]}), category="memory"),
+        ToolDefinition(name="search_decision_memory", description="Search stock_agent-owned decision memories only.", input_model=SearchMemoryInput, executor=lambda payload: search(payload | {"memory_types": ["DECISION_CASE", "FAILURE_PATTERN", "SUCCESS_PATTERN", "REGIME_EXPERIENCE", "RISK_MISS", "POLICY_ADJUSTMENT"]}), category="memory"),
         ToolDefinition(name="search_user_preferences", description="Search stable user preference memories only.", input_model=SearchMemoryInput, executor=lambda payload: search(payload | {"memory_types": ["USER_PREFERENCE"]}), category="memory"),
     ]

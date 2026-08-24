@@ -114,6 +114,39 @@ def lint_skill(skill_dir: Path, known_tools: set[str], expected_slug: str | None
     output = contract.get("output") or {}
     if not output.get("required_sections"):
         violations.append(LintViolation("EMPTY_REQUIRED_SECTIONS", slug, "output.required_sections must be non-empty"))
+    if isinstance(version, int) and version >= 3:
+        if not contract.get("required_evidence"):
+            violations.append(LintViolation("EMPTY_REQUIRED_EVIDENCE", slug, "required_evidence must be non-empty for v3"))
+        if not contract.get("required_specialists"):
+            violations.append(LintViolation("EMPTY_REQUIRED_SPECIALISTS", slug, "required_specialists must be non-empty for v3"))
+        governance = contract.get("governance") or {}
+        if not isinstance(governance, dict):
+            violations.append(LintViolation("INVALID_GOVERNANCE", slug, "governance must be a mapping"))
+        elif any(not isinstance(governance.get(name, False), bool) for name in ("require_risk", "require_policy")):
+            violations.append(LintViolation("INVALID_GOVERNANCE", slug, "governance flags must be boolean"))
+        evidence = list(contract.get("required_evidence") or [])
+        specialists = list(contract.get("required_specialists") or [])
+        allowed_evidence = {"MARKET_SNAPSHOT", "MARKET_REGIME", "MARKET_BREADTH", "SECTOR_STRENGTH", "TECHNICAL_SIGNAL", "TECHNICAL_PROFILE", "LIQUIDITY", "FACTOR_SCORE", "FACTOR_SET", "FACTOR_RESEARCH_RESULT", "KNOWLEDGE_CLAIM", "CATALYST", "RISK_EVENT", "VALUATION_FACT", "EARNINGS_FACT", "PORTFOLIO_POSITION", "PORTFOLIO_EXPOSURE", "PORTFOLIO_RISK", "BACKTEST_RESULT", "DECISION_MEMORY"}
+        allowed_specialists = {"MARKET", "RESEARCH", "TECHNICAL", "FACTOR", "PORTFOLIO", "RISK"}
+        for value in evidence:
+            if value not in allowed_evidence:
+                violations.append(LintViolation("INVALID_REQUIRED_EVIDENCE", slug, f"unknown evidence type: {value}"))
+        for value in specialists:
+            if value not in allowed_specialists:
+                violations.append(LintViolation("INVALID_REQUIRED_SPECIALIST", slug, f"unknown specialist: {value}"))
+        if len(evidence) != len(set(evidence)) or len(specialists) != len(set(specialists)):
+            violations.append(LintViolation("DUPLICATE_V3_REQUIREMENT", slug, "required evidence/specialist entries must be unique"))
+        freshness = (execution.get("freshness") or {})
+        freshness = contract.get("freshness") or freshness
+        if freshness and not isinstance(freshness, dict):
+            violations.append(LintViolation("INVALID_FRESHNESS", slug, "freshness must be a mapping"))
+        elif isinstance(freshness, dict):
+            market = freshness.get("market")
+            if market is not None and not isinstance(market, dict):
+                violations.append(LintViolation("INVALID_FRESHNESS", slug, "freshness.market must be a mapping"))
+        output_schema = output.get("proposal_schema")
+        if not isinstance(output_schema, str) or not output_schema.strip():
+            violations.append(LintViolation("MISSING_PROPOSAL_SCHEMA", slug, "v3 output.proposal_schema must be non-empty"))
 
     md_path = skill_dir / "SKILL.md"
     if md_path.exists():

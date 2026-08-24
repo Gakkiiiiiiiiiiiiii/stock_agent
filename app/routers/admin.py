@@ -1,34 +1,13 @@
-"""Admin 控制台 / 主题 / 文档 / 因子 / 技能管理与工具提案审计路由（从 app/api.py 平移，路由契约不变）。"""
+"""Read-only admin metadata and tool-audit routes for the Decision Authority."""
 from __future__ import annotations
 
 import json
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
-
 from app import dependencies
-from contracts.factor import MiningJobRequest
-from financial_agent.models import ThemeLogic
 
 router = APIRouter()
-
-
-class KnowledgeDocUpdateRequest(BaseModel):
-    path: str
-    content: str
-
-
-class ToolProposalRequest(BaseModel):
-    tool_name: str
-    payload: dict
-
-
-class SkillUpdateRequest(BaseModel):
-    slug: str
-    name: str
-    description: str = ""
-    content: str
 
 
 @router.get("/admin")
@@ -56,13 +35,6 @@ def admin_get_theme(theme_name: str) -> dict:
         raise HTTPException(status_code=404, detail=f"theme not found: {exc}") from exc
 
 
-@router.put("/api/v1/admin/themes/{theme_name}")
-def admin_save_theme(theme_name: str, theme: ThemeLogic) -> dict:
-    if theme.theme_name != theme_name:
-        raise HTTPException(status_code=400, detail="theme_name in path and body must match")
-    return dependencies.admin_service.save_theme(theme.model_dump())
-
-
 @router.get("/api/v1/admin/docs")
 def admin_list_docs() -> dict:
     return {"items": dependencies.admin_service.list_knowledge_docs()}
@@ -78,43 +50,9 @@ def admin_get_doc(path: str) -> dict:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.put("/api/v1/admin/docs/content")
-def admin_save_doc(request: KnowledgeDocUpdateRequest) -> dict:
-    try:
-        return dependencies.admin_service.save_knowledge_doc(request.path, request.content)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.delete("/api/v1/admin/docs/content")
-def admin_delete_doc(path: str, summary_mode: str = "investment") -> dict:
-    try:
-        return dependencies.admin_service.delete_knowledge_doc(path) | {"delete_mode": "knowledge_doc"}
-    except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=f"doc not found: {exc}") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
 @router.get("/api/v1/admin/factors")
 def admin_list_factors() -> dict:
-    from mcp_servers.factor_mining_server import list_factor_library
-
-    return list_factor_library(limit=100)
-
-
-@router.post("/api/v1/admin/factors/mine")
-def admin_mine_factors(rounds: int | None = None, candidates_per_round: int | None = None) -> dict:
-    """提交 stock_factor 远程挖掘任务。"""
-    return dependencies.factor_client.create_mining_job(
-        MiningJobRequest(rounds=rounds or 50, candidates_per_round=candidates_per_round or 20)
-    )
-
-
-@router.get("/api/v1/admin/factors/mine/{task_id}")
-def admin_mine_factors_status(task_id: str) -> dict:
-    """查询 stock_factor 远程挖掘任务。"""
-    return dependencies.factor_client.get_mining_job(task_id)
+    return dependencies.factor_client.list_factors(limit=100)
 
 
 @router.get("/api/v1/admin/skills")
@@ -128,34 +66,6 @@ def admin_get_skill(slug: str) -> dict:
         return dependencies.admin_service.get_skill(slug)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=f"skill not found: {exc}") from exc
-
-
-@router.put("/api/v1/admin/skills/{slug}")
-def admin_save_skill(slug: str, request: SkillUpdateRequest) -> dict:
-    if request.slug != slug:
-        raise HTTPException(status_code=400, detail="slug in path and body must match")
-    try:
-        return dependencies.admin_service.save_skill(slug=request.slug, name=request.name, description=request.description, content=request.content)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.post("/api/v2/proposals")
-def create_tool_proposal(request: ToolProposalRequest) -> dict:
-    return dependencies.orchestrator.claude_agent.tool_registry.create_proposal(request.tool_name, request.payload)
-
-
-@router.get("/api/v2/proposals/{proposal_id}")
-def get_tool_proposal(proposal_id: str) -> dict:
-    proposal = dependencies.orchestrator.claude_agent.tool_registry.proposals.get(proposal_id)
-    if proposal is None:
-        raise HTTPException(status_code=404, detail="proposal not found")
-    return proposal
-
-
-@router.post("/api/v2/proposals/{proposal_id}/approve")
-def approve_tool_proposal(proposal_id: str) -> dict:
-    return dependencies.orchestrator.claude_agent.tool_registry.approve_proposal(proposal_id)
 
 
 @router.get("/api/v2/audit/tools")

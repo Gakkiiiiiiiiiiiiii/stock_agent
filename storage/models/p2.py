@@ -33,6 +33,8 @@ class AgentSubtask(Base):
     evidence_refs: Mapped[list] = mapped_column(JSON, default=list)
     confidence: Mapped[float | None] = mapped_column(Float)
     usage: Mapped[dict] = mapped_column(JSON, default=dict)
+    unknowns: Mapped[list] = mapped_column(JSON, default=list)
+    artifact_hash: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(UTC))
 
 

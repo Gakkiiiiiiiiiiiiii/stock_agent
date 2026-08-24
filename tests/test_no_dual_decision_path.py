@@ -90,15 +90,14 @@ def test_public_facade_has_no_direct_execution_calls():
 def test_actionable_output_carries_decision_identity(isolated_database):
     result = _orchestrator().analyze_stock("600000.SH")
 
-    assert result["decision_id"], "actionable 输出必须携带 decision_id"
-    assert result["decision_snapshot_id"], "actionable 输出必须携带 decision_snapshot_id"
-    assert result["runtime_mode"]
-    assert result["final_decision"]
+    assert result["actionable"] is False
+    assert "decision_id" not in result
+    assert "final_decision" not in result
 
 
 def test_fallback_is_also_governed(isolated_database):
     result = _orchestrator().analyze_stock("600000.SH")
 
     assert result["runtime_mode"] == "DETERMINISTIC_FALLBACK"
-    assert result["decision_snapshot_id"] is not None
-    assert result["policy"], "fallback 决策同样必须经过 PolicyEngine 治理"
+    assert result["actionable"] is False
+    assert "policy" not in result

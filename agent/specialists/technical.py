@@ -9,7 +9,7 @@ class TechnicalSpecialist(ToolSpecialist):
     def __call__(self, task: AgentTask, _shared):
         symbols = list(self.context.get("candidate_symbols") or [])
         if not symbols:
-            return self.artifact(task, {}, ["NO_CANDIDATE_SYMBOLS"], 0)
-        technical = self.call("scan_technical_rules", {"symbols": symbols})
-        signal = technical.get("signal") if isinstance(technical, dict) else None
-        return self.artifact(task, {"technical": technical, "opinions": {"technical_signal": signal} if signal is not None else {}}, tool_calls=1)
+            return self.artifact(task, {}, ["NO_CANDIDATE_SYMBOLS"], 0, unknowns=["TECHNICAL_EVIDENCE_NOT_REQUESTED"])
+        technical = [self.call("get_technical_evidence", {"symbol": symbol}) for symbol in symbols]
+        refs = [item.get("evidence_id") for item in technical if isinstance(item, dict) and item.get("evidence_id")]
+        return self.artifact(task, {"technical_evidence": technical}, tool_calls=len(symbols), evidence_refs=refs)

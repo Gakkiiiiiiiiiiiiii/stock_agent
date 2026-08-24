@@ -1,8 +1,10 @@
 import json
+from datetime import UTC, datetime
 
 from app.claude_agent import ClaudeAgent
 from app.skill_loader import SkillDefinition
 from app.tool_registry import ClaudeToolRegistry
+from engines.market.trading_clock import TradingClock, WeekdayTradingCalendar
 
 
 class FakeClient:
@@ -42,11 +44,14 @@ def test_claude_agent_runs_tool_loop(isolated_database):
     registry = ClaudeToolRegistry()
     schema, _ = registry._tools["get_market_snapshot"]
     registry._tools["get_market_snapshot"] = (schema, lambda _payload: {"snapshot": {"as_of": "2026-08-08T10:00:00+08:00"}})
+    clock = TradingClock(calendar=WeekdayTradingCalendar(), now_fn=lambda: datetime(2026, 8, 10, 1, tzinfo=UTC))
     agent = ClaudeAgent(
         client=fake_client,
         tools=registry,
         skills=[SkillDefinition(slug="daily-market-decision", name="daily-market-decision", description="", content="Use tools.")],
+        clock=clock,
     )
+    assert agent.clock is clock
     result = agent.run("做一次日报", force_skill="daily-market-decision")
     assert result.selected_skill == "daily-market-decision"
     assert "forced" in result.selection_reason.lower()
@@ -65,6 +70,7 @@ def test_claude_agent_preselects_daily_market_decision_for_recent_opportunity_qu
             SkillDefinition(slug="daily-market-decision", name="daily-market-decision", description="", content="Use tools."),
             SkillDefinition(slug="industry-logic-research", name="industry-logic-research", description="", content="Use tools."),
         ],
+        clock=TradingClock(calendar=WeekdayTradingCalendar(), now_fn=lambda: datetime(2026, 8, 10, 1, tzinfo=UTC)),
     )
     decision = agent._choose_skill("最近有什么比较好的板块或者赛道可以进行投资")
     assert decision.skill.slug == "daily-market-decision"

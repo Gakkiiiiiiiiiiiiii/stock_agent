@@ -1,16 +1,11 @@
-"""§28 API 拆分回归：路由拆分后对外路由表与原 app/api.py 单文件完全一致。
-
-期望清单来自重构前 app/api.py（git HEAD）并包含本轮 P2 新增的执行和实时
-接口；任何路由的新增/删除/方法变更都会使本测试失败，防止拆分时意外改变
-外部契约。
-"""
+"""API route contract regression for the read-only Decision Authority surface."""
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
 from app.api import app
 
-# (method, path)，与重构前 app/api.py 的路由一一对应。
+# (method, path); external fact production and execution routes are excluded.
 EXPECTED_ROUTES = {
     ("GET", "/health"),
     ("GET", "/health/live"),
@@ -28,12 +23,6 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/agent/sessions/{session_id}"),
     ("DELETE", "/api/v1/agent/sessions/{session_id}"),
     ("POST", "/api/v1/retrieval/context"),
-    ("POST", "/api/v1/content/bilibili/ingest"),
-    ("POST", "/api/v1/content/bilibili/summarize"),
-    ("POST", "/api/v1/content/xiaoe/hls/ingest"),
-    ("POST", "/api/v1/content/xiaoe/hls/summarize"),
-    ("GET", "/api/v1/content/tasks/{task_id}"),
-    ("POST", "/api/v1/content/tasks/{task_id}/process"),
     ("GET", "/api/v1/content/videos"),
     ("GET", "/api/v1/content/videos/{video_id}"),
     ("GET", "/api/v1/content/videos/{video_id}/summary-document"),
@@ -45,43 +34,27 @@ EXPECTED_ROUTES = {
     ("GET", "/api/v1/content/knowledge/{unit_id}"),
     ("GET", "/api/v1/content/knowledge-units/{unit_id}"),
     ("POST", "/api/v1/market/regime"),
-    ("POST", "/api/v1/knowledge/theme"),
-    ("POST", "/api/v2/proposals"),
-    ("GET", "/api/v2/proposals/{proposal_id}"),
-    ("POST", "/api/v2/proposals/{proposal_id}/approve"),
     ("GET", "/api/v2/audit/tools"),
     ("GET", "/api/v1/admin/themes"),
     ("GET", "/api/v1/admin/themes/{theme_name}"),
-    ("PUT", "/api/v1/admin/themes/{theme_name}"),
     ("GET", "/api/v1/admin/docs"),
     ("GET", "/api/v1/admin/docs/content"),
-    ("PUT", "/api/v1/admin/docs/content"),
-    ("DELETE", "/api/v1/admin/docs/content"),
     ("GET", "/api/v1/admin/factors"),
-    ("POST", "/api/v1/admin/factors/mine"),
-    ("GET", "/api/v1/admin/factors/mine/{task_id}"),
-    ("POST", "/api/v2/factors/mine"),
-    ("GET", "/api/v2/jobs/{job_id}"),
-    ("POST", "/api/v2/jobs/{job_id}/cancel"),
     ("GET", "/api/v1/admin/skills"),
     ("GET", "/api/v1/admin/skills/{slug}"),
-    ("PUT", "/api/v1/admin/skills/{slug}"),
     ("POST", "/api/v1/risk/portfolio"),
     ("POST", "/api/v1/review/trade"),
     ("POST", "/api/v1/decision/{decision_id}/replay"),
     ("POST", "/api/v1/decisions/{decision_id}/replay"),
     ("GET", "/api/v1/decisions/{decision_id}/snapshot"),
     ("POST", "/api/v1/decisions"),
-    ("POST", "/api/v1/execution/orders"),
-    ("POST", "/api/v1/execution/orders/{client_order_id}/submit"),
-    ("POST", "/api/v1/execution/orders/{client_order_id}/fills"),
-    ("POST", "/api/v1/execution/orders/{client_order_id}/cancel"),
-    ("POST", "/api/v1/execution/paper/quotes/{symbol}"),
-    ("POST", "/api/v1/execution/halt"),
-    ("POST", "/api/v1/execution/reconcile"),
-    ("POST", "/api/v1/stream/market-events"),
-    ("GET", "/api/v1/stream/market-features/{symbol}"),
-    ("GET", "/api/v1/stream/market-features"),
+    ("POST", "/api/v2/decisions"),
+    ("GET", "/api/v2/decisions/{decision_id}/snapshot"),
+    ("POST", "/api/v2/decisions/{decision_id}/outcomes/refresh"),
+    ("GET", "/api/v2/decisions/{decision_id}/outcomes"),
+    ("POST", "/api/v2/decisions/{decision_id}/review"),
+    ("GET", "/api/v2/decisions/{decision_id}/review"),
+    ("POST", "/api/v2/decisions/{decision_id}/replay"),
 }
 
 
@@ -107,10 +80,26 @@ def test_route_table_matches_pre_split_contract():
     assert _current_routes() == EXPECTED_ROUTES
 
 
-def test_key_endpoints_still_respond():
+def test_key_endpoints_still_respond(monkeypatch):
     """代表性端点冒烟：健康检查 + 各域入口的方法/路径未漂移。"""
     client = TestClient(app)
     assert client.get("/health").status_code == 200
+    class Quant:
+        def get_market_regime(self, *, as_of=None):
+            return {"regime": {"primary_regime": "neutral"}, "source_system": "quant"}
+
+    monkeypatch.setattr("app.dependencies.quant_client", Quant())
     response = client.post("/api/v1/market/regime", json={})
     assert response.status_code == 200
     assert "regime" in response.json()
+
+
+def test_regime_route_rejects_naive_as_of_and_raw_fact_payload():
+    client = TestClient(app)
+    naive = client.post("/api/v1/market/regime", json={"as_of": "2026-08-24T09:30:00"})
+    assert naive.status_code == 422
+    injected = client.post(
+        "/api/v1/market/regime",
+        json={"snapshot": {"regime": "bull"}, "metrics": {"breadth": 1}},
+    )
+    assert injected.status_code == 422

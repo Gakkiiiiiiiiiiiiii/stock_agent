@@ -7,8 +7,7 @@ execution:
     - get_decision
     - get_decision_outcome
     - get_market_regime_history
-    - search_strategy_memory
-    - review_investment_decision
+    - search_decision_memory
   max_tool_rounds: 8
   require_memory_lookup: true
 output:

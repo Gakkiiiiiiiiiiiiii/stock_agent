@@ -34,8 +34,6 @@ JOB_TASK_TYPES: tuple[str, ...] = (
     JobType.MEMORY_REVALIDATION,
     JobType.DECISION_OUTCOME,
     JobType.DECISION_REVIEW,
-    JobType.MARKET_FEATURE_SNAPSHOT,
-    JobType.SECTOR_FEATURE_SNAPSHOT,
     JobType.RETRIEVAL_EVALUATION,
 )
 
@@ -44,4 +42,6 @@ EXTERNAL_QUEUE_TYPES: tuple[str, ...] = (
     JobType.VECTOR_INDEX,
 )
 
-ALL_JOB_TYPES: tuple[str, ...] = JOB_TASK_TYPES + EXTERNAL_QUEUE_TYPES
+# Historical producers remain named for read-only migration/inspection, but
+# are intentionally not claimable by this worker.
+ALL_JOB_TYPES: tuple[str, ...] = JOB_TASK_TYPES + EXTERNAL_QUEUE_TYPES + (JobType.MARKET_FEATURE_SNAPSHOT, JobType.SECTOR_FEATURE_SNAPSHOT)

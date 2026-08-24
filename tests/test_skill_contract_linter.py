@@ -86,7 +86,7 @@ def test_clean_skill_passes(tmp_path):
         slug: clean-skill
         execution:
           required_tools: [get_market_snapshot]
-          optional_tools: [get_kline]
+          optional_tools: [get_technical_evidence]
         output:
           required_sections: [结论]
         """,

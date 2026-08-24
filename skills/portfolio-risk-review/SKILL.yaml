@@ -2,7 +2,7 @@ version: 2
 slug: portfolio-risk-review
 name: 组合风险复核
 execution:
-  required_tools: [evaluate_portfolio_risk, search_theme_logic, get_market_snapshot]
+  required_tools: [get_portfolio_risk_inputs, search_content_knowledge, get_market_snapshot]
   max_tool_rounds: 8
   require_fresh_market_data: true
 output:

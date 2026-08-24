@@ -13,6 +13,24 @@ def test_health():
     assert response.json()["status"] == "ok"
 
 
+def test_health_version_advertises_current_decision_contracts():
+    response = client.get("/health/version")
+    assert response.status_code == 200
+    contracts = set(response.json()["contract_versions"])
+    assert {
+        "evidence.v1",
+        "decision-input.v1",
+        "specialist-artifact.v2",
+        "evidence-synthesis.v1",
+        "decision-quality.v2",
+        "replay.v2",
+        "decision.snapshot.v3",
+        "investment-proposal.v2",
+        "investment-decision.v2",
+        "decision-memory.v1",
+    } <= contracts
+
+
 def test_ready_health_reports_dependency_failure(monkeypatch):
     monkeypatch.setattr(api_module, "_ready_checks", lambda: {"api": "ok", "qdrant": "failed"})
     response = client.get("/health/ready")
@@ -34,9 +52,8 @@ def test_ready_health_skips_optional_qmt_by_default(monkeypatch):
     monkeypatch.setattr(api_module, "_check_postgres", lambda: "ok")
     monkeypatch.setattr(api_module, "_check_http", lambda *a, **k: "ok")
     monkeypatch.setattr(api_module, "_check_redis", lambda *a, **k: "skipped")
-    monkeypatch.setattr(api_module, "_check_qmt", lambda: (_ for _ in ()).throw(AssertionError("qmt should not be checked")))
     checks = api_module._ready_checks()
-    assert checks["qmt"] == "skipped"
+    assert "qmt" not in checks
 
 
 def test_stock_analyze_api(monkeypatch):

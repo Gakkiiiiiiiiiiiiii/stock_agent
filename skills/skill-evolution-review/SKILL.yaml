@@ -2,8 +2,8 @@ version: 2
 slug: skill-evolution-review
 name: 策略进化复核
 execution:
-  required_tools: [search_strategy_memory, walk_forward_validate]
-  optional_tools: [retrieve_relevant_context]
+  required_tools: [search_decision_memory, get_decision_outcome]
+  optional_tools: [get_decision]
   max_tool_rounds: 8
   require_memory_lookup: true
 output:

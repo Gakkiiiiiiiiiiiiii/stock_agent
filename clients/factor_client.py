@@ -3,45 +3,41 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from clients._http import SubsystemHttpClient
-from contracts.factor import AlphaScoreRequest, MiningJobRequest
+from app.model_gateway.metrics import TraceContext
+from contracts.factor import AlphaScoreRequest
 
 
 def _data(payload: dict[str, Any]) -> dict[str, Any]:
     value = payload.get("data")
-    return value if isinstance(value, dict) else payload
+    if isinstance(value, dict):
+        merged = dict(value)
+        for key in ("contract_version", "service_version", "snapshot_id", "as_of", "available_at"):
+            if key in payload:
+                merged.setdefault(key, payload[key])
+        return merged
+    return payload
 
 
 class FactorClient(Protocol):
-    def create_mining_job(self, request: MiningJobRequest) -> dict[str, Any]: ...
-    def get_mining_job(self, job_id: str) -> dict[str, Any]: ...
     def list_factors(self, *, limit: int = 20) -> dict[str, Any]: ...
-    def score_alpha(self, request: AlphaScoreRequest) -> dict[str, Any]: ...
-    def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]: ...
-    def cancel_mining_job(self, job_id: str) -> dict[str, Any]: ...
+    def score_alpha(self, request: AlphaScoreRequest, *, trace: TraceContext | None = None, trace_context: dict[str, Any] | None = None) -> dict[str, Any]: ...
 
 
 class RemoteFactorClient(SubsystemHttpClient):
-    def create_mining_job(self, request: MiningJobRequest | None = None, **kwargs: Any) -> dict[str, Any]:
-        request = request or MiningJobRequest(**kwargs)
-        return _data(self.request("POST", "/api/v1/mining/jobs", payload=request.model_dump(exclude_none=True)))
+    def __init__(self, base_url: str | None = None, *, timeout_seconds: float = 30.0, retries: int = 2, **http_kwargs) -> None:
+        import os
+        super().__init__(base_url or os.getenv("FACTOR_SERVICE_URL", "http://stock-factor:8200"), timeout_seconds=timeout_seconds, retries=retries, **http_kwargs)
 
-    def get_mining_job(self, job_id: str) -> dict[str, Any]:
-        return _data(self.request("GET", f"/api/v1/mining/jobs/{job_id}"))
-
-    def list_factors(self, *, limit: int = 20) -> dict[str, Any]:
-        payload = self.request("GET", "/api/v1/factors", params={"limit": limit})
+    def list_factors(self, *, limit: int = 20, trace: TraceContext | None = None, trace_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = self.request("GET", "/api/v1/factors", params={"limit": limit}, trace=trace, trace_context=trace_context, contract_version="factor.v1")
         return {"items": payload.get("items", []), "limit": payload.get("limit", limit)}
 
-    def get_factor(self, factor_id: str) -> dict[str, Any]:
-        return _data(self.request("GET", f"/api/v1/factors/{factor_id}"))
+    def get_factor(self, factor_id: str, *, trace: TraceContext | None = None, trace_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        return _data(self.request("GET", f"/api/v1/factors/{factor_id}", trace=trace, trace_context=trace_context, contract_version="factor.v1"))
 
-    def score_alpha(self, request: AlphaScoreRequest) -> dict[str, Any]:
-        return _data(self.request("POST", "/api/v1/alpha/score", payload=request.model_dump(exclude_none=True)))
+    def score_alpha(self, request: AlphaScoreRequest, *, trace: TraceContext | None = None, trace_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        return _data(self.request("POST", "/api/v1/alpha/score", payload=request.model_dump(exclude_none=True), trace=trace, trace_context=trace_context, contract_version="factor.v1"))
 
-    def evaluate(self, payload: dict[str, Any]) -> dict[str, Any]:
-        if "universe" in payload and "symbols" not in payload:
-            payload = {**payload, "symbols": payload.pop("universe")}
-        return _data(self.request("POST", "/api/v1/factors/evaluate", payload=payload))
-
-    def cancel_mining_job(self, job_id: str) -> dict[str, Any]:
-        return _data(self.request("POST", f"/api/v1/mining/jobs/{job_id}/cancel"))
+    def get_factor_evidence(self, factor_id: str, *, trace: TraceContext | None = None, trace_context: dict[str, Any] | None = None) -> dict[str, Any]:
+        """Read-only evidence metadata for a factor owned by stock_factor."""
+        return _data(self.request("GET", f"/api/v1/factors/{factor_id}/evidence", trace=trace, trace_context=trace_context, contract_version="factor.v1"))

@@ -19,15 +19,23 @@ def test_default_golden_dataset_executes_active_contract():
     result = SkillEvolutionRunner._evaluate_golden_contracts("daily-market-decision", root, root)
     assert result["passed"] is True
     assert result["candidate"]["passed_cases"] == 5
-    assert result["candidate"]["executions"][0]["tool_calls"]
+    assert result["candidate"]["executions"][0]["execution_records"]
+    assert result["candidate"]["executions"][0]["tool_calls"] == []
+    assert {item["kind"] for item in result["candidate"]["executions"][0]["execution_records"]} == {"evidence", "specialist", "governance"}
 
 
 def test_missing_or_failed_golden_is_hard_rejection():
     root = project_root() / "skills" / "daily-market-decision"
     missing = SkillEvolutionRunner._evaluate_golden_contracts("no-golden-dataset", root, root)
     assert missing["passed"] is False
-    failed_case = SkillGoldenExecutor().evaluate("daily-market-decision", root, root, [{"id": "missing-tool", "query": "q", "required_tools": ["not_declared"], "structured_output": {}}])
+    failed_case = SkillGoldenExecutor().evaluate(
+        "daily-market-decision",
+        root,
+        root,
+        [{"id": "missing-evidence", "query": "q", "evidence": [], "specialists": [], "governance": {}, "freshness": {}, "structured_output": {}}],
+    )
     assert failed_case["passed"] is False
+    assert failed_case["candidate"]["executions"][0]["checks"]["required_evidence"] is False
 
     service = SkillEvolutionService()
     proposal = _proposal(service)

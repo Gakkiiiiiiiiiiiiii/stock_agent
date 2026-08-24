@@ -8,6 +8,7 @@ from typing import Callable
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
+from app.model_gateway.metrics import render_global_metrics
 
 PUBLIC_PATHS = {
     "/health/live",
@@ -72,4 +73,8 @@ async def security_and_trace_middleware(request: Request, call_next: Callable):
 
 
 def render_metrics() -> str:
-    return "\n".join(f"{key} {value}" for key, value in sorted(METRICS.items())) + "\n"
+    parts = ["\n".join(f"{key} {value}" for key, value in sorted(METRICS.items()))]
+    model_metrics = render_global_metrics()
+    if model_metrics:
+        parts.append(model_metrics)
+    return "\n".join(part for part in parts if part) + "\n"

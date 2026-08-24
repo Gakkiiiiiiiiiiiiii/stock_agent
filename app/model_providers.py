@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
-import json
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel
 
+from app.model_gateway import ModelGateway, ModelRoute, RetryPolicy, StructuredOutputError as GatewayStructuredOutputError, TraceContext
+from app.model_gateway.transport import OpenAICompatibleTransport
 from app.model_capabilities import ModelCapabilities
 from app.model_capability_resolver import ModelCapabilityResolver
 
@@ -50,6 +51,15 @@ class AnalysisModelClient:
         self.settings = settings or AnalysisModelSettings.from_env()
         self.capabilities = self.settings.capabilities or ModelCapabilityResolver.resolve(self.settings.provider, self.settings.model, "ANALYSIS_MODEL")
         self.http_client = http_client or httpx.Client(timeout=180)
+        self.gateway = ModelGateway(
+            primary=ModelRoute(
+                name="primary", provider=self.settings.provider, model=self.settings.model,
+                endpoint=lambda payload: OpenAICompatibleTransport(
+                    base_url=self.settings.base_url or "", api_key=self.settings.api_key or "", http_client=self.http_client,
+                ).request(payload),
+            ),
+            retry_policy=RetryPolicy(max_attempts=3, base_delay_seconds=0.25, max_delay_seconds=8.0),
+        )
 
     def available(self) -> bool:
         return (
@@ -70,6 +80,7 @@ class AnalysisModelClient:
         max_tokens: int = 2048,
         response_format: dict[str, Any] | None = None,
         output_model: type[BaseModel] | None = None,
+        trace: TraceContext | None = None,
     ) -> dict[str, Any]:
         if not self.available():
             return {
@@ -102,26 +113,15 @@ class AnalysisModelClient:
         payload["messages"].append({"role": "user", "content": prompt})
         if response_format is not None and native_structured:
             payload["response_format"] = response_format
-        data = self._post_chat_completion(payload)
-        validated_output: BaseModel | None = None
         if structured_output_fallback:
-            for attempt in range(2):
-                content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-                try:
-                    parsed = json.loads(content)
-                    validated_output = output_model.model_validate(parsed) if output_model is not None else None
-                    break
-                except (json.JSONDecodeError, ValidationError):
-                    if attempt:
-                        raise StructuredOutputError("STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA")
-                    payload["messages"].append({"role": "system", "content": "Previous output was invalid JSON or did not match the requested schema. Retry with one valid JSON object matching every required field and type."})
-                    data = self._post_chat_completion(payload)
-        elif output_model is not None:
-            content = (((data.get("choices") or [{}])[0].get("message") or {}).get("content") or "").strip()
-            try:
-                validated_output = output_model.model_validate(json.loads(content))
-            except (json.JSONDecodeError, ValidationError) as exc:
-                raise StructuredOutputError("NATIVE_STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA") from exc
+            payload.pop("response_format", None)
+        try:
+            gateway_result = self.gateway.complete_payload(payload, output_model=output_model, trace=trace or TraceContext())
+        except GatewayStructuredOutputError as exc:
+            code = "STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA" if structured_output_fallback else "NATIVE_STRUCTURED_OUTPUT_INVALID_JSON_OR_SCHEMA"
+            raise StructuredOutputError(code) from exc
+        data = gateway_result.response
+        validated_output = output_model.model_validate(gateway_result.structured_output) if output_model is not None and gateway_result.structured_output is not None else None
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         return {
@@ -131,6 +131,10 @@ class AnalysisModelClient:
             "content": message.get("content", ""),
             "finish_reason": choice.get("finish_reason"),
             "raw": data,
+            "usage": {"input_tokens": gateway_result.input_tokens, "output_tokens": gateway_result.output_tokens, "total_tokens": gateway_result.input_tokens + gateway_result.output_tokens},
+            "cost": gateway_result.cost,
+            "trace_id": gateway_result.trace.trace_id,
+            "model_version": gateway_result.model_version,
             "structured_output_fallback": structured_output_fallback,
             "structured_output": validated_output.model_dump(mode="json") if validated_output is not None else None,
         }
@@ -151,6 +155,7 @@ class AnalysisModelClient:
         tool_choice: dict[str, Any] | str | None = None,
         temperature: float = 0.2,
         max_tokens: int = 2048,
+        trace: TraceContext | None = None,
     ) -> dict[str, Any]:
         if not self.available():
             raise RuntimeError("Primary agent model is not configured")
@@ -170,21 +175,10 @@ class AnalysisModelClient:
             payload["tools"] = tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
-        return self._post_chat_completion(payload)
+        return self._post_chat_completion(payload, trace=trace)
 
-    def _post_chat_completion(self, payload: dict[str, Any]) -> dict[str, Any]:
-        base_url = (self.settings.base_url or "").rstrip("/")
-        url = f"{base_url}/chat/completions"
-        response = self.http_client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {self.settings.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        response.raise_for_status()
-        return response.json()
+    def _post_chat_completion(self, payload: dict[str, Any], *, trace: TraceContext | None = None) -> dict[str, Any]:
+        return self.gateway.complete_payload(payload, trace=trace or TraceContext()).response
 
 
 @dataclass(frozen=True)

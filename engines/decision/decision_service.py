@@ -50,13 +50,22 @@ def primary_horizon(decision_type: str | None = None) -> int:
 class DecisionService:
     """Persistence boundary for Decision → Outcome → Review → Memory."""
 
-    def __init__(self, repository: DecisionRepository | None = None, memory_service: MemoryService | None = None) -> None:
+    def __init__(self, repository: DecisionRepository | None = None, memory_service: MemoryService | None = None, clock: Any | None = None) -> None:
         self.repository = repository or DecisionRepository()
         self.memory_service = memory_service or MemoryService()
         self.snapshots = DecisionSnapshotRepository()
+        self.clock = clock
+
+    def _now(self) -> datetime:
+        value = self.clock() if callable(self.clock) else self.clock.now() if self.clock is not None and hasattr(self.clock, "now") else datetime.now(UTC)
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("decision service clock must return timezone-aware datetime")
+        return value
 
     def save_decision(self, **payload: Any) -> dict:
         create_all()
+        persist_snapshot = bool(payload.pop("persist_snapshot", True))
+        schedule_evaluations = bool(payload.pop("schedule_evaluations", True))
         snapshot_input = payload.pop("decision_snapshot", None) or {}
         decision_quality = payload.pop("decision_quality", None)
         route_attrs = {key: payload.pop(key) for key in _ROUTING_ONLY_KEYS if key in payload}
@@ -66,7 +75,7 @@ class DecisionService:
         route_attrs.setdefault("symbols", [str(item["symbol"]) for item in payload.get("candidates") or [] if isinstance(item, dict) and item.get("symbol")])
         route_attrs.setdefault("themes", list(payload.get("themes") or []))
         route = BenchmarkRouter().route(route_attrs)
-        payload.setdefault("decision_as_of", datetime.now(UTC))
+        payload.setdefault("decision_as_of", self._now())
         payload.setdefault("evaluation_anchor", "NEXT_SESSION_OPEN")
         if payload.get("benchmark_symbol"):
             route["primary_benchmark"] = str(payload["benchmark_symbol"])
@@ -81,9 +90,9 @@ class DecisionService:
         payload.setdefault("benchmark_router_version", route.get("router_version") or get_version("benchmark_router_version"))
         payload.setdefault("supervisor_version", "v1" if payload.get("agent_run_id") else None)
         decision = self.repository.create(**payload)
-        snapshot = self._save_decision_snapshot(decision, snapshot_input, decision_quality)
-        jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at))
-        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs, "decision_snapshot_id": snapshot.snapshot_id}
+        snapshot = self._save_decision_snapshot(decision, snapshot_input, decision_quality) if persist_snapshot else None
+        jobs = self.schedule_evaluations(decision.id, MarketClock().calendar_date(decision.decision_as_of or decision.created_at)) if schedule_evaluations else []
+        return {"decision_id": decision.id, "status": decision.status, "created_at": decision.created_at.isoformat(), "evaluation_jobs": jobs, "decision_snapshot_id": snapshot.snapshot_id if snapshot is not None else None}
 
     def _save_decision_snapshot(self, decision: Any, provided: dict[str, Any], decision_quality: str | None) -> Any:
         """落库 DecisionSnapshot（收尾文档 §38/§39）：固定 Schema + 可重放版本锚点与 lineage。"""
@@ -204,13 +213,12 @@ class DecisionService:
             jobs.append(job["id"])
         return jobs
 
-    @staticmethod
-    def enqueue_review(decision_id: str, outcome_id: int, horizon_days: int) -> str | None:
+    def enqueue_review(self, decision_id: str, outcome_id: int, horizon_days: int) -> str | None:
         if horizon_days != primary_horizon():
             return None
         task = JobTaskRepository().create(
             "decision_review", {"decision_id": decision_id, "horizon_days": horizon_days, "outcome_id": outcome_id},
-            idempotency_key=f"decision-review:{decision_id}:{horizon_days}", not_before=datetime.now(UTC),
+            idempotency_key=f"decision-review:{decision_id}:{horizon_days}", not_before=self._now(),
         )
         return task["id"]
 
@@ -319,7 +327,7 @@ class DecisionService:
             review_model=review.get("review_model"),
             attribution_json=review.get("attribution"),
         )
-        self.repository.update(decision_id, evaluation_status="REVIEWED", reviewed_at=datetime.now(UTC))
+        self.repository.update(decision_id, evaluation_status="REVIEWED", reviewed_at=self._now())
         return {"review_id": review_row.id, "decision_id": decision_id, "memory_ids": memory_ids, "memory_evidence_updates": evidence_updates}
 
     def annotate_review(self, review_id: int, **payload: Any) -> dict:

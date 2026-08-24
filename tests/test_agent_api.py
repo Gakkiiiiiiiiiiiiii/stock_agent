@@ -12,8 +12,10 @@ def test_run_agent_fallback_without_key(monkeypatch):
     response = client.post("/api/v1/agent/run", json={"query": "分析黄金主题"})
     assert response.status_code == 200
     body = response.json()
-    assert body["orchestration"] == "local-fallback"
-    assert "Claude-style Agent" in body["warning"]
+    assert body["orchestration"] == "legacy-narrative-adapter"
+    assert body["actionable"] is False
+    assert "decision_id" not in body
+    assert "snapshot_id" not in body
 
 
 def test_run_agent_stream_fallback_without_key(monkeypatch):
@@ -23,8 +25,9 @@ def test_run_agent_stream_fallback_without_key(monkeypatch):
         body = "".join(response.iter_text())
     assert response.status_code == 200
     assert "event: session" in body
-    assert "event: warning" in body
     assert "event: done" in body
+    assert '"actionable": false' in body
+    assert "decision_id" not in body
 
 
 def test_agent_session_crud():

@@ -1,28 +1,11 @@
 from fastapi.testclient import TestClient
 
-from app import dependencies
 from app.api import app
 
-client = TestClient(app)
 
-
-class FakeFactorClient:
-    def create_mining_job(self, request):
-        return {"job_id": "remote-job", "status": "PENDING", "rounds": request.rounds}
-
-    def get_mining_job(self, job_id):
-        return {"job_id": job_id, "status": "SUCCEEDED"}
-
-
-def test_admin_factor_mine_proxies_remote_service(monkeypatch):
-    monkeypatch.setattr(dependencies, "factor_client", FakeFactorClient())
-    response = client.post("/api/v1/admin/factors/mine?rounds=12")
-    assert response.status_code == 200
-    assert response.json() == {"job_id": "remote-job", "status": "PENDING", "rounds": 12}
-
-
-def test_admin_factor_mine_status_proxies_remote_service(monkeypatch):
-    monkeypatch.setattr(dependencies, "factor_client", FakeFactorClient())
-    response = client.get("/api/v1/admin/factors/mine/remote-job")
-    assert response.status_code == 200
-    assert response.json()["status"] == "SUCCEEDED"
+def test_factor_mining_routes_are_not_exposed():
+    client = TestClient(app)
+    assert client.post("/api/v2/factors/mine").status_code == 404
+    assert client.post("/api/v1/admin/factors/mine").status_code == 404
+    assert client.get("/api/v1/admin/factors/mine/job").status_code == 404
+    assert client.post("/api/v2/jobs/job/cancel").status_code == 404

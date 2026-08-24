@@ -58,4 +58,5 @@ class FactorSpecialist(ToolSpecialist):
             "factor_scores": scores,
             "as_of": response.get("as_of"),
         }
-        return self.artifact(task, conclusion, [], 1)
+        refs = list(response.get("evidence_refs") or []) + [str(item.get("evidence_id")) for item in scores if isinstance(item, dict) and item.get("evidence_id")]
+        return self.artifact(task, conclusion, [], 1, evidence_refs=refs)
