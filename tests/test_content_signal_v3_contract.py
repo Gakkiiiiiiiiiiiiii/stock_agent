@@ -13,11 +13,18 @@ from app.decision_runtime import LEGACY_SIGNAL_CONTRACT_VERSION, DecisionRuntime
 from contracts.content import (
     CONTENT_FACTOR_SIGNAL_LEGACY_VERSION,
     CONTENT_FACTOR_SIGNAL_VERSION,
+    ContentSignalLegacyResponse,
     ContentSignalRequest,
     ContentSignalResponse,
-    ContentSignalLegacyResponse,
 )
-from contracts.evidence import DependencyStatus, DependencyStatusValue, Evidence, EvidenceQuality, EvidenceType, SourceSystem
+from contracts.evidence import (
+    DependencyStatus,
+    DependencyStatusValue,
+    Evidence,
+    EvidenceQuality,
+    EvidenceType,
+    SourceSystem,
+)
 from storage.repositories.research_repository import DecisionSnapshotRepository
 
 CONTRACT_DIR = Path(__file__).resolve().parent.parent / "contracts" / "content-factor-signal.v3"
@@ -81,19 +88,20 @@ class _FormalEvidenceGateway:
             (EvidenceType.SECTOR_STRENGTH, "market", {"items": [{"sector": "consumer", "strength": 0.2}]}),
             (EvidenceType.PORTFOLIO_POSITION, "portfolio", {"positions": [], "gross_exposure": 0.0, "net_exposure": 0.0}),
             (EvidenceType.PORTFOLIO_RISK, "portfolio", {"risk_score": 0.1, "veto": False}),
+            (EvidenceType.FACTOR_SCORE, "factor-fixture", {"factor_artifact_id": "factor-fixture", "score": 0.2}),
             (EvidenceType.KNOWLEDGE_CLAIM, "CN.A.600519", {"content_snapshot_id": "cs-fixture", "claim_id": "claim-fixture", "evidence_refs": ["evidence-fixture"], "claim": "frozen content claim"}),
         ]
         evidence = [
             Evidence(
                 evidence_type=evidence_type,
-                source_system=SourceSystem.CONTENT if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else SourceSystem.QUANT,
+                source_system=(SourceSystem.CONTENT if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else SourceSystem.FACTOR if evidence_type == EvidenceType.FACTOR_SCORE else SourceSystem.QUANT),
                 source_ref=f"quant:test:{evidence_type.value.lower()}",
                 subject_type="portfolio" if subject == "portfolio" else "market",
                 subject_key=subject,
                 as_of=decision_time,
                 available_at=decision_time,
-                snapshot_id="cs-fixture" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else ("mds-agent-1" if subject == "market" else "portfolio-1"),
-                contract_version="content-factor-signal.v3" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else "market-data.v1",
+            snapshot_id=("cs-fixture" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else "factor-fixture" if evidence_type == EvidenceType.FACTOR_SCORE else ("mds-agent-1" if subject == "market" else "portfolio-1")),
+            contract_version=("content-factor-signal.v3" if evidence_type == EvidenceType.KNOWLEDGE_CLAIM else "factor.v1" if evidence_type == EvidenceType.FACTOR_SCORE else "market-data.v1"),
                 payload=payload,
                 quality_status=EvidenceQuality.VERIFIED,
                 confidence=1.0,
@@ -116,7 +124,15 @@ class _FormalEvidenceGateway:
             service_version="content-test",
             snapshot_id="cs-fixture",
         )
-        return evidence, [status, content_status]
+        factor_status = DependencyStatus(
+            system=SourceSystem.FACTOR,
+            status=DependencyStatusValue.OK,
+            checked_at=decision_time,
+            contract_version="factor.v1",
+            service_version="factor-test",
+            snapshot_id="factor-fixture",
+        )
+        return evidence, [status, content_status, factor_status]
 
 
 def _formal_fallback(**kwargs):
@@ -126,7 +142,10 @@ def _formal_fallback(**kwargs):
     }
 
 
-def test_v3_signal_enters_decision_snapshot_lineage(isolated_database):
+def test_v3_signal_enters_decision_snapshot_lineage(isolated_database, monkeypatch):
+    monkeypatch.setenv("STOCK_AGENT_OFFLINE_MODE", "1")
+    monkeypatch.setenv("STOCK_AGENT_DETERMINISTIC_FIXTURE", "1")
+    monkeypatch.setenv("AGENT_GIT_COMMIT", "fixture-commit")
     now = datetime.now(UTC).replace(microsecond=0)
     runtime = DecisionRuntime(
         claude_agent=_StubClaudeAgent(),
@@ -157,6 +176,8 @@ def test_v3_signal_enters_decision_snapshot_lineage(isolated_database):
                 "subjects": ["CN.A.600519"],
                 "context": {"skill": "daily-market-decision"},
                 "as_of": now.isoformat(),
+                "portfolio_id": "content-fixture",
+                "idempotency_key": "content-fixture-key",
             },
         )
     finally:

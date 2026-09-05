@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from engines.retrieval.hybrid_retriever import HybridRetriever
-from engines.retrieval.knowledge_access_policy import AccessRule, KnowledgeAccessPolicy, to_filters
+from engines.retrieval.knowledge_access_policy import (
+    AccessRule,
+    KnowledgeAccessPolicy,
+    to_filters,
+)
 from engines.retrieval.retrieval_policy import RetrievalPolicy, merge_policy_filters
 
 

@@ -6,11 +6,12 @@ import ast
 from datetime import date
 from pathlib import Path
 
-from app.api import app
-from app import dependencies
-from app.tool_registry import ClaudeToolRegistry
-from app.tool_policy import PermissionLevel
 from fastapi.routing import APIRoute
+
+from app import dependencies
+from app.api import app
+from app.tool_policy import PermissionLevel
+from app.tool_registry import ClaudeToolRegistry
 
 ROOT = Path(__file__).resolve().parents[2]
 FORBIDDEN_TOOL_NAMES = {
@@ -82,6 +83,15 @@ def test_main_path_does_not_import_local_fact_producers_or_execution() -> None:
                 assert not any(any(part in item for part in FORBIDDEN_IMPORT_PARTS) for item in imported), f"forbidden main-path import in {path}: {imported}"
 
 
+def test_claude_agent_has_no_formal_decision_persistence_bypass() -> None:
+    """Agent and daily-scan paths remain analysis-only; v2 owns formal writes."""
+    source = (ROOT / "app" / "claude_agent.py").read_text(encoding="utf-8")
+    assert "DecisionService" not in source
+    assert "save_decision" not in source
+    assert "save_investment_decision" not in source
+    assert "DecisionUnitOfWork" not in source
+
+
 def test_clients_do_not_depend_on_engine_implementations() -> None:
     for path in (ROOT / "clients").glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -97,14 +107,15 @@ def test_clients_do_not_depend_on_engine_implementations() -> None:
 
 def test_default_deployment_disables_legacy_fact_and_execution_workloads() -> None:
     values = (ROOT / "deploy" / "helm" / "stock-agent" / "values.yaml").read_text(encoding="utf-8")
-    assert "market-data: {enabled: false}" in values
-    assert "execution: {enabled: false}" in values
-    assert "retrieval: {enabled: false}" in values
+    assert "market-data" not in values
+    assert "execution" not in values
+    assert "retrieval" not in values
     assert "market-feature-snapshot" not in values
     assert "vector-reconciliation" not in values
     assert "services.execution_api" not in values
     assert "services.market_data_api" not in values
     assert "LIVE" not in values and "QMT" not in values
+    assert "stock-agent-api" in values and "stock-agent-worker" in values and "stock-agent-analysis" in values
 
 
 def test_legacy_retrieval_and_regime_producers_are_not_main_route_imports() -> None:
@@ -145,13 +156,14 @@ def test_production_clock_is_quant_calendar_backed(monkeypatch) -> None:
 
 
 def test_orchestrator_captures_the_shared_production_clock() -> None:
-    from engines.market.trading_clock import get_default_clock
+    from engines.market.trading_clock import QuantTradingCalendarAdapter
 
-    shared = get_default_clock()
+    shared = dependencies._shared_clock
     assert dependencies.orchestrator.runtime.clock is shared
     assert dependencies.orchestrator.runtime.outcome_provider.clock is shared
     assert dependencies.orchestrator.runtime.fallback.clock is shared
     assert dependencies.orchestrator.runtime.claude_agent.clock is shared
+    assert isinstance(shared.calendar, QuantTradingCalendarAdapter)
     assert shared.degraded is False
 
 

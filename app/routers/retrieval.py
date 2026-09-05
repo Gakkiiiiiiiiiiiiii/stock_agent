@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app import dependencies
+from app.domain.decision.authority import analysis_response
 
 router = APIRouter()
 
@@ -18,4 +19,4 @@ class RetrievalRequest(BaseModel):
 
 @router.post("/api/v1/retrieval/context")
 def retrieve_context(request: RetrievalRequest) -> dict:
-    return dependencies.content_client.search_video_knowledge(request.query, filters=request.filters, limit=request.top_k, intent=request.task_type)
+    return analysis_response(dependencies.content_client.search_video_knowledge(request.query, filters=request.filters, limit=request.top_k, intent=request.task_type))

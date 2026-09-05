@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import lru_cache
-from typing import Iterator
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, declarative_base, sessionmaker
-
 
 Base = declarative_base()
 
@@ -19,7 +19,10 @@ def get_engine() -> Engine:
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgresql+psycopg://", 1)
     if url.startswith("sqlite"):
-        connect_args = {"check_same_thread": False}
+        # Formal finalization uses BEGIN IMMEDIATE on SQLite test/smoke
+        # databases; wait for the current owner instead of failing on a
+        # transient writer lock.
+        connect_args: dict[str, object] = {"check_same_thread": False, "timeout": 30}
     elif url.startswith("postgresql+psycopg"):
         connect_args = {"connect_timeout": 5}
     else:
@@ -28,10 +31,25 @@ def get_engine() -> Engine:
 
 
 SessionLocal = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+_BOUND_SESSION: ContextVar[Session | None] = ContextVar("bound_storage_session", default=None)
+
+
+@contextmanager
+def bind_session(session: Session) -> Iterator[Session]:
+    """Make nested repository calls participate in one request transaction."""
+    marker = _BOUND_SESSION.set(session)
+    try:
+        yield session
+    finally:
+        _BOUND_SESSION.reset(marker)
 
 
 @contextmanager
 def session_scope() -> Iterator[Session]:
+    bound = _BOUND_SESSION.get()
+    if bound is not None:
+        yield bound
+        return
     session = SessionLocal()
     try:
         yield session

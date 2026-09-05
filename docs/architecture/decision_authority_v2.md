@@ -32,9 +32,9 @@ maps typed dependency error codes directly into `DependencyStatus`.
 
 `engines.market.trading_clock.TradingClock` is the main-path business clock.
 It is injectable and has an offline weekday calendar by default; a remote
-calendar adapter can be supplied at composition time. The legacy
-`ExchangeTradingCalendar`/QMT path remains available for legacy integrations
-but is not imported by the main skill-contract clock path. Timestamps used
+calendar adapter can be supplied at composition time. The retired
+`ExchangeTradingCalendar`/QMT producer path is no longer packaged or imported.
+Timestamps used
 for infrastructure/audit records may continue to use explicit UTC providers.
 Snapshot and quant calendar adapters expose open/closed state, navigation,
 holiday handling, half-day close times, and pre-open/open/after-close phases.

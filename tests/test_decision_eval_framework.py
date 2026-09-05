@@ -1,20 +1,24 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 import json
-from pathlib import Path
 import tomllib
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
 from evals.baselines import Baseline, compare_to_baseline
 from evals.datasets import DecisionEvalCase, EvalDataset, EvalExpected, load_jsonl
-from evals.metrics import aggregate_metrics, compute_metrics, evidence_precision, evidence_recall
+from evals.metrics import (
+    aggregate_metrics,
+    compute_metrics,
+    evidence_precision,
+    evidence_recall,
+)
 from evals.reports import EvaluationReport
 from evals.runners import EvalRunner, Variant, compare_variants
 
-
-NOW = datetime(2026, 1, 2, 9, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 2, 9, tzinfo=UTC)
 
 
 def case(**expected):

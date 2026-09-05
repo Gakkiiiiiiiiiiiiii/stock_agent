@@ -5,7 +5,11 @@ from uuid import uuid4
 
 import pytest
 
-from engines.strategy_factory import StrategyDefinition, StrategyFactory, StrategyPaperEvidenceProvider
+from engines.strategy_factory import (
+    StrategyDefinition,
+    StrategyFactory,
+    StrategyPaperEvidenceProvider,
+)
 from engines.strategy_factory.models import StrategyStatus
 from storage.repositories.p2_repository import P2Repository
 from storage.repositories.research_repository import DecisionRepository

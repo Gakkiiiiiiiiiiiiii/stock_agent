@@ -1,4 +1,2 @@
 services:
-  api: {enabled: true, replicas: 3, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000}
-env:
-  EXECUTION_MODE: LIVE
+  api: {enabled: true, replicas: 3, image: {repository: stock-agent-api, tag: prod}, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000}

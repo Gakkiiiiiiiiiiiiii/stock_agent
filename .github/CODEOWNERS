@@ -1,0 +1,6 @@
+# Authority, contract, persistence and deployment changes require the owning team.
+* @Gakkiiiiiiiiiiiiii
+app/domain/ @Gakkiiiiiiiiiiiiii
+contracts/ @Gakkiiiiiiiiiiiiii
+storage/migrations/ @Gakkiiiiiiiiiiiiii
+deploy/ .github/workflows/ @Gakkiiiiiiiiiiiiii

@@ -1,17 +1,38 @@
 from __future__ import annotations
 
-import json
 from datetime import UTC, datetime, time
 
 import httpx
 import pytest
 from pydantic import BaseModel
 
-from app.model_gateway import CircuitBreaker, MetricsRecorder, ModelGateway, ModelRoute, RetryPolicy, StructuredOutputError, TokenCostBudget, TraceContext
-from app.model_gateway.metrics import render_global_metrics
+from app.model_gateway import (
+    CircuitBreaker,
+    MetricsRecorder,
+    ModelGateway,
+    ModelRoute,
+    RetryPolicy,
+    StructuredOutputError,
+    TokenCostBudget,
+    TraceContext,
+)
 from app.model_gateway.budget import BudgetExceededError
-from clients._http import CONTRACT_MISMATCH, DEPENDENCY_TIMEOUT, DEPENDENCY_UNAVAILABLE, INVALID_SNAPSHOT, STALE_DATA, DependencyError, SubsystemHttpClient
-from engines.market.trading_clock import CalendarSession, QuantTradingCalendarAdapter, SnapshotTradingCalendar, TradingClock
+from app.model_gateway.metrics import render_global_metrics
+from clients._http import (
+    CONTRACT_MISMATCH,
+    DEPENDENCY_TIMEOUT,
+    DEPENDENCY_UNAVAILABLE,
+    INVALID_SNAPSHOT,
+    STALE_DATA,
+    DependencyError,
+    SubsystemHttpClient,
+)
+from engines.market.trading_clock import (
+    CalendarSession,
+    QuantTradingCalendarAdapter,
+    SnapshotTradingCalendar,
+    TradingClock,
+)
 
 
 class _Output(BaseModel):
@@ -296,7 +317,7 @@ def test_analysis_client_passes_formal_trace_to_gateway_transport():
 def test_business_clock_has_no_qmt_calendar_dependency():
     clock = TradingClock(now_fn=lambda: datetime(2026, 8, 24, 1, tzinfo=UTC))
     assert clock.current_trading_session("CN_A").isoformat() == "2026-08-24"
-    import app.skill_contract as skill_contract
+    from app import skill_contract
     assert skill_contract.ExchangeTradingCalendar.__module__ == "engines.market.trading_clock"
 
 

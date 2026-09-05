@@ -12,6 +12,6 @@ big-bang `src/` migration.
 | `workers/` | asynchronous job execution | business-rule implementation |
 | `financial_agent/` | legacy compatibility models/config only | new domain modules |
 
-`architect/` and `artitect/` are retained as historical source material. New
-architecture documentation belongs in this directory; no new runtime imports
-may target either historical directory.
+Historical `architect/` and `artitect/` documents are archived under
+`docs/architecture/legacy/`. New architecture documentation belongs in this
+directory; no runtime imports may target the legacy archive.

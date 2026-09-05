@@ -4,8 +4,12 @@ import os
 import time
 from datetime import date
 
+from sqlalchemy.exc import SQLAlchemyError
+
 from app.admin_service import AdminContentService
 from app.agent_orchestrator import AgentOrchestrator
+from app.application.audit.lineage_graph import LineageGraph
+from app.application.decision.orchestrator import DecisionApplicationService
 from app.chat_history_service import ChatHistoryService
 from app.decision_runtime import DecisionRuntime
 from app.fallback_orchestrator import LocalFallbackOrchestrator
@@ -15,9 +19,11 @@ from engines.market.trading_clock import (
     configure_default_clock,
     get_default_clock,
 )
+from services.evidence.fixture_gateway import DeterministicFixtureEvidenceGateway
 from services.evidence.gateway import EvidenceGateway
 from services.subsystems import get_content_client, get_factor_client, get_quant_client
 from storage.bootstrap import create_all
+from storage.db import session_scope
 
 
 def init_application() -> None:
@@ -27,7 +33,7 @@ def init_application() -> None:
             create_all()
             last_error = None
             break
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             last_error = exc
             time.sleep(2)
     if last_error is not None:
@@ -76,18 +82,25 @@ configure_trading_clock(offline=os.getenv("STOCK_AGENT_OFFLINE_MODE") == "1")
 # Construct consumers only after the shared clock has been installed. This
 # prevents an orchestrator/runtime from retaining a private degraded clock.
 _shared_clock = get_default_clock()
-evidence_gateway = EvidenceGateway(
-    quant_client=quant_client,
-    factor_client=factor_client,
-    content_client=content_client,
-    clock=_shared_clock,
+decision_application_service = DecisionApplicationService()
+evidence_gateway = (
+    DeterministicFixtureEvidenceGateway()
+    if os.getenv("STOCK_AGENT_DETERMINISTIC_FIXTURE") == "1"
+    else EvidenceGateway(
+        quant_client=quant_client,
+        factor_client=factor_client,
+        content_client=content_client,
+        clock=_shared_clock,
+    )
 )
 orchestrator = AgentOrchestrator(
     runtime=DecisionRuntime(
         clock=_shared_clock,
         evidence_gateway=evidence_gateway,
         fallback=LocalFallbackOrchestrator(clock=_shared_clock),
+        application_service=decision_application_service,
     )
 )
 admin_service = AdminContentService()
 chat_history_service = ChatHistoryService()
+lineage_graph = LineageGraph(persistent=True, session_factory=session_scope)

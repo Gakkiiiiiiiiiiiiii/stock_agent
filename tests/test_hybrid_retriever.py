@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from engines.retrieval.hybrid_retriever import HybridRetriever
 from engines.retrieval.config import RetrievalConfig
+from engines.retrieval.hybrid_retriever import HybridRetriever
 from engines.retrieval.query_understanding import build_retrieval_plan
 
 

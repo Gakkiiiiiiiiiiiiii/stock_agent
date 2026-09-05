@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import dependencies
+from app.domain.decision.authority import analysis_response
 from app.routers._shared import _format_sse
 
 router = APIRouter()
@@ -40,12 +41,12 @@ class AgentSessionCreateRequest(BaseModel):
 
 @router.post("/api/v1/analyze/stock")
 def analyze_stock(request: StockAnalyzeRequest) -> dict:
-    return dependencies.orchestrator.analyze_stock(request.symbol, as_of=request.date, patterns=request.patterns)
+    return analysis_response(dependencies.orchestrator.analyze_stock(request.symbol, as_of=request.date, patterns=request.patterns))
 
 
 @router.post("/api/v1/analyze/theme")
 def analyze_theme(request: ThemeAnalyzeRequest) -> dict:
-    return dependencies.orchestrator.analyze_theme(request.theme_name)
+    return analysis_response(dependencies.orchestrator.analyze_theme(request.theme_name))
 
 
 @router.post("/api/v1/agent/run")
@@ -59,7 +60,7 @@ def run_agent(request: AgentRunRequest) -> dict:
         response=payload,
     )
     payload["session_id"] = session["session_id"]
-    return payload
+    return analysis_response(payload)
 
 
 @router.post("/api/v1/agent/run/stream")
@@ -68,19 +69,19 @@ def run_agent_stream(request: AgentRunRequest) -> StreamingResponse:
     session = dependencies.chat_history_service.ensure_session(request.session_id, title_hint=request.query)
 
     def emit(event: str, payload: dict) -> None:
-        event_queue.put((event, payload))
+        event_queue.put((event, analysis_response(payload) if event != "session" else payload))
 
     def worker() -> None:
         try:
             emit("session", {"session_id": session["session_id"], "title": session.get("title")})
-            payload = dependencies.orchestrator.run_agent(query=request.query, context=request.context, skill=request.skill, emit=emit)
+            payload = analysis_response(dependencies.orchestrator.run_agent(query=request.query, context=request.context, skill=request.skill, emit=emit))
             dependencies.chat_history_service.save_turn(
                 session_id=session["session_id"],
                 user_query=request.query,
                 assistant_content=payload.get("report") or payload.get("warning") or "",
                 response={**payload, "session_id": session["session_id"]},
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - streaming boundary must emit terminal error
             emit("error", {"message": str(exc)})
         finally:
             event_queue.put(None)

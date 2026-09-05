@@ -1,0 +1,66 @@
+version: 1
+contracts:
+  formal-decision.v2:
+    producer: stock_agent
+    schema: contracts/formal-decision.v2.json
+    checksum: sha256:ec1457523d6bb3d1456568d33fc9ff1fd4c14c3b9b863962b46ce35a81a7c3a2
+    consumers: [quant]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  decision-snapshot.v1:
+    producer: stock_agent
+    schema: contracts/decision-snapshot.v1.json
+    checksum: sha256:08af6458bf2fe4abcf458b677fcca88a0ce3cdb5075a5c9e063c987971fb292e
+    consumers: [stock_agent, quant]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  execution-authorization.v1:
+    producer: stock_agent
+    schema: contracts/execution-authorization.v1.json
+    checksum: sha256:144ec054950746df785d316db1873d837eb052fe6bc10e4cc85380fe16110fb1
+    consumers: [quant]
+    compatibility: none
+    deprecated_at: null
+    sunset_at: null
+  market-data.v1:
+    producer: quant
+    schema: contracts/market.py
+    checksum: sha256:17bedceefa5a5891ceecd0d10ff877c53adb62106030f157f8ce1b8d406cb200
+    consumers: [stock_agent]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  factor.v1:
+    producer: stock_factor
+    schema: contracts/factor.py
+    checksum: sha256:8adb9fe6a5662d0d6aff2bca563e65073f9174e0bcda9ea5ebdd173b6c74cd99
+    consumers: [stock_agent]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  content.v1:
+    producer: stock_content
+    schema: contracts/content.py
+    checksum: sha256:43c339cb2b2c7a632ef3d0ccc384cd34e54b842b0535a065fb58557bb6a9b51b
+    consumers: [stock_agent]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  replay.v2:
+    producer: stock_agent
+    schema: contracts/replay.py
+    checksum: sha256:717bcfe0e248ba241a61bd94818095ca12285ac46a4dae16bc741234597bea84
+    consumers: [stock_agent]
+    compatibility: none
+    deprecated_at: null
+    sunset_at: null
+  decision-outcome.v1:
+    producer: quant
+    schema: contracts/outcome.py
+    checksum: sha256:e65ce592ede9c74befcc6e8499fc6cd5eba484610f5b5425dc1b0192f330a225
+    consumers: [stock_agent]
+    compatibility: backward
+    deprecated_at: null
+    sunset_at: null

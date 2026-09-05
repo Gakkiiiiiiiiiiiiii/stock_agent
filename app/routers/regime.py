@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from app import dependencies
+from app.domain.decision.authority import analysis_response
 
 router = APIRouter()
 
@@ -29,6 +30,6 @@ class MarketRegimeRequest(BaseModel):
 @router.post("/api/v1/market/regime")
 def market_regime(request: MarketRegimeRequest) -> dict:
     try:
-        return dependencies.quant_client.get_market_regime(as_of=request.as_of.isoformat() if request.as_of else None)
+        return analysis_response(dependencies.quant_client.get_market_regime(as_of=request.as_of.isoformat() if request.as_of else None))
     except Exception as exc:  # noqa: BLE001
-        return JSONResponse(status_code=503, content={"status": "degraded", "dependency": "quant", "reason_code": "DEPENDENCY_UNAVAILABLE", "detail": type(exc).__name__})
+        return JSONResponse(status_code=503, content=analysis_response({"status": "degraded", "dependency": "quant", "reason_code": "DEPENDENCY_UNAVAILABLE", "detail": type(exc).__name__}))

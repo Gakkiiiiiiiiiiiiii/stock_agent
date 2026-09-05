@@ -47,7 +47,8 @@ def test_hybrid_retriever_returns_contexts():
 def test_deployment_embedding_defaults_are_semantic():
     import yaml
 
-    compose = yaml.safe_load(open("docker-compose.yml", encoding="utf-8"))
+    with open("docker-compose.yml", encoding="utf-8") as compose_file:
+        compose = yaml.safe_load(compose_file)
     api_env = compose["services"]["api"]["environment"]
     embedding_env = compose["services"]["embedding"]["environment"]
     api_depends = compose["services"]["api"]["depends_on"]
@@ -98,7 +99,10 @@ def test_embedding_api_reuses_cached_embedder(monkeypatch):
 
 
 def test_collection_manifest_rejects_local_ngram_for_bge_collection():
-    from engines.retrieval.collection_manifest import CollectionManifestError, validate_embedding_manifest
+    from engines.retrieval.collection_manifest import (
+        CollectionManifestError,
+        validate_embedding_manifest,
+    )
     from engines.retrieval.embedder import EmbeddingMetadata
 
     metadata = EmbeddingMetadata(provider="local_ngram", model="local-chinese-ngram-v1", dimension=1024, semantic=False)

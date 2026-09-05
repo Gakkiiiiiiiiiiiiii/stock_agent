@@ -1,6 +1,7 @@
+from datetime import date
+
 import numpy as np
 import pytest
-from datetime import date
 
 from engines.backtest.execution import (
     PositionBook,
@@ -14,8 +15,7 @@ from engines.backtest.execution import (
     price_limit_pct,
 )
 from engines.backtest.metrics import calc_portfolio_metrics
-from engines.backtest.portfolio_backtest import run_topk_backtest
-from engines.backtest.portfolio_backtest import LookaheadViolation
+from engines.backtest.portfolio_backtest import LookaheadViolation, run_topk_backtest
 from engines.backtest.reports import render_portfolio_report
 
 # ---------- 板块与涨跌停判定 ----------
@@ -361,7 +361,10 @@ def test_price_limit_pct_deprecated_returns_up_limit():
 
 
 def test_validate_price_limit_rule():
-    from engines.market.price_limit_rules import PriceLimitRule, validate_price_limit_rule
+    from engines.market.price_limit_rules import (
+        PriceLimitRule,
+        validate_price_limit_rule,
+    )
 
     validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=None, limit_down_pct=None, has_price_limit=False))
     validate_price_limit_rule(PriceLimitRule(board="主板", limit_up_pct=0.1, limit_down_pct=0.1))
@@ -411,7 +414,11 @@ def test_invalid_tick_size_falls_back_to_default():
 
 
 def test_invalid_actual_limit_price_is_rejected():
-    from engines.backtest.execution import TradeRuleContext, can_buy_with_context, can_sell_with_context
+    from engines.backtest.execution import (
+        TradeRuleContext,
+        can_buy_with_context,
+        can_sell_with_context,
+    )
 
     day = date(2026, 7, 26)
     with pytest.raises(ValueError, match="PRICE_LIMIT_PRICE_INVALID:upper_limit_price"):

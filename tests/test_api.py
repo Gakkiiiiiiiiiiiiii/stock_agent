@@ -3,7 +3,6 @@ from fastapi.testclient import TestClient
 from app import api as api_module
 from app.api import app, orchestrator
 
-
 client = TestClient(app)
 
 
@@ -45,15 +44,6 @@ def test_ready_health_allows_optional_skipped(monkeypatch):
     response = client.get("/health/ready")
     assert response.status_code == 200
     assert response.json()["checks"]["redis"] == "skipped"
-
-
-def test_ready_health_skips_optional_qmt_by_default(monkeypatch):
-    monkeypatch.delenv("READY_CHECK_OPTIONAL_QMT", raising=False)
-    monkeypatch.setattr(api_module, "_check_postgres", lambda: "ok")
-    monkeypatch.setattr(api_module, "_check_http", lambda *a, **k: "ok")
-    monkeypatch.setattr(api_module, "_check_redis", lambda *a, **k: "skipped")
-    checks = api_module._ready_checks()
-    assert "qmt" not in checks
 
 
 def test_stock_analyze_api(monkeypatch):

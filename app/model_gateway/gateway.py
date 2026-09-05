@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from time import monotonic, sleep
-from typing import Any, Callable
+from typing import Any
 
 from pydantic import BaseModel, ValidationError
 
 from .budget import BudgetExceededError, TokenCostBudget
 from .circuit_breaker import CircuitBreaker, CircuitOpenError
 from .metrics import MetricsRecorder, TraceContext
-from .retry import RetryPolicy, RetryableError, retry_call
+from .retry import RetryableError, RetryPolicy, retry_call
 from .routing import ModelRoute, ModelRouter
 
 
@@ -139,7 +140,7 @@ class ModelGateway:
                     budget.check(input_tokens=attempt_input_tokens, output_tokens=max(0, request.max_tokens), estimated_cost=attempt_estimated_cost)
                     with self.metrics.timer("model_latency_seconds", model=route.name):
                         response = retry_call(
-                            lambda: _invoke(route.endpoint, route_payload),
+                            lambda route=route, route_payload=route_payload: _invoke(route.endpoint, route_payload),
                             policy=self.retry_policy,
                             sleeper=self.sleeper,
                             retry_if=_retryable,
@@ -183,7 +184,7 @@ class ModelGateway:
                 # under sustained traffic. The next route may still run.
                 last = exc
                 self.metrics.increment("model_errors_total", model=route.name, error=type(exc).__name__)
-            except Exception as exc:  # fallback is intentionally bounded to the next route
+            except Exception as exc:  # noqa: BLE001 - fallback is intentionally bounded to the next route
                 breaker.failure()
                 last = exc
                 self.metrics.increment("model_errors_total", model=route.name, error=type(exc).__name__)

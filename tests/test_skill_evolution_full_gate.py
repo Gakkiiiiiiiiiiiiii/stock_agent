@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from engines.skill_evolution import SkillEvolutionRunner, SkillEvolutionService, SkillProposal
+from engines.skill_evolution import (
+    SkillEvolutionRunner,
+    SkillEvolutionService,
+    SkillProposal,
+)
 from engines.skill_evolution.golden_executor import SkillGoldenExecutor
 from engines.skill_evolution.models import ProposalStatus
 from financial_agent.utils import project_root

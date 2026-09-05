@@ -3,17 +3,21 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
-from app.model_providers import AgentModelClient, AgentModelSettings
+from pydantic import BaseModel, ConfigDict, Field
+
+from agent.executor import SkillExecutor
 from app.model_gateway import TraceContext
+from app.model_providers import AgentModelClient, AgentModelSettings
 from app.skill_loader import SkillDefinition, format_skill_catalog, load_skills
 from app.tool_registry import ClaudeToolRegistry
-from agent.executor import SkillExecutor
+from contracts.proposal import (
+    InvestmentProposalV2,
+    ModelIdentity,
+    NarrativeReport,
+)
 from engines.market.trading_clock import TradingClock, get_default_clock
-from contracts.proposal import DecisionHorizon, InvestmentProposalV2, ModelIdentity, NarrativeReport, ThesisPoint
-from pydantic import BaseModel, ConfigDict, Field
 
 
 @dataclass
@@ -56,31 +60,6 @@ def _formal_horizon(value: Any) -> dict[str, Any]:
     if isinstance(value, dict):
         return {"period": value.get("period", "UNSPECIFIED"), "start": value.get("start"), "end": value.get("end")}
     return {"period": "UNSPECIFIED", "start": None, "end": None}
-
-
-class _SkillIdentityToolProxy:
-    """Wraps the tool registry so save_investment_decision persists which exact
-    skill contract (slug + version + hashes) produced the decision, even when the
-    model does not pass those fields itself. Model-supplied values win."""
-
-    def __init__(self, registry: ClaudeToolRegistry, skill: SkillDefinition) -> None:
-        self._registry = registry
-        self._skill = skill
-
-    def openai_tools(self) -> list[dict[str, Any]]:
-        return self._registry.openai_tools()
-
-    def describe_tool(self, name: str) -> str:
-        return self._registry.describe_tool(name)
-
-    def execute(self, name: str, payload: dict[str, Any]) -> dict[str, Any]:
-        if name == "save_investment_decision":
-            payload = dict(payload or {})
-            payload.setdefault("skill_slug", self._skill.slug)
-            payload.setdefault("skill_version", self._skill.version)
-            payload.setdefault("skill_contract_hash", self._skill.skill_contract_hash)
-            payload.setdefault("skill_markdown_hash", self._skill.skill_markdown_hash)
-        return self._registry.execute(name, payload)
 
 
 class ClaudeAgent:
@@ -129,8 +108,8 @@ class ClaudeAgent:
         and specialist artifacts. It never exposes a tool registry or invokes
         the legacy ``run`` loop.
         """
-        from contracts.decision_input import DecisionInputBundle
         from agent.contracts import SpecialistArtifact
+        from contracts.decision_input import DecisionInputBundle
 
         context = dict(context or {})
         raw_bundle = context.get("decision_input_bundle")
@@ -233,7 +212,7 @@ class ClaudeAgent:
         if isinstance(content, str):
             try:
                 return FormalModelOutput.model_validate(json.loads(content))
-            except Exception as exc:  # noqa: BLE001 - normalize provider output
+            except Exception as exc:
                 raise ValueError("FORMAL_STRUCTURED_OUTPUT_INVALID") from exc
         raise ValueError("FORMAL_STRUCTURED_OUTPUT_REQUIRED")
 
@@ -313,12 +292,19 @@ class ClaudeAgent:
     def _run_multi_agent_preflight(self, skill: SkillDefinition, query: str, context: dict[str, Any]) -> dict[str, Any] | None:
         """Run the bounded specialist DAG for configured skills, then let the
         normal SkillExecutor remain the single final-report path."""
-        from agent.supervisor import Supervisor, load_multi_agent_config
+        from agent.contracts import AgentRole
         from agent.plans.daily_market_decision import build_daily_market_decision_graph
-        from agent.specialists import FactorSpecialist, MarketSpecialist, PortfolioSpecialist, ResearchSpecialist, RiskSpecialist, TechnicalSpecialist
+        from agent.specialists import (
+            FactorSpecialist,
+            MarketSpecialist,
+            PortfolioSpecialist,
+            ResearchSpecialist,
+            RiskSpecialist,
+            TechnicalSpecialist,
+        )
+        from agent.supervisor import Supervisor, load_multi_agent_config
         from storage.bootstrap import create_all
         from storage.repositories.p2_repository import P2Repository
-        from agent.contracts import AgentRole
 
         config = load_multi_agent_config()
         if not config.get("enabled") or skill.slug not in set(config.get("enabled_skills") or []):
@@ -334,40 +320,13 @@ class ClaudeAgent:
         return Supervisor(specialists, config, repository=P2Repository()).run(graph)
 
     @staticmethod
-    def _ensure_formal_decision(skill: SkillDefinition, query: str, report: str, tool_calls: list[dict[str, Any]], multi_agent_result: dict[str, Any] | None = None) -> str | None:
-        if skill.slug != "daily-market-decision":
-            return None
-        for call in tool_calls:
-            if call.get("name") == "save_investment_decision":
-                output = call.get("output") or {}
-                if output.get("decision_id"):
-                    decision_id = str(output["decision_id"])
-                    ClaudeAgent._attach_agent_run(decision_id, multi_agent_result)
-                    return decision_id
-        from engines.decision.decision_service import DecisionService
+    def _ensure_formal_decision(*_: Any, **__: Any) -> None:
+        """Analysis/agent runs never create an authoritative decision.
 
-        regime_call = next((item.get("output") or {} for item in reversed(tool_calls) if item.get("name") == "get_market_regime"), {})
-        saved = DecisionService().save_decision(
-            query=query,
-            skill_slug=skill.slug,
-            skill_version=skill.version,
-            skill_contract_hash=skill.skill_contract_hash,
-            skill_markdown_hash=skill.skill_markdown_hash,
-            market_regime=(regime_call.get("regime") or {}).get("primary_regime"),
-            market_features=regime_call.get("features") or {},
-            thesis={"report": report},
-            tool_trace=tool_calls,
-        )
-        decision_id = str(saved["decision_id"])
-        ClaudeAgent._attach_agent_run(decision_id, multi_agent_result)
-        return decision_id
-
-    @staticmethod
-    def _attach_agent_run(decision_id: str, multi_agent_result: dict[str, Any] | None) -> None:
-        run_id = (multi_agent_result or {}).get("agent_run_id")
-        if run_id:
-            from storage.repositories.research_repository import DecisionRepository
-            DecisionRepository().attach_agent_run(decision_id, str(run_id), supervisor_version="v1")
+        Formal decisions are created only by the bundle-first v2 route, where
+        readiness, idempotency, lineage and finalization share one boundary.
+        """
+        return
 
     def _choose_skill(
         self,
@@ -417,8 +376,8 @@ class ClaudeAgent:
                     if skill.slug == selected or skill.name == selected:
                         reason = str(payload.get("reason") or f"Model selected skill {selected} for this task.")
                         return SkillSelectionDecision(skill=skill, reason=reason)
-        except Exception:
-            pass
+        except (AttributeError, KeyError, TypeError, ValueError):
+            payload = {}
         fallback = self._fallback_choose_skill(user_query)
         if fallback is not None:
             return SkillSelectionDecision(skill=fallback, reason="Fallback keyword routing selected this skill.")
@@ -445,7 +404,7 @@ class ClaudeAgent:
             "Keep it brief and factual. Do not reveal hidden chain-of-thought."
         )
         report, tool_calls, trace_steps, _state = SkillExecutor(
-            self.client, _SkillIdentityToolProxy(self.tool_registry, skill), self.max_tool_rounds
+            self.client, self.tool_registry, self.max_tool_rounds
         ).run(skill=skill, user_query=user_query, context=context, system=system, emit=emit, query_flags=(context or {}).get("query_flags"))
         return report, tool_calls, trace_steps
 

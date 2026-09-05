@@ -1,25 +1,36 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import pytest
 
+from agent.contracts import SpecialistArtifact, SpecialistRole, ToolUsage
+from contracts.decision import PolicyEvaluation
+from contracts.decision_input import build_bundle
 from contracts.decision_memory import DecisionMemory, DecisionMemoryCandidate
 from contracts.outcome import DecisionOutcome
-from contracts.review import DecisionReview, ReviewPoint
-from contracts.decision import PolicyEvaluation
 from contracts.proposal import DecisionHorizon, InvestmentProposalV2, ModelIdentity
-from agent.contracts import SpecialistArtifact, SpecialistRole, ToolUsage
-from storage.repositories.research_repository import DecisionRepository, OutcomeRepository, ReviewRepository, DecisionMemoryRepository
-from storage.models.research import DecisionBundleBindingRecord
-from storage.db import session_scope
-from storage.repositories.decision_input_repository import DecisionInputBundleRepository
-from contracts.decision_input import build_bundle
-from storage.repositories.research_repository import DecisionSnapshotRepository
+from contracts.review import DecisionReview, ReviewPoint
 from engines.decision.outcome_service import OutcomeService
 from engines.decision.review_service import ReviewService
-from engines.market.trading_clock import QuantTradingCalendarAdapter, TradingClock, WeekdayTradingCalendar, configure_default_clock, get_default_clock
-
+from engines.market.trading_clock import (
+    QuantTradingCalendarAdapter,
+    TradingClock,
+    WeekdayTradingCalendar,
+    configure_default_clock,
+    get_default_clock,
+)
+from storage.db import session_scope
+from storage.models.research import DecisionBundleBindingRecord
+from storage.repositories.decision_input_repository import DecisionInputBundleRepository
+from storage.repositories.research_repository import (
+    DecisionMemoryRepository,
+    DecisionRepository,
+    DecisionSnapshotRepository,
+    OutcomeRepository,
+    ReviewRepository,
+)
 
 NOW = datetime(2026, 8, 24, 16, tzinfo=UTC)
 
@@ -97,8 +108,8 @@ def test_review_service_retries_stable_review_and_memory_ids():
     class Snapshot:
         snapshot_id = "snap-review"
         schema_version = "decision.snapshot.v3"
-        policy = {"approved": True}
-        proposal = {"payload": {"evidence_refs": ["q:s1"]}}
+        policy: ClassVar[dict] = {"approved": True}
+        proposal: ClassVar[dict] = {"payload": {"evidence_refs": ["q:s1"]}}
     class Outcomes:
         def get(self, ref): return outcome if ref == outcome.outcome_id else None
     class Reviews:

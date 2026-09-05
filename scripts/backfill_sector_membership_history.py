@@ -1,7 +1,7 @@
-"""Backfill point-in-time sector membership without silently using today\'s map.
+"""Backfill point-in-time sector membership without silently using today's map.
 
 The input must contain historical observations (JSONL or CSV) with ``date``,
-``symbol``, ``sector_code`` and ``sector_name``.  A current QMT mapping is
+``symbol``, ``sector_code`` and ``sector_name``. A current external mapping is
 intentionally not accepted as a historical substitute.
 """
 from __future__ import annotations

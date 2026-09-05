@@ -45,7 +45,9 @@ services:
       retries: 10
 
   embedding:
-    build: .
+    build:
+      context: .
+      target: analysis
     image: stock-agent-embedding:0.1.0
     container_name: stock-agent-embedding
     command: uvicorn workers.embedding_api:app --host 0.0.0.0 --port 8001
@@ -55,14 +57,6 @@ services:
       EMBEDDING_PROVIDER: ${EMBEDDING_SERVICE_PROVIDER:-sentence_transformers}
     ports:
       - "127.0.0.1:8001:8001"
-    volumes:
-      - ./app:/app/app
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./workers:/app/workers
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./README.md:/app/README.md:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -73,7 +67,9 @@ services:
       retries: 10
 
   reranker:
-    build: .
+    build:
+      context: .
+      target: analysis
     image: stock-agent-reranker:0.1.0
     container_name: stock-agent-reranker
     command: uvicorn workers.reranker_api:app --host 0.0.0.0 --port 8010
@@ -89,18 +85,6 @@ services:
       RERANKER_PROVIDER: ${RERANKER_PROVIDER:-sentence_transformers}
     ports:
       - "127.0.0.1:8010:8010"
-    volumes:
-      - ./app:/app/app
-      - ./agent:/app/agent
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./mcp_servers:/app/mcp_servers
-      - ./scripts:/app/scripts
-      - ./workers:/app/workers
-      - ./storage:/app/storage
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./README.md:/app/README.md:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -113,7 +97,8 @@ services:
   api:
     build:
       context: .
-      dockerfile: Dockerfile.core
+      dockerfile: Dockerfile
+      target: api
     image: stock-agent-api:0.1.0
     container_name: stock-agent-api
     env_file:
@@ -127,25 +112,10 @@ services:
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:8001/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
-      QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
       CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
       FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
     ports:
       - "127.0.0.1:8000:8000"
-    volumes:
-      - ./app:/app/app
-      - ./agent:/app/agent
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./knowledge_base:/app/knowledge_base
-      - ./mcp_servers:/app/mcp_servers
-      - ./scripts:/app/scripts
-      - ./skills:/app/skills
-      - ./storage:/app/storage
-      - ./workers:/app/workers
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./README.md:/app/README.md:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -158,30 +128,13 @@ services:
       reranker:
         condition: service_healthy
 
-  market_stream_worker:
+  vector_worker:
     build:
       context: .
-      dockerfile: Dockerfile.core
-    image: stock-agent-market-stream-worker:0.1.0
-    container_name: stock-agent-market-stream-worker
-    command: python workers/market_stream_worker.py
-    env_file:
-      - .env
-    environment:
-      REDIS_URL: redis://:${REDIS_PASSWORD:-change_me_redis_pass}@redis:6379/0
-      MARKET_EVENT_ALLOWED_LATENESS_SECONDS: ${MARKET_EVENT_ALLOWED_LATENESS_SECONDS:-5}
-    volumes:
-      - ./engines:/app/engines
-      - ./workers:/app/workers
-    depends_on:
-      redis:
-        condition: service_healthy
-
-  vector_worker:
-    build: .
+      target: worker
     image: stock-agent-vector-worker:0.1.0
     container_name: stock-agent-vector-worker
-    command: python workers/vector_index_worker.py
+    command: python -m workers.vector_index_worker
     env_file:
       - .env
     environment:
@@ -193,24 +146,10 @@ services:
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:8001/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
-      QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
       CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
       FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
     volumes:
       - hf_cache:/root/.cache/huggingface
-      - ./app:/app/app
-      - ./agent:/app/agent
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./knowledge_base:/app/knowledge_base
-      - ./mcp_servers:/app/mcp_servers
-      - ./scripts:/app/scripts
-      - ./skills:/app/skills
-      - ./storage:/app/storage
-      - ./workers:/app/workers
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./README.md:/app/README.md:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -224,10 +163,12 @@ services:
         condition: service_healthy
 
   job_worker:
-    build: .
+    build:
+      context: .
+      target: worker
     image: stock-agent-job-worker:0.1.0
     container_name: stock-agent-job-worker
-    command: python workers/job_worker.py
+    command: python -m workers.job_worker
     env_file:
       - .env
     environment:
@@ -239,28 +180,21 @@ services:
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedding:8001/v1}
       EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-m3}
       EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1024}
-      QMT_BRIDGE_BASE_URL: ${QMT_BRIDGE_BASE_URL:-http://host.docker.internal:18080}
       CONTENT_SERVICE_URL: ${CONTENT_SERVICE_URL:-http://stock-content:8100}
       FACTOR_SERVICE_URL: ${FACTOR_SERVICE_URL:-http://stock-factor:8200}
-    volumes:
-      - ./app:/app/app
-      - ./agent:/app/agent
-      - ./config:/app/config
-      - ./engines:/app/engines
-      - ./financial_agent:/app/financial_agent
-      - ./knowledge_base:/app/knowledge_base
-      - ./mcp_servers:/app/mcp_servers
-      - ./scripts:/app/scripts
-      - ./skills:/app/skills
-      - ./storage:/app/storage
-      - ./workers:/app/workers
-      - ./pyproject.toml:/app/pyproject.toml:ro
-      - ./README.md:/app/README.md:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  analysis:
+    build:
+      context: .
+      target: analysis
+    image: stock-agent-analysis:0.1.0
+    profiles: [analysis]
+    command: ["python", "-c", "from app.decision_runtime import DecisionRuntime; print('analysis runtime ready')"]
 
 volumes:
   hf_cache:

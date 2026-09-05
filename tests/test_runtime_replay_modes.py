@@ -9,7 +9,7 @@ from engines.decision.decision_service import DecisionService
 from engines.decision.replay import DecisionReplayService
 from engines.decision.runtime_mode import RuntimeMode, build_runtime_segment
 
-AS_OF = datetime(2026, 8, 7, 9, 30)
+AS_OF = datetime(2026, 8, 7, 9, 30)  # noqa: DTZ001 - sqlite DateTime contract is naive
 
 
 def test_build_runtime_segment_explicit_fallback():

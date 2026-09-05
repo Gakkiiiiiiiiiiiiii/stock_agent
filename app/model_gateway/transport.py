@@ -38,5 +38,5 @@ class OpenAICompatibleTransport:
         response.raise_for_status()
         value = response.json()
         if not isinstance(value, dict):
-            raise ValueError("model provider returned a non-object response")
+            raise ValueError("model provider returned a non-object response")  # noqa: TRY004 - preserve transport exception contract
         return value

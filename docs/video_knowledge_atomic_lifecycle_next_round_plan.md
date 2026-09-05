@@ -375,7 +375,7 @@ def _candidate_from_row(row) -> dict:
 
 - `app/api.py`
 - `app/tool_registry.py`
-- `mcp_servers/content_server.py`
+- `services/content_api.py`
 - `tests/test_content_api.py`
 - `tests/test_mcp_content_tools.py`
 
@@ -587,4 +587,3 @@ $env:TMP="D:\project\stock_agent\.pytest-tmp"
 3. 当前状态和历史复盘查询结果符合时间语义。
 4. 新增 API/MCP 有稳定测试覆盖。
 5. 至少一个真实或仿真视频知识样例能完成解析、入库、检索、审校、过期和冲突查看全流程。
-

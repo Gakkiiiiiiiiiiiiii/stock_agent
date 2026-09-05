@@ -34,7 +34,7 @@ def test_backtest_pre_20260706_st_limit_up_uses_daily_meta():
     scores[2, 5:] = 80.0
     scores[3, 5:] = 70.0
     opens[0, 5] = 10.5  # 主板前收 10：普通 10% 可买（涨停 11.0），ST 5% 涨停 10.5 不可买
-    kwargs = dict(rebalance_interval=5, top_k=2, initial_cash=100_000.0, allow_unsafe_without_metadata=True)
+    kwargs = {"rebalance_interval": 5, "top_k": 2, "initial_cash": 100_000.0, "allow_unsafe_without_metadata": True}
 
     control = run_topk_backtest(scores, opens, highs, lows, closes, volume, symbols, dates, **kwargs)
     assert symbols[0] in control["holdings_log"][5]  # 无元数据：按 10% 买入

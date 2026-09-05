@@ -5,7 +5,14 @@ from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
-from engines.market.trading_clock import ExchangeTradingCalendar, TradingClock, get_default_clock
+from engines.market import trading_clock as _trading_clock
+
+# Compatibility exports for validators and integrations.  The calendar alias
+# deliberately points at the retained QMT-free business-clock implementation.
+ExchangeTradingCalendar = _trading_clock.ExchangeTradingCalendar
+TradingClock = _trading_clock.TradingClock
+get_default_clock = _trading_clock.get_default_clock
+CalendarUnavailable = _trading_clock.CalendarUnavailable
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
@@ -26,7 +33,7 @@ class SkillV3Contract(BaseModel):
     required_evidence: list[str] = Field(default_factory=list)
     required_specialists: list[str] = Field(default_factory=list)
     governance: SkillGovernanceContract = Field(default_factory=SkillGovernanceContract)
-    freshness: dict[str, "FreshnessPolicy"] = Field(default_factory=dict)
+    freshness: dict[str, FreshnessPolicy] = Field(default_factory=dict)
 
 
 class ConditionalRequirement(BaseModel):
@@ -50,7 +57,7 @@ class SkillExecutionContract(BaseModel):
     require_fresh_market_data: bool = False
     require_memory_lookup: bool = False
     require_regime: bool = False
-    freshness: "FreshnessPolicy | None" = None
+    freshness: FreshnessPolicy | None = None
 
 
 class FreshnessPolicy(BaseModel):
@@ -185,7 +192,10 @@ def _parse_timestamp(value: object) -> datetime | None:
     if not value:
         return None
     try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        raw_value = str(value)
+        if raw_value.endswith("Z"):
+            raw_value = f"{raw_value[:-1]}+00:00"
+        parsed = datetime.fromisoformat(raw_value)
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
@@ -201,7 +211,7 @@ class SkillContractValidator:
     def __init__(self, clock: TradingClock | None = None) -> None:
         self.clock = clock or get_default_clock()
 
-    def validate(self, skill: "SkillDefinition", state: SkillExecutionState, final_text: str, now: datetime | None = None) -> list[str]:
+    def validate(self, skill: SkillDefinition, state: SkillExecutionState, final_text: str, now: datetime | None = None) -> list[str]:
         execution = skill.execution
         called = set(state.called_tools)
         successful = set(state.successful_tools)
@@ -275,7 +285,7 @@ class SkillContractValidator:
         try:
             timestamp_session = clock.trading_session(timestamp_cn)
             reference_session = clock.trading_session(reference_cn)
-        except Exception:
+        except CalendarUnavailable:
             # Contract validation also runs in offline/unit-test contexts before the
             # calendar table has been migrated.  Preserve China-time semantics with
             # the calendar's documented weekday fallback instead of failing the

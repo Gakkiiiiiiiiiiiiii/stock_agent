@@ -5,7 +5,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from engines.backtest.events import SignalEvent
-from engines.backtest.execution_model import ExecutionModel, resolve_fill, schedule_order
+from engines.backtest.execution_model import (
+    ExecutionModel,
+    resolve_fill,
+    schedule_order,
+)
 
 
 def _signal() -> SignalEvent:

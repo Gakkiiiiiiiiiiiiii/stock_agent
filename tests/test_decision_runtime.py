@@ -1,6 +1,8 @@
 """P0 A-07：DecisionRuntime 主流程集成测试。"""
 from __future__ import annotations
 
+from typing import ClassVar
+
 from app.decision_runtime import DecisionRuntime
 from storage.repositories.research_repository import DecisionSnapshotRepository
 
@@ -8,8 +10,8 @@ from storage.repositories.research_repository import DecisionSnapshotRepository
 class _StubClaudeResult:
     selected_skill = "a-share-technical-analysis"
     selection_reason = "forced-skill"
-    tool_calls = []
-    trace = {"steps": []}
+    tool_calls: ClassVar[list] = []
+    trace: ClassVar[dict] = {"steps": []}
     report = "stub-report"
 
 
@@ -62,7 +64,6 @@ def test_deterministic_legacy_path_is_narrative_only(isolated_database):
 
 def test_all_public_entries_use_same_runtime(isolated_database, monkeypatch):
     runtime = _runtime(configured=False)
-    governed: list[dict] = []
     stock = runtime.analyze_stock("600000.SH")
     theme = runtime.analyze_theme("黄金")
     scan = runtime.daily_scan()

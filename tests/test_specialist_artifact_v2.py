@@ -1,6 +1,12 @@
 import pytest
 
-from agent.contracts import AgentRole, SpecialistArtifact, SpecialistRole, SpecialistStatus, ToolUsage
+from agent.contracts import (
+    AgentRole,
+    SpecialistArtifact,
+    SpecialistRole,
+    SpecialistStatus,
+    ToolUsage,
+)
 
 
 def test_specialist_artifact_has_explicit_unknowns_and_stable_hash():

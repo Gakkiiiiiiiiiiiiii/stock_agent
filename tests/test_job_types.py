@@ -5,7 +5,12 @@ import pytest
 
 from storage.repositories.job_repository import JobTaskRepository
 from workers import job_worker
-from workers.job_types import ALL_JOB_TYPES, EXTERNAL_QUEUE_TYPES, JOB_TASK_TYPES, JobType
+from workers.job_types import (
+    ALL_JOB_TYPES,
+    EXTERNAL_QUEUE_TYPES,
+    JOB_TASK_TYPES,
+    JobType,
+)
 
 
 def test_job_type_constants_cover_design_doc_list():
@@ -16,8 +21,6 @@ def test_job_type_constants_cover_design_doc_list():
         "DECISION_REVIEW": "decision_review",
         "MEMORY_EXPIRE": "memory_expire",
         "MEMORY_REVALIDATION": "memory_revalidation",
-        "MARKET_FEATURE_SNAPSHOT": "market_feature_snapshot",
-        "SECTOR_FEATURE_SNAPSHOT": "sector_feature_snapshot",
         "RETRIEVAL_EVALUATION": "retrieval_evaluation",
         "MEMORY_LIFECYCLE_SWEEP": "memory_lifecycle_sweep",
     }
@@ -51,3 +54,10 @@ def test_external_queue_types_have_no_job_worker_handler():
     """Agent vector_index is consumed by its dedicated queue."""
     for task_type in EXTERNAL_QUEUE_TYPES:
         assert task_type not in job_worker.JOB_HANDLERS
+
+
+def test_worker_once_exits_when_queue_is_empty(monkeypatch):
+    monkeypatch.setattr(job_worker, "create_all", lambda: None)
+    monkeypatch.setattr(job_worker, "process_one_job", lambda: False)
+    monkeypatch.setattr("sys.argv", ["job_worker.py", "--once"])
+    job_worker.main()

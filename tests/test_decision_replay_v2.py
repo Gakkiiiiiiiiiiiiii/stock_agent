@@ -3,10 +3,13 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from contracts.decision_input import build_bundle
-from contracts.decision_snapshot import DecisionSnapshotV3, SnapshotBundleRef, canonical_hash
+from contracts.decision_snapshot import (
+    DecisionSnapshotV3,
+    SnapshotBundleRef,
+    canonical_hash,
+)
 from contracts.replay import ReplayMode, ReplayRequest
 from engines.decision.replay import DecisionReplayService
-
 
 NOW = datetime(2026, 8, 20, 9, 30, tzinfo=UTC)
 

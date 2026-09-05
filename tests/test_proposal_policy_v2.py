@@ -1,17 +1,26 @@
 """Focused regression tests for proposal/policy/final-decision v2 contracts."""
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
 
-from contracts.decision import FinalInvestmentDecision, PolicyCheckResult, PolicyEvaluation
-from contracts.proposal import DecisionHorizon, InvestmentProposalV2, ModelIdentity, NarrativeReport, ThesisPoint
+from contracts.decision import (
+    FinalInvestmentDecision,
+    PolicyCheckResult,
+    PolicyEvaluation,
+)
+from contracts.proposal import (
+    DecisionHorizon,
+    InvestmentProposalV2,
+    ModelIdentity,
+    NarrativeReport,
+    ThesisPoint,
+)
 from engines.policy import PolicyContext, PolicyEngine, PolicyLimits
 
-
-NOW = datetime(2026, 1, 1, tzinfo=timezone.utc)
+NOW = datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def proposal(**overrides) -> InvestmentProposalV2:

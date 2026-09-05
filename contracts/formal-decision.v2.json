@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "formal-decision.v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["contract", "authority", "decision_id", "decision_snapshot_id", "decision_bundle_id", "portfolio_id", "status", "execution_eligible", "valid_until", "lineage"],
+  "properties": {
+    "contract": {"const": "formal-decision.v2"},
+    "authority": {"const": "FORMAL"},
+    "decision_id": {"type": "string", "minLength": 1},
+    "decision_snapshot_id": {"type": "string", "minLength": 1},
+    "decision_bundle_id": {"type": "string", "minLength": 1},
+    "portfolio_id": {"type": "string", "minLength": 1},
+    "status": {"type": "string", "enum": ["HOLD", "APPROVED", "REJECTED"]},
+    "execution_eligible": {"type": "boolean"},
+    "valid_until": {"type": "string", "format": "date-time"},
+    "lineage": {"type": "object", "required": ["market_snapshot_id", "factor_artifact_id", "content_snapshot_id", "policy_version", "producer_commit"]}
+  }
+}

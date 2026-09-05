@@ -2,7 +2,11 @@ from datetime import UTC, datetime
 
 import pytest
 
-from contracts.decision_input import DecisionInputBundlePatch, apply_bundle_patch, build_bundle
+from contracts.decision_input import (
+    DecisionInputBundlePatch,
+    apply_bundle_patch,
+    build_bundle,
+)
 from contracts.evidence import Evidence, EvidenceQuality, EvidenceType, SourceSystem
 from storage.repositories.decision_input_repository import DecisionInputBundleRepository
 

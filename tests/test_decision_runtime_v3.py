@@ -5,14 +5,18 @@ from datetime import UTC, datetime
 import pytest
 
 from app.decision_runtime import DecisionRuntime
-from contracts.decision_input import build_bundle
-from contracts.decision_input import DecisionInputBundle
-from contracts.decision_snapshot import DecisionSnapshotV3, SnapshotBundleRef, canonical_hash
-from storage.repositories.research_repository import DecisionSnapshotRepository
-from storage.repositories.research_repository import DecisionRepository
-from storage.repositories.decision_input_repository import DecisionInputBundleRepository
 from app.model_gateway.metrics import MetricsRecorder
-
+from contracts.decision_input import DecisionInputBundle, build_bundle
+from contracts.decision_snapshot import (
+    DecisionSnapshotV3,
+    SnapshotBundleRef,
+    canonical_hash,
+)
+from storage.repositories.decision_input_repository import DecisionInputBundleRepository
+from storage.repositories.research_repository import (
+    DecisionRepository,
+    DecisionSnapshotRepository,
+)
 
 NOW = datetime(2026, 1, 2, 9, 30, tzinfo=UTC)
 

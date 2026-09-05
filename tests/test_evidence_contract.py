@@ -10,7 +10,7 @@ def test_evidence_id_is_stable_and_payload_order_independent():
     a = Evidence(evidence_type=EvidenceType.MARKET_SNAPSHOT, source_system=SourceSystem.QUANT, subject_type="market", subject_key="CN_A", as_of=now, available_at=now, contract_version="market.v1", payload={"b": 2, "a": 1}, quality_status=EvidenceQuality.VERIFIED)
     b = Evidence(evidence_type=EvidenceType.MARKET_SNAPSHOT, source_system=SourceSystem.QUANT, subject_type="market", subject_key="CN_A", as_of=now, available_at=now, contract_version="market.v1", payload={"a": 1, "b": 2}, quality_status=EvidenceQuality.VERIFIED)
     assert a.evidence_id == b.evidence_id
-    with pytest.raises(Exception):
+    with pytest.raises((TypeError, ValueError)):
         a.source_system = SourceSystem.FACTOR
 
 
@@ -22,7 +22,7 @@ def test_decision_memory_cannot_be_external_fact():
 
 def test_evidence_rejects_forged_id_non_json_and_nested_mutation():
     now = datetime.now(UTC)
-    kwargs = dict(evidence_type=EvidenceType.MARKET_SNAPSHOT, source_system=SourceSystem.QUANT, subject_type="market", subject_key="CN_A", as_of=now, available_at=now, contract_version="market.v1", payload={"nested": [1]}, quality_status=EvidenceQuality.VERIFIED)
+    kwargs = {"evidence_type": EvidenceType.MARKET_SNAPSHOT, "source_system": SourceSystem.QUANT, "subject_type": "market", "subject_key": "CN_A", "as_of": now, "available_at": now, "contract_version": "market.v1", "payload": {"nested": [1]}, "quality_status": EvidenceQuality.VERIFIED}
     item = Evidence(**kwargs)
     with pytest.raises(ValueError, match="evidence_id"):
         Evidence(evidence_id="ev-quant-market_snapshot-forged", **kwargs)

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from typing import ClassVar
 
 from app.agent_orchestrator import AgentOrchestrator
 from app.decision_runtime import DecisionRuntime
@@ -11,8 +12,8 @@ from app.decision_runtime import DecisionRuntime
 class _StubClaudeResult:
     selected_skill = "a-share-technical-analysis"
     selection_reason = "forced-skill"
-    tool_calls = []
-    trace = {"steps": []}
+    tool_calls: ClassVar[list] = []
+    trace: ClassVar[dict] = {"steps": []}
     report = "stub-report"
 
 

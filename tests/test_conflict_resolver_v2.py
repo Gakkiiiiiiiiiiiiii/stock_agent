@@ -1,13 +1,14 @@
 """Conflict Resolver v2 测试（详细修改方案 §11）：领域权威 + Risk VETO。"""
 from __future__ import annotations
 
+import pytest
+
 from engines.decision.conflict_resolver import (
-    ConflictOpinion,
     CONFLICT_TYPES,
     DOMAIN_AUTHORITY,
+    ConflictOpinion,
     resolve_conflicts_v2,
 )
-import pytest
 
 
 def test_domain_authority_resolves_conflict():

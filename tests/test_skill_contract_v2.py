@@ -156,36 +156,13 @@ def test_decision_persists_skill_contract_identity(isolated_database):
     assert decision["skill_markdown_hash"] == "fedcba9876543210"
 
 
-def test_skill_identity_proxy_injects_defaults_without_overriding_model_args():
-    from app.claude_agent import _SkillIdentityToolProxy
+def test_skill_identity_proxy_is_removed_and_registry_has_no_formal_save_tool():
+    from app import claude_agent
+    from app.tool_registry import ClaudeToolRegistry
 
-    class FakeRegistry:
-        def __init__(self):
-            self.executed = []
-
-        def openai_tools(self):
-            return []
-
-        def describe_tool(self, name):
-            return name
-
-        def execute(self, name, payload):
-            self.executed.append((name, payload))
-            return {"decision_id": "d1"}
-
-    skill = SkillDefinition(slug="daily-market-decision", name="d", description="", version=2, skill_contract_hash="chash", skill_markdown_hash="mhash")
-    registry = FakeRegistry()
-    proxy = _SkillIdentityToolProxy(registry, skill)
-    proxy.execute("save_investment_decision", {"query": "q"})
-    proxy.execute("save_investment_decision", {"skill_version": 9})
-    proxy.execute("get_market_snapshot", {})
-    first, second, third = registry.executed
-    assert first[1]["skill_slug"] == "daily-market-decision"
-    assert first[1]["skill_version"] == 2
-    assert first[1]["skill_contract_hash"] == "chash"
-    assert first[1]["skill_markdown_hash"] == "mhash"
-    assert second[1]["skill_version"] == 9  # model-supplied value wins
-    assert third[1] == {}  # other tools untouched
+    assert not hasattr(claude_agent, "_SkillIdentityToolProxy")
+    names = {tool["name"] for tool in ClaudeToolRegistry().anthropic_tools()}
+    assert "save_investment_decision" not in names
 
 
 if __name__ == "__main__":

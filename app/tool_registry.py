@@ -11,14 +11,14 @@ this process.
 import json
 import os
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
 from typing import Any
 
 from app.model_providers import AnalysisModelClient
 from app.tool_policy import PermissionLevel, ToolAuditor, ToolPolicy
-from app.tools.definitions import ToolDefinition
 from app.tools.decision_tools import build_decision_tools
+from app.tools.definitions import ToolDefinition
 from app.tools.market_tools import build_market_tools
 from app.tools.memory_tools import build_memory_tools
 from app.tools.portfolio_tools import build_portfolio_tools
@@ -113,14 +113,14 @@ class ClaudeToolRegistry:
     @staticmethod
     def _default_policies() -> dict[str, ToolPolicy]:
         # Policies are intentionally explicit; unknown tools default to READ.
-        policies = {name: ToolPolicy(PermissionLevel.READ) for name in {
+        policies = {name: ToolPolicy(PermissionLevel.READ) for name in (
             "search_content_knowledge", "get_knowledge_unit", "get_factor_set", "get_factor_evidence",
             "get_market_snapshot", "get_market_features", "get_sector_strength", "get_technical_evidence",
             "get_portfolio_snapshot", "get_portfolio_risk_inputs", "get_market_regime", "get_market_regime_history",
             "search_decision_memory", "search_user_preferences",
             "get_decision", "get_decision_outcome", "get_decision_history", "get_subject_state",
-        }}
-        for name in {"rank_opportunities", "construct_portfolio_v2", "get_factor_scores"}:
+        )}
+        for name in ("rank_opportunities", "construct_portfolio_v2", "get_factor_scores"):
             policies[name] = ToolPolicy(PermissionLevel.COMPUTE, timeout_seconds=120)
         return policies
 

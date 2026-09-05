@@ -1,8 +1,8 @@
 import pytest
 
+from app.tool_registry import ClaudeToolRegistry
 from clients.content_client import RemoteContentClient
 from clients.factor_client import RemoteFactorClient
-from app.tool_registry import ClaudeToolRegistry
 
 
 def test_content_client_is_read_only_and_maps_content_v1_reads(monkeypatch):

@@ -285,7 +285,7 @@ list_knowledge_conflicts(subject_key=None, status=None)
 
 涉及文件：
 
-- `mcp_servers/content_server.py`
+- `services/content_api.py`
 - `app/tool_registry.py`
 - `tests/test_mcp_content_tools.py`
 
@@ -457,7 +457,7 @@ knowledge_vector_resync
 - `engines/content/video_ingest_service.py`
 - `engines/content/video_summarizer.py`
 - `engines/content/financial_event_extractor.py`
-- `mcp_servers/content_server.py`
+- `services/content_api.py`
 - `app/static/admin.html`
 - `tests/*content*`
 
@@ -503,7 +503,7 @@ workers/vector_index_worker.py
 storage/repositories/knowledge_repository.py
 storage/repositories/content_repository.py
 engines/content/video_ingest_service.py
-mcp_servers/content_server.py
+services/content_api.py
 app/tool_registry.py
 app/api.py
 app/static/admin.html

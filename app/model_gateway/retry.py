@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
-from time import monotonic, sleep, time
-from typing import Any, Callable
+from time import sleep, time
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -55,7 +56,7 @@ def retry_call(
     for attempt in range(max(1, policy.max_attempts)):
         try:
             return operation()
-        except Exception as exc:  # noqa: BLE001 - caller controls retry classification
+        except Exception as exc:
             last = exc
             if attempt + 1 >= max(1, policy.max_attempts) or (retry_if and not retry_if(exc)):
                 raise

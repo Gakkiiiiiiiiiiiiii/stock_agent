@@ -12,7 +12,9 @@ spec:
           restartPolicy: OnFailure
           containers:
             - name: {{ $job.name }}
-              image: "{{ $.Values.image.repository }}:{{ $.Values.image.tag }}"
+              {{- $image := default $.Values.image (dig "image" (dict) $.Values.services.worker) }}
+              image: "{{ $image.repository }}:{{ $image.tag }}"
+              imagePullPolicy: {{ default $.Values.image.pullPolicy $image.pullPolicy }}
               command: {{ toJson $job.command }}
               envFrom: [{configMapRef: {name: {{ include "stock-agent.fullname" $ }}-config}}]
               resources:

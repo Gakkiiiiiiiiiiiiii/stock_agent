@@ -59,7 +59,9 @@ def test_claude_agent_runs_tool_loop(isolated_database):
     assert result.trace["steps"][0]["type"] == "skill_selection"
     assert any(step["type"] == "tool_call" for step in result.trace["steps"])
     assert "最终报告" in result.report
-    assert result.decision_id is not None
+    # Agent/analysis runs are explicitly non-authoritative.  Only the v2
+    # bundle-first route may create a formal decision identity.
+    assert result.decision_id is None
 
 
 def test_claude_agent_preselects_daily_market_decision_for_recent_opportunity_query():

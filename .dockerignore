@@ -3,10 +3,12 @@
 .conda-env
 .pytest_cache
 .pytest-tmp
+**/__pycache__/
 __pycache__/
+**/*.pyc
+**/*.pyo
+**/*.pyd
 *.py[cod]
-*.pyo
-*.pyd
 *.log
 *.tmp
 *.sqlite

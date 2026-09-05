@@ -2,21 +2,22 @@ image:
   repository: stock-agent
   tag: latest
   pullPolicy: IfNotPresent
+configRevision: baseline
 services:
-  api: {enabled: true, replicas: 2, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000, probe: {type: http, path: /health/ready, port: 8000}, resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "2", memory: 2Gi}}}
-  worker: {enabled: true, replicas: 1, command: ["python", "workers/job_worker.py"], singleton: true, probe: {type: none}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
-  # Legacy rollback services remain in the repository but are never deployed by default.
-  retrieval: {enabled: false}
-  market-data: {enabled: false}
-  execution: {enabled: false}
+  api: {enabled: true, replicas: 2, image: {repository: stock-agent-api, tag: latest}, command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"], port: 8000, probe: {type: http, path: /health/ready, port: 8000}, resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "2", memory: 2Gi}}}
+  worker: {enabled: true, replicas: 1, image: {repository: stock-agent-worker, tag: latest}, command: ["python", "-m", "workers.job_worker"], singleton: true, probe: {type: none}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
+  analysis: {enabled: false, replicas: 1, image: {repository: stock-agent-analysis, tag: latest}, command: ["python", "-c", "from app.decision_runtime import DecisionRuntime; print('analysis runtime ready')"], singleton: true, probe: {type: none}, resources: {requests: {cpu: 250m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}}
 resources:
   requests: {cpu: 250m, memory: 512Mi}
   limits: {cpu: "1", memory: 1Gi}
 env:
+  FORMAL_READINESS_ENFORCED: "1"
+  FORMAL_IDEMPOTENCY_REQUIRED: "1"
   DATABASE_URL: ""
   REDIS_URL: ""
   QDRANT_URL: ""
+  QUANT_SERVICE_URL: http://quant:8011
   CONTENT_SERVICE_URL: http://stock-content:8100
   FACTOR_SERVICE_URL: http://stock-factor:8200
 cronJobs:
-  - {name: outcome-evaluation, schedule: "30 16 * * 1-5", command: ["python", "workers/job_worker.py", "--once"]}
+  - {name: outcome-evaluation, schedule: "30 16 * * 1-5", command: ["python", "-m", "workers.job_worker", "--once"]}

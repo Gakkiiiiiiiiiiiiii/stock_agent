@@ -1,5 +1,5 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
-from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import text
 
@@ -41,7 +41,7 @@ def test_job_claim_respects_lease_timeout(isolated_database):
     claimed = repo.claim_next("worker-1", [task_type], lease_seconds=60)
     assert claimed["id"] == task["id"]
     assert repo.claim_next("worker-2", [task_type], lease_seconds=60) is None
-    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=120)
+    stale = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=120)
     with session_scope() as session:
         session.execute(text("UPDATE job_task SET heartbeat_at=:heartbeat_at WHERE id=:id"), {"heartbeat_at": stale, "id": task["id"]})
     reclaimed = repo.claim_next("worker-2", [task_type], lease_seconds=60)
@@ -55,7 +55,7 @@ def test_stale_worker_cannot_heartbeat_or_finish_after_reclaim(isolated_database
     task_type = f"test_job_{uuid4().hex}"
     task = repo.create(task_type, {"rounds": 1, "test_id": str(uuid4())}, max_retries=1)
     first_claim = repo.claim_next("worker-1", [task_type], lease_seconds=60)
-    stale = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(seconds=120)
+    stale = datetime.now(UTC).replace(tzinfo=None) - timedelta(seconds=120)
     with session_scope() as session:
         session.execute(text("UPDATE job_task SET heartbeat_at=:heartbeat_at WHERE id=:id"), {"heartbeat_at": stale, "id": task["id"]})
     second_claim = repo.claim_next("worker-2", [task_type], lease_seconds=60)

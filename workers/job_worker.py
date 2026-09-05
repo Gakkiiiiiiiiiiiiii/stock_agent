@@ -4,11 +4,12 @@ task_type 常量集中在 workers/job_types.py；派发经 JOB_HANDLERS 表驱�
 Content 与 Factor 任务由远程子系统 Worker 负责；本 Worker 仅执行 Agent 所属任务。
 
 幂等：入队侧由 JobTaskRepository.create(idempotency_key=...) 去重；执行侧
-market/sector 快照按 (键, trade_date, feature_version) upsert、retrieval
-评测按输出目录覆盖写，重复执行同一 payload 不产生额外副作用。
+决策 outcome/review 与 retrieval 评测按各自的持久化边界处理，重复执行同一
+payload 不产生额外副作用。
 """
 from __future__ import annotations
 
+import argparse
 import json
 import socket
 import threading
@@ -37,16 +38,40 @@ def _handle_memory_lifecycle_sweep(payload: dict[str, Any], ensure_lease: Callab
 
 def _handle_decision_outcome(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
     from datetime import UTC, datetime, time
+
     from engines.decision.outcome_service import OutcomeService
 
     measured = payload.get("measured_at") or payload.get("evaluation_date")
     if isinstance(measured, str) and len(measured) == 10:
         measured = datetime.combine(datetime.fromisoformat(measured).date(), time(16), tzinfo=UTC)
     elif isinstance(measured, str):
-        measured = datetime.fromisoformat(measured.replace("Z", "+00:00"))
+        measured = datetime.fromisoformat(measured)
     if not isinstance(measured, datetime):
-        raise ValueError("OUTCOME_MEASURED_AT_REQUIRED")
-    return OutcomeService().refresh(decision_id=payload["decision_id"], horizon=str(payload.get("horizon") or f"T+{payload.get('horizon_days', 1)}"), measured_at=measured).model_dump(mode="json")
+        raise ValueError("OUTCOME_MEASURED_AT_REQUIRED")  # noqa: TRY004 - public worker error code
+    from app.application.outcomes.service import OutcomeEvaluationService
+    worker = _outcome_worker()
+    snapshot_id = str(payload.get("decision_snapshot_id") or payload["decision_id"])
+    result = OutcomeEvaluationService(provider=OutcomeService(), worker=worker).refresh(
+        decision_id=payload["decision_id"],
+        decision_snapshot_id=snapshot_id,
+        horizon=str(payload.get("horizon") or f"T+{payload.get('horizon_days', 1)}"),
+        measured_at=measured,
+        owner_id=socket.gethostname(),
+    )
+    if result is None:
+        raise RuntimeError("OUTCOME_LEASE_BUSY")
+    return result
+
+
+_SHARED_OUTCOME_WORKER = None
+
+
+def _outcome_worker():
+    global _SHARED_OUTCOME_WORKER
+    if _SHARED_OUTCOME_WORKER is None:
+        from workers.outcome_worker import OutcomeWorker
+        _SHARED_OUTCOME_WORKER = OutcomeWorker()
+    return _SHARED_OUTCOME_WORKER
 
 
 def _handle_decision_review(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
@@ -55,25 +80,6 @@ def _handle_decision_review(payload: dict[str, Any], ensure_lease: Callable[[], 
     if not refs:
         raise ValueError("OUTCOME_REFS_REQUIRED")
     return ReviewService().save_review(decision_id=payload["decision_id"], outcome_refs=refs).model_dump(mode="json")
-
-
-def _handle_market_feature_snapshot(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
-    """计算并持久化市场特征快照（按 trade_date/feature_version upsert，幂等）。"""
-    from engines.market.feature_service import MarketFeatureService
-    from storage.repositories.market_feature_repository import MarketFeatureRepository
-
-    as_of = _parse_datetime(payload.get("as_of"))
-    return MarketFeatureService(repository=MarketFeatureRepository()).get_market_features(as_of=as_of)
-
-
-def _handle_sector_feature_snapshot(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> list[dict]:
-    """计算并持久化板块强度快照（read_cache=False 强制刷新，upsert 幂等）。"""
-    from engines.market.feature_service import SectorFeatureService
-    from storage.repositories.market_feature_repository import MarketFeatureRepository
-
-    as_of = _parse_datetime(payload.get("as_of"))
-    top_k = int(payload.get("top_k") or 20)
-    return SectorFeatureService(repository=MarketFeatureRepository()).get_sector_strength(top_k=top_k, as_of=as_of, read_cache=False)
 
 
 def _handle_retrieval_evaluation(payload: dict[str, Any], ensure_lease: Callable[[], None]) -> dict:
@@ -86,16 +92,6 @@ def _handle_retrieval_evaluation(payload: dict[str, Any], ensure_lease: Callable
     if payload.get("output_dir"):
         kwargs["output_dir"] = payload["output_dir"]
     return run_fixture_evaluation(**kwargs)
-
-
-def _parse_datetime(value: Any) -> Any:
-    if not value:
-        return None
-    if isinstance(value, str):
-        from datetime import datetime
-
-        return datetime.fromisoformat(value)
-    return value
 
 
 #: task_type → Agent-owned 处理器。
@@ -148,7 +144,13 @@ def process_one_job(worker_id: str | None = None, job_id: str | None = None) -> 
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Process Agent-owned durable jobs")
+    parser.add_argument("--once", action="store_true", help="claim at most one job and exit")
+    args = parser.parse_args()
     create_all()
+    if args.once:
+        process_one_job()
+        return
     while True:
         if not process_one_job():
             time.sleep(2)

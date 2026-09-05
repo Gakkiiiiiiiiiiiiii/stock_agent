@@ -132,7 +132,11 @@ def test_storage_round_trip_of_v2_columns(isolated_database):
     from sqlalchemy.orm import Session
 
     from engines.decision.decision_service import DecisionService
-    from storage.models.research import DecisionReview, InvestmentDecision, InvestmentDecisionOutcome
+    from storage.models.research import (
+        DecisionReview,
+        InvestmentDecision,
+        InvestmentDecisionOutcome,
+    )
 
     service = DecisionService()
     saved = service.save_decision(

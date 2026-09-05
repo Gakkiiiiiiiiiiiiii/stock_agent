@@ -91,7 +91,7 @@ class AdminContentService:
         for path in sorted(self.skills_root.glob("*/SKILL.md")):
             slug = path.parent.name
             raw = path.read_text(encoding="utf-8")
-            frontmatter, body = self._parse_frontmatter(raw)
+            frontmatter, _body = self._parse_frontmatter(raw)
             items.append(
                 {
                     "slug": slug,

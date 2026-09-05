@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 
+from agent.contracts import SpecialistArtifact
 from app.skill_contract import SkillContractValidator, SkillExecutionState
 from app.skill_loader import SkillDefinition
-from agent.contracts import SpecialistArtifact, SpecialistRole
 from contracts.decision_input import build_bundle
 from contracts.evidence import Evidence, EvidenceQuality, EvidenceType, SourceSystem
 

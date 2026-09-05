@@ -14,6 +14,7 @@ def test_order_and_production_tools_are_not_registered():
 
 def test_tool_timeout_enforced(tmp_path, monkeypatch):
     import time
+
     from app.tool_policy import PermissionLevel, ToolPolicy
 
     registry = ClaudeToolRegistry()

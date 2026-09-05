@@ -1,21 +1,31 @@
 from __future__ import annotations
 
-from datetime import datetime
-from pathlib import Path
 import json
+from pathlib import Path
 
 from pydantic import BaseModel
+
+from app.model_capabilities import ModelCapabilities
+from app.model_providers import (
+    AnalysisModelClient,
+    AnalysisModelSettings,
+    ModelCapabilityError,
+    StructuredOutputError,
+)
+from engines.domain_result import DomainResultMeta
 from engines.memory.memory_retriever import retrieve_memory
-from engines.retrieval.evaluation.ablation_runner import RetrievalAblationRunner
-from engines.retrieval.evaluation.ablation_runner import build_standard_ablation_variants
+from engines.retrieval.evaluation.ablation_runner import (
+    RetrievalAblationRunner,
+    build_standard_ablation_variants,
+)
+from engines.retrieval.evaluation.fixture_corpus import (
+    build_fixture_hybrid_retriever,
+    load_fixture_records,
+)
 from engines.retrieval.evaluation.models import RetrievalGoldenCase
+from engines.retrieval.evaluation.regression import compare_to_baseline
 from engines.retrieval.evaluation.runner import RetrievalEvaluationRunner
 from engines.retrieval.filters import RetrievalFilter, normalize_retrieval_filters
-from engines.retrieval.evaluation.regression import compare_to_baseline
-from app.model_capabilities import ModelCapabilities
-from app.model_providers import AnalysisModelClient, AnalysisModelSettings, ModelCapabilityError, StructuredOutputError
-from engines.domain_result import DomainResultMeta
-from engines.retrieval.evaluation.fixture_corpus import build_fixture_hybrid_retriever, load_fixture_records
 
 
 class FakeRetriever:
@@ -88,8 +98,9 @@ def test_shared_model_and_domain_contracts():
 
 
 def test_model_capabilities_gate_tools_and_fallback_structured_output():
-    import httpx
     import json
+
+    import httpx
 
     received = {}
 

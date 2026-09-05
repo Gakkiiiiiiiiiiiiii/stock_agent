@@ -2,7 +2,10 @@ from datetime import UTC, datetime
 
 from engines.memory.memory_writer import write_memory_and_enqueue
 from storage.bootstrap import create_all
-from storage.repositories.vector_repository import MemoryRepository, VectorTaskRepository
+from storage.repositories.vector_repository import (
+    MemoryRepository,
+    VectorTaskRepository,
+)
 
 
 def test_write_memory_and_enqueue_task(isolated_database):

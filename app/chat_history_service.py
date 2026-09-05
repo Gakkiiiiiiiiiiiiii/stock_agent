@@ -107,7 +107,8 @@ class ChatHistoryService:
                 message_count = db.scalar(select(func.count()).select_from(ChatMessageRecord).where(ChatMessageRecord.session_id == session_id)) or 0
                 if message_count == 0 and record.title in {"", "New Conversation"}:
                     record.title = self._derive_title(user_query)
-                now_dt = datetime.now()
+                # SQLite chat records intentionally use naive local timestamps.
+                now_dt = datetime.now()  # noqa: DTZ005
                 db.add_all(
                     [
                         ChatMessageRecord(session_id=session_id, role="user", content=user_query, ordinal=message_count, created_at=now_dt),
@@ -201,7 +202,8 @@ class ChatHistoryService:
 
     @staticmethod
     def _now() -> str:
-        return datetime.now().isoformat(timespec="seconds")
+        # File-backed sessions preserve the legacy naive timestamp contract.
+        return datetime.now().isoformat(timespec="seconds")  # noqa: DTZ005
 
     @staticmethod
     def _parse_time(value: str) -> datetime:

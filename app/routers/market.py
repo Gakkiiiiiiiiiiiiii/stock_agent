@@ -7,6 +7,7 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app import dependencies
+from app.domain.decision.authority import analysis_response
 
 router = APIRouter()
 
@@ -18,4 +19,4 @@ class DailyScanRequest(BaseModel):
 
 @router.post("/api/v1/market/daily-scan")
 def daily_scan(request: DailyScanRequest) -> dict:
-    return dependencies.orchestrator.daily_scan(scan_date=request.date, mode=request.mode)
+    return analysis_response(dependencies.orchestrator.daily_scan(scan_date=request.date, mode=request.mode))

@@ -1,7 +1,10 @@
 """ToolResult Snapshot 测试（详细修改方案 §13）。"""
 from __future__ import annotations
 
-from storage.repositories.tool_result_repository import ToolResultRepository, hash_payload
+from storage.repositories.tool_result_repository import (
+    ToolResultRepository,
+    hash_payload,
+)
 
 
 def test_hash_payload_is_deterministic_and_order_insensitive():

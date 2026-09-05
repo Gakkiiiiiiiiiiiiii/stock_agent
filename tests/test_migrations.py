@@ -39,6 +39,22 @@ def test_postgres_autoincrement_migration_is_rejected_when_no_variant(tmp_path):
         raise AssertionError("expected SQLite AUTOINCREMENT migration to be rejected for postgres")
 
 
+def test_decision_unit_and_replay_outcome_migrations_are_idempotent(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'uow.db'}", future=True)
+    monkeypatch.setattr(bootstrap, "get_engine", lambda: engine)
+    bootstrap.apply_sql_migrations()
+    bootstrap.apply_sql_migrations()
+    with engine.connect() as conn:
+        tables = {row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))}
+        assert {"decision_requests", "decision_runs", "decision_outbox", "outbox", "decision_replay_runs", "decision_outcome_runs"} <= tables
+        run_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(decision_runs)"))}
+        assert {"state", "bundle_hash", "formal_result_hash", "governance_hash", "final_response_json", "final_response_hash", "lineage_json", "execution_authorization_json", "version", "readiness_snapshot_json"} <= run_columns
+        unique_indexes = list(conn.execute(text("PRAGMA index_list(decision_requests)")))
+        assert any(int(row[2]) == 1 for row in unique_indexes)
+        replay_indexes = list(conn.execute(text("PRAGMA index_list(decision_replay_runs)")))
+        assert any(int(row[2]) == 1 for row in replay_indexes)
+
+
 def _prepare_038_history(tmp_path):
     engine = create_engine(f"sqlite:///{tmp_path / 'history.db'}", future=True)
     with engine.begin() as conn:

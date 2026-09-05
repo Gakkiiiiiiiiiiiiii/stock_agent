@@ -17,7 +17,7 @@ class ModelCapabilities(BaseModel):
     max_output_tokens: int | None = None
 
     @classmethod
-    def from_env(cls, prefix: str = "ANALYSIS_MODEL", defaults: "ModelCapabilities | None" = None) -> "ModelCapabilities":
+    def from_env(cls, prefix: str = "ANALYSIS_MODEL", defaults: ModelCapabilities | None = None) -> ModelCapabilities:
         raw = os.getenv(f"{prefix}_CAPABILITIES")
         if raw:
             try:

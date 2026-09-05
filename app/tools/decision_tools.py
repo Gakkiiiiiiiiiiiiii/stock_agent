@@ -8,7 +8,10 @@ from app.tools.definitions import ToolDefinition
 from clients.content_client import RemoteContentClient
 from clients.factor_client import RemoteFactorClient
 from contracts.factor import AlphaScoreRequest
-from storage.repositories.research_repository import DecisionRepository, OutcomeRepository
+from storage.repositories.research_repository import (
+    DecisionRepository,
+    OutcomeRepository,
+)
 
 
 class SaveInvestmentDecisionInput(BaseModel):

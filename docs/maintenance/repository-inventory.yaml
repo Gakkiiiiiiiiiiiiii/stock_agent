@@ -1,0 +1,33 @@
+version: 1
+entries:
+  - {path: app/domain, owner: decision-authority, status: retained, replacement: null}
+  - {path: app/routers/agent.py, owner: decision-authority, status: compatibility, replacement: /api/v2/analysis, sunset_at: 2026-12-31}
+  - {path: architect, owner: docs, status: archived, replacement: docs/architecture/legacy}
+  - {path: artitect, owner: docs, status: archived, replacement: docs/architecture/legacy}
+  - {path: docs/architecture/legacy, owner: docs, status: retained, replacement: docs/architecture}
+  - {path: app/routers/execution.py, owner: quant, status: out-of-scope, replacement: quant execution authority}
+  - {path: app/domain/decision/execution_authorization.py, owner: decision-authority, status: retained-contract-only, replacement: quant execution authority}
+  - {path: contracts/execution-authorization.v1.json, owner: decision-authority, status: retained-contract-only, replacement: quant execution authority}
+  - {path: engines/backtest, owner: analysis, status: retained-calculation-only, replacement: null}
+  - {path: engines/backtest/execution.py, owner: analysis, status: retained-calculation-only, replacement: null}
+  - {path: engines/backtest/execution_model.py, owner: analysis, status: retained-calculation-only, replacement: null}
+  - path: storage/migrations
+    owner: persistence
+    status: retained-selective-api-schema
+    replacement: null
+    note: Repository history remains available for controlled upgrades; runtime images package only the current formal-decision schema.
+    runtime_role: api-only
+    runtime_allowlist:
+      - 039_decision_unit_of_work.sql
+      - 040_replay_outcome_runs.sql
+      - 041_decision_run_final_response.sql
+    excluded_from_runtime:
+      - 024_execution_order_events.sql
+      - 026_execution_runtime_state.sql
+  - {path: config/execution.yaml, owner: legacy, status: deleted-no-callers, replacement: contracts/execution-authorization.v1.json}
+  - {path: clients/quant_execution_client.py, owner: legacy, status: deleted-no-callers, replacement: clients/quant_client.py}
+  - {path: engines/execution, owner: legacy, status: deleted-no-callers, replacement: quant execution authority}
+  - {path: mcp_servers, owner: legacy, status: deleted-no-callers, replacement: app/ports and app/adapters}
+  - {path: services/market_data_api.py, owner: legacy, status: deleted-no-callers, replacement: quant market-data authority}
+  - {path: workers/market_stream_worker.py, owner: legacy, status: deleted-no-callers, replacement: quant market-data authority}
+  - {path: Dockerfile, owner: platform, status: role-explicit, replacement: null}

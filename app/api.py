@@ -24,7 +24,21 @@ from app.dependencies import (  # noqa: F401  (re-export，兼容旧引用)
     init_application,
     orchestrator,
 )
-from app.routers import admin, agent, content, decision, factor, market, portfolio, regime, retrieval
+from app.routers import (
+    admin,
+    agent,
+    analysis_v2,
+    audit,
+    compatibility,
+    content,
+    decision,
+    factor,
+    market,
+    portfolio,
+    readiness,
+    regime,
+    retrieval,
+)
 from app.routers._shared import (  # noqa: F401  (re-export，兼容旧引用)
     MAX_API_LIST_LIMIT,
     VALID_KNOWLEDGE_KINDS,
@@ -58,6 +72,10 @@ for _router in (
     factor.router,
     content.router,
     admin.router,
+    analysis_v2.router,
+    compatibility.router,
+    readiness.router,
+    audit.router,
 ):
     app.include_router(_router)
 
@@ -74,6 +92,7 @@ CONTRACT_VERSIONS = [
     "decision.snapshot.v3", "replay.v1", "replay.v2", "decision-outcome.v1", "decision-review.v1",
     "decision-memory.v1", "market-data.v1", "factor.v1", "content.v1", "backtest.v1",
     "specialist-artifact.v2", "evidence-synthesis.v1", "decision-quality.v2",
+    "formal-decision.v2", "execution-authorization.v1", "decision-lineage.v1",
 ]
 
 
@@ -109,7 +128,6 @@ def metrics() -> PlainTextResponse:
 
 
 def _ready_checks() -> dict[str, str]:
-    required = _required_ready_checks()
     checks = {"api": "ok"}
     checks["postgres"] = _check_postgres()
     checks["redis"] = _check_redis(os.getenv("REDIS_URL", ""))
@@ -150,7 +168,7 @@ def _check_http(url: str, api_key: str | None = None) -> str:
 
 def _check_embedding() -> str:
     base_url = os.getenv("EMBEDDING_BASE_URL", "http://localhost:8001/v1").rstrip("/")
-    health_url = base_url[:-3] if base_url.endswith("/v1") else base_url
+    health_url = base_url.removesuffix("/v1")
     return _check_http(f"{health_url}/health")
 
 
@@ -171,5 +189,5 @@ def _redact_url(url: str) -> str:
     try:
         parsed = httpx.URL(url)
         return str(parsed.copy_with(password="***") if parsed.password else parsed)
-    except Exception:
+    except (TypeError, ValueError):
         return "<invalid-url>"

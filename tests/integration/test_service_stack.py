@@ -6,7 +6,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import text
 
-
 pytestmark = pytest.mark.integration
 
 
@@ -38,9 +37,13 @@ def test_retrieval_pipeline_indexes_hydrates_and_reranks_real_services():
         pytest.skip("set RUN_FULL_STACK_E2E=1 to run the mutating full retrieval E2E")
     if not os.getenv("DATABASE_URL", "").startswith("postgresql://"):
         pytest.skip("DATABASE_URL does not point to postgres")
+    from app.adapters.local.retrieval import LocalRetrievalAdapter
     from engines.retrieval.qdrant_client import FinancialQdrantClient
-    from mcp_servers.retrieval_server import retrieve_relevant_context
-    from storage.repositories.vector_repository import MemoryRepository, VectorMappingRepository, VectorTaskRepository
+    from storage.repositories.vector_repository import (
+        MemoryRepository,
+        VectorMappingRepository,
+        VectorTaskRepository,
+    )
 
     marker = f"full-stack-{uuid4()}"
     memory = MemoryRepository().create(
@@ -60,7 +63,7 @@ def test_retrieval_pipeline_indexes_hydrates_and_reranks_real_services():
     # This verifies the deployed Qdrant collection is readable before the
     # retrieval call (the latter additionally covers embedder/reranker/hydrator).
     assert FinancialQdrantClient().search("financial_memory_v2_bge_m3", [0.0] * 1024, 1) is not None
-    result = retrieve_relevant_context(marker, task_type="general_research", top_k=5)
+    result = LocalRetrievalAdapter().retrieve_relevant_context(marker, task_type="general_research", top_k=5)
     context = next((item for item in result["contexts"] if (item.get("record") or {}).get("id") == memory.id), None)
     assert context is not None
     assert context["record"]["id"] == memory.id

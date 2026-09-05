@@ -99,7 +99,7 @@ def test_review_runner_attaches_attribution_to_deterministic_review(isolated_dat
 
     service = DecisionService()
     saved = service.save_decision(query="归因复盘", candidates=[{"symbol": "600000.SH"}], sector="医药")
-    outcome = service.record_outcome(
+    service.record_outcome(
         saved["decision_id"],
         date(2026, 8, 14),
         5,

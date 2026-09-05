@@ -7,7 +7,7 @@ from engines.decision.decision_service import DecisionService
 from engines.decision.replay import DecisionReplayService
 from storage.repositories.research_repository import DecisionSnapshotRepository
 
-AS_OF = datetime(2026, 8, 7, 9, 30)
+AS_OF = datetime(2026, 8, 7, 9, 30)  # noqa: DTZ001 - sqlite DateTime contract is naive
 
 SNAPSHOT_INPUT = {
     "market": {"snapshot_id": "mds-xyz", "data_version": "sha256:abc"},

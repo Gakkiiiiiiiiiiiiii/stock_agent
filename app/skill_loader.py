@@ -6,8 +6,12 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, Field
 
-from app.skill_contract import FreshnessPolicy, SkillExecutionContract, SkillGovernanceContract, SkillOutputContract
-
+from app.skill_contract import (
+    FreshnessPolicy,
+    SkillExecutionContract,
+    SkillGovernanceContract,
+    SkillOutputContract,
+)
 from financial_agent.utils import project_root
 
 

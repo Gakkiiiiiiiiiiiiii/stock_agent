@@ -1,16 +1,17 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
 from pydantic import BaseModel
 
-from app.model_gateway import ModelGateway, ModelRoute, RetryPolicy, StructuredOutputError as GatewayStructuredOutputError, TraceContext
-from app.model_gateway.transport import OpenAICompatibleTransport
 from app.model_capabilities import ModelCapabilities
 from app.model_capability_resolver import ModelCapabilityResolver
+from app.model_gateway import ModelGateway, ModelRoute, RetryPolicy, TraceContext
+from app.model_gateway import StructuredOutputError as GatewayStructuredOutputError
+from app.model_gateway.transport import OpenAICompatibleTransport
 
 
 class ModelCapabilityError(RuntimeError):
@@ -31,7 +32,7 @@ class AnalysisModelSettings:
     capabilities: ModelCapabilities | None = None
 
     @classmethod
-    def from_env(cls) -> "AnalysisModelSettings":
+    def from_env(cls) -> AnalysisModelSettings:
         model = os.getenv("ANALYSIS_MODEL_NAME")
         api_key = os.getenv("ANALYSIS_MODEL_API_KEY") or os.getenv("VISUAL_MODEL_API_KEY")
         if str(model or "").lower() in {"k3", "kimi-k3", "kimi_k3"}:
@@ -190,7 +191,7 @@ class AgentModelSettings:
     capabilities: ModelCapabilities | None = None
 
     @classmethod
-    def from_env(cls) -> "AgentModelSettings":
+    def from_env(cls) -> AgentModelSettings:
         return cls(
             provider=os.getenv("AGENT_MODEL_PROVIDER", os.getenv("ANALYSIS_MODEL_PROVIDER", "none")),
             model=os.getenv("AGENT_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),
@@ -226,7 +227,7 @@ class VisualModelSettings:
     capabilities: ModelCapabilities | None = None
 
     @classmethod
-    def from_env(cls) -> "VisualModelSettings":
+    def from_env(cls) -> VisualModelSettings:
         return cls(
             provider=os.getenv("VISUAL_MODEL_PROVIDER", os.getenv("ANALYSIS_MODEL_PROVIDER", "none")),
             model=os.getenv("VISUAL_MODEL_NAME", os.getenv("ANALYSIS_MODEL_NAME")),

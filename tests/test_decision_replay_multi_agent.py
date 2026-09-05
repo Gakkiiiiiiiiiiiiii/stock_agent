@@ -21,7 +21,8 @@ def _seed_agent_run(decision_id: str) -> str:
 def test_multi_agent_replay_uses_nested_regime_conflicts_and_detects_risk_diff(isolated_database):
     decisions = DecisionRepository()
     decision = decisions.create(
-        decision_as_of=datetime(2026, 8, 10, 9, 30), market_regime="stored_regime", thesis={"risk_veto": False},
+        decision_as_of=datetime(2026, 8, 10, 9, 30),  # noqa: DTZ001 - sqlite DateTime contract is naive
+        market_regime="stored_regime", thesis={"risk_veto": False},
         candidates=[{"symbol": "600000.SH", "theme_score": 90, "technical_score": 80, "risk_score": 10, "liquidity_score": 80, "confidence": .8}], portfolio_advice={}, benchmark_route={},
     )
     run_id = _seed_agent_run(decision.id)

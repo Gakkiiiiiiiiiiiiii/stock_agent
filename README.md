@@ -1,16 +1,29 @@
-# Financial Analysis Agent
+# Stock Agent Decision Authority
 
-本项目根据 `artitect/金融分析Agent架构详细设计文档.md` 及优化版 v1.3 实现一个可容器化部署的金融分析 Agent：
+这是一个以冻结证据为边界的投资决策服务。正式决策只能通过 v2 bundle-first
+流程生成：readiness gate → immutable bundle → policy/governance → 持久化
+snapshot、lineage、audit 与 outbox → `FORMAL` 响应。服务不提交订单、不连接
+任何 Broker/QMT 执行通道；`ANALYSIS_ONLY` 输出永远带有
+`execution_eligible=false`。
 
-- 技术分析引擎：基于版本化 Technical Profile、指标注册表和规则 DSL，支持趋势、动量、波动率、量价、MACD 等通用技术规则。
-- PostgreSQL 事实主库 + Qdrant 语义索引 + reranker 精排。
-- vector index worker：事实写入后异步切分、embedding、索引。
-- 市场状态识别、策略路由、信号升降级、组合构建。
-- FastAPI 接口和 MCP 风格工具函数封装。
-- 行情层统一接入 QMT bridge 实时 A 股数据，不再内置 AkShare / CSV 样例回退。
-- Claude-style Agent 编排：保留 Claude Agent 风格的 skills + tools + orchestration 框架。
-- 主模型使用 DeepSeek：`skill` 选择、工具调用、最终报告都由 DeepSeek `deepseek-v4-pro` 完成。
-- 可插拔辅助模型：`ask_research_model` 工具默认也可继续走 DeepSeek。
+## Golden Path
+
+```text
+POST /api/v2/decisions (portfolio_id + idempotency_key)
+  -> GET /api/v2/decisions/{id}/snapshot
+  -> POST /api/v2/decisions/{id}/replay {"mode":"EXACT_REPLAY"}
+```
+
+正式 POST 缺少幂等键会被拒绝，readiness、契约 checksum、freshness、PIT 和
+质量检查任一失败都会 fail-closed。分析接口请使用 `/api/v2/analysis/*`；它们
+是只读分析，不是决策授权入口。旧 v1 写入端点保留 410/deprecation 标记。
+
+架构与契约入口：
+
+- [endpoint inventory](docs/endpoint-inventory.yaml)
+- [v1 → v2 migration](docs/migrations/api-v1-to-v2.md)
+- [runbooks](docs/runbooks/)
+- [platform manifest](contracts/platform-manifest.yaml)
 
 ## 快速开始
 
@@ -18,7 +31,7 @@
 docker compose up --build
 ```
 
-默认服务：
+默认服务（仅本地开发）：
 
 - API: `http://127.0.0.1:8000`
 - Admin Console: `http://127.0.0.1:8000/admin`
@@ -28,7 +41,7 @@ docker compose up --build
 - PostgreSQL: `localhost:5433`
 - Redis: `localhost:6379`
 
-v2.1 Docker 栈默认把 PostgreSQL、Redis、Qdrant 端口绑定在 `127.0.0.1`，容器间通过服务名访问。首次部署请从 `.env.example` 复制 `.env`，修改 `POSTGRES_PASSWORD`、`REDIS_PASSWORD`、`QDRANT_API_KEY`、模型 API Key 等默认值。
+本地 Docker 栈把 PostgreSQL、Redis、Qdrant 端口绑定在 `127.0.0.1`，容器间通过服务名访问。首次部署请从 `.env.example` 复制 `.env`，修改密码和模型 API Key；这些组件只支持分析/开发工作流，不改变正式决策授权边界。
 
 基础栈会默认启动 PostgreSQL、Redis、Qdrant、Embedding、Reranker、API、Vector Worker 和 Job Worker：
 
@@ -54,14 +67,8 @@ Docker 部署下，以下目录已绑定到宿主机，管理台更新会直接�
 - `./skills`
 - `./storage`
 
-股票行情现在统一走 QMT。默认配置会优先复用同级 `../quant` 项目的桥接运行时：
-
-- `QMT_BRIDGE_PYTHON=../quant/.venv-qmt36/Scripts/python.exe`
-- `QMT_BRIDGE_SCRIPT=../quant/scripts/qmt_bridge.py`
-- `QMT_INSTALL_DIR=../quant/runtime/qmt_client/installed`
-- `QMT_USERDATA_DIR=../quant/runtime/qmt_client/installed/userdata_mini`
-
-如果你的 QMT 安装路径不同，请在 `.env` 中覆盖这些变量。QMT 不可用时，接口会明确返回错误，不会再回退到本地样例数据。
+本地行情、内容和模型连接器只能作为显式 read-only/analysis adapters。任何
+上游不可用都必须暴露稳定的 degraded/fail-closed 原因码，不能伪造正式证据。
 
 ## Bilibili 视频解析
 

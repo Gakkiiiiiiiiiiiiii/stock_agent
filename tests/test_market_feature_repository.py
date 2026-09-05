@@ -25,7 +25,7 @@ def test_market_snapshot_roundtrip(isolated_database):
     repo = _repo()
     saved = repo.save_market_snapshot(
         market_code="CN",
-        as_of=datetime(2026, 8, 7, 15, 0),
+        as_of=datetime(2026, 8, 7, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 7),
         feature_version="v1",
         features_json={"momentum": 0.42, "breadth": 0.6},
@@ -55,14 +55,14 @@ def test_market_snapshot_upsert_same_key(isolated_database):
     repo = _repo()
     repo.save_market_snapshot(
         market_code="CN",
-        as_of=datetime(2026, 8, 7, 15, 0),
+        as_of=datetime(2026, 8, 7, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 7),
         feature_version="v1",
         features_json={"momentum": 0.1},
     )
     updated = repo.save_market_snapshot(
         market_code="CN",
-        as_of=datetime(2026, 8, 7, 16, 0),
+        as_of=datetime(2026, 8, 7, 16, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 7),
         feature_version="v1",
         features_json={"momentum": 0.5},
@@ -77,7 +77,7 @@ def test_market_snapshot_upsert_same_key(isolated_database):
     # a different feature_version coexists as a separate row
     repo.save_market_snapshot(
         market_code="CN",
-        as_of=datetime(2026, 8, 7, 16, 0),
+        as_of=datetime(2026, 8, 7, 16, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 7),
         feature_version="v2",
         features_json={"momentum": 0.9},
@@ -91,14 +91,14 @@ def test_latest_market_snapshot(isolated_database):
     for day in (5, 6, 7):
         repo.save_market_snapshot(
             market_code="CN",
-            as_of=datetime(2026, 8, day, 15, 0),
+            as_of=datetime(2026, 8, day, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
             trade_date=date(2026, 8, day),
             feature_version="v1",
             features_json={"day": day},
         )
     repo.save_market_snapshot(
         market_code="US",
-        as_of=datetime(2026, 8, 8, 15, 0),
+        as_of=datetime(2026, 8, 8, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 8),
         feature_version="v1",
         features_json={"day": 8},
@@ -116,7 +116,7 @@ def test_sector_snapshot_roundtrip_and_upsert(isolated_database):
         sector_name="半导体",
         sector_code="801081",
         trade_date=date(2026, 8, 7),
-        as_of=datetime(2026, 8, 7, 15, 0),
+        as_of=datetime(2026, 8, 7, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         component_scores={"momentum": 0.7, "fundflow": 0.4},
         final_score=0.55,
         feature_version="v1",
@@ -139,7 +139,7 @@ def test_sector_snapshot_roundtrip_and_upsert(isolated_database):
     updated = repo.save_sector_snapshot(
         sector_name="半导体",
         trade_date=date(2026, 8, 7),
-        as_of=datetime(2026, 8, 7, 16, 0),
+        as_of=datetime(2026, 8, 7, 16, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         component_scores={"momentum": 0.8},
         final_score=0.66,
         feature_version="v1",
@@ -151,7 +151,7 @@ def test_sector_snapshot_roundtrip_and_upsert(isolated_database):
     repo.save_sector_snapshot(
         sector_name="医药",
         trade_date=date(2026, 8, 7),
-        as_of=datetime(2026, 8, 7, 15, 0),
+        as_of=datetime(2026, 8, 7, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         component_scores={},
         final_score=-0.2,
         feature_version="v1",
@@ -168,7 +168,7 @@ def test_sector_score_history(isolated_database):
         repo.save_sector_snapshot(
             sector_name="半导体",
             trade_date=date(2026, 8, day),
-            as_of=datetime(2026, 8, day, 15, 0),
+            as_of=datetime(2026, 8, day, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
             component_scores={},
             final_score=float(day),
             feature_version="v1",
@@ -266,7 +266,7 @@ def test_session_transaction_rolls_back_on_error(isolated_database):
     repo = _repo()
     repo.save_market_snapshot(
         market_code="CN",
-        as_of=datetime(2026, 8, 7, 15, 0),
+        as_of=datetime(2026, 8, 7, 15, 0),  # noqa: DTZ001 - sqlite DateTime contract is naive
         trade_date=date(2026, 8, 7),
         feature_version="v1",
         features_json={},

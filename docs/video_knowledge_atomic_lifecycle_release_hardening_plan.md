@@ -114,7 +114,7 @@ storage/migrations/
 - `workers/job_worker.py`
 - `workers/vector_index_worker.py`
 - `app/api.py`
-- `mcp_servers/content_server.py`
+- `services/content_api.py`
 - 可新增：
   - `scripts/smoke_video_knowledge_pipeline.py`
   - `tests/test_video_knowledge_smoke_contract.py`
@@ -221,7 +221,7 @@ OK financial_video_action_v1_bge_m3 dimension=...
 
 - `app/api.py`
 - `app/tool_registry.py`
-- `mcp_servers/content_server.py`
+- `services/content_api.py`
 - `tests/test_content_api.py`
 - `tests/test_mcp_content_tools.py`
 - 可新增：
@@ -358,4 +358,3 @@ API 和 MCP 主干已可用，但发布前建议冻结返回结构，减少后�
 3. 冻结 API / MCP 契约并补简短调用文档。
 
 这三项完成后，视频知识原子化解析与生命周期管理即可按详细设计进入正式验收。
-

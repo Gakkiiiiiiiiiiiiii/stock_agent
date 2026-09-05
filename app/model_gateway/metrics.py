@@ -7,7 +7,7 @@ from time import monotonic
 from typing import Any
 from uuid import uuid4
 
-_GLOBAL_STORE: "_MetricStore | None" = None
+_GLOBAL_STORE: _MetricStore | None = None
 
 
 @dataclass(frozen=True)
@@ -35,7 +35,7 @@ class TraceContext:
         return values
 
     @classmethod
-    def from_mapping(cls, values: dict[str, Any] | None) -> "TraceContext":
+    def from_mapping(cls, values: dict[str, Any] | None) -> TraceContext:
         values = values or {}
         return cls(
             trace_id=str(values.get("trace_id") or uuid4()),

@@ -1,0 +1,92 @@
+name: quality-gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]" ruff
+      - run: >-
+          ruff check app/domain app/application app/ports app/adapters
+          app/observability app/routers/analysis_v2.py app/routers/readiness.py
+          app/routers/audit.py app/routers/compatibility.py scripts/ci scripts/contracts
+          scripts/check_lock.py scripts/check_branch_protection.py
+          scripts/check_repository_boundaries.py scripts/audit_legacy_routes.py
+      - run: mypy app/domain app/application
+  architecture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - run: python scripts/contracts/verify_manifest.py
+      - run: pytest -q tests/architecture --basetemp=.pytest_worker
+  contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - run: python scripts/contracts/verify_manifest.py
+      - run: pytest -q tests/contracts --basetemp=.pytest_worker
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - run: pytest -q tests/test_api.py tests/test_migrations.py --basetemp=.pytest_worker
+  decision-replay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - run: pytest -q tests/test_decision_replay*.py tests/test_runtime_replay_modes.py --basetemp=.pytest_worker
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - run: pytest -q tests/test_content_signal_v3_contract.py --basetemp=.pytest_worker
+  docker-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          docker build --target api -t stock-agent-api:ci -f Dockerfile .
+          docker build --target worker -t stock-agent-worker:ci -f Dockerfile .
+          docker build --target analysis -t stock-agent-analysis:ci -f Dockerfile .
+  release-gate:
+    if: always()
+    needs: [lint, unit-tests, architecture, contract, decision-replay, integration, docker-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all blocking contexts
+        env:
+          LINT: ${{ needs.lint.result }}
+          UNIT: ${{ needs.unit-tests.result }}
+          ARCH: ${{ needs.architecture.result }}
+          CONTRACT: ${{ needs.contract.result }}
+          REPLAY: ${{ needs.decision-replay.result }}
+          INTEGRATION: ${{ needs.integration.result }}
+          DOCKER: ${{ needs.docker-build.result }}
+        run: |
+          test "$LINT" = success
+          test "$UNIT" = success
+          test "$ARCH" = success
+          test "$CONTRACT" = success
+          test "$REPLAY" = success
+          test "$INTEGRATION" = success
+          test "$DOCKER" = success

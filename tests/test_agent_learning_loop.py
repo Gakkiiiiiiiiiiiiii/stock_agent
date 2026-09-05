@@ -7,28 +7,36 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from agent.executor import SkillExecutor
-from app.skill_contract import FreshnessPolicy, SkillContractValidator, SkillExecutionContract, SkillExecutionState, SkillOutputContract
-from app.skill_loader import SkillDefinition, load_skills
 from app.scheduler_service import SchedulerService
+from app.skill_contract import (
+    FreshnessPolicy,
+    SkillContractValidator,
+    SkillExecutionContract,
+    SkillExecutionState,
+    SkillOutputContract,
+)
+from app.skill_loader import SkillDefinition, load_skills
 from app.tool_registry import ClaudeToolRegistry
 from engines.decision.decision_service import DecisionService
 from engines.decision.outcome_evaluator import DecisionOutcomeEvaluator
-from engines.market.exchange_calendar import ExchangeTradingCalendar
-from engines.memory.service import MemoryService
+from engines.market import trading_calendar
+from engines.market.trading_clock import TradingClock
 from engines.memory.lifecycle import MemoryLifecycleService
 from engines.memory.llm_memory_extractor import LLMMemoryExtractor
 from engines.memory.models import MemoryExtractionInput
+from engines.memory.service import MemoryService
 from engines.regime.regime_state_machine import PersistentRegimeStateMachine
 from storage.bootstrap import create_all
-from storage.db import SessionLocal, get_engine
-from storage.repositories.vector_repository import MemoryRepository
-from storage.repositories.job_repository import JobTaskRepository
+from storage.db import SessionLocal, get_engine, session_scope
 from storage.models.research import DecisionReview
-from storage.db import session_scope
+from storage.repositories.job_repository import JobTaskRepository
+from storage.repositories.vector_repository import MemoryRepository
 
 
 def configure_test_database(monkeypatch, tmp_path):
     monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'learning_loop.db'}")
+    clock = TradingClock()
+    monkeypatch.setattr(trading_calendar, "get_default_clock", lambda: clock)
     get_engine.cache_clear()
     SessionLocal.configure(bind=get_engine())
     JobTaskRepository._schema_ready = False
@@ -87,7 +95,6 @@ def test_required_tool_error_and_stale_market_data_do_not_satisfy_contract():
 
 def test_freshness_uses_shanghai_market_open_and_session_dates(monkeypatch):
     # Friday close remains the active market session before Monday's opening.
-    monkeypatch.setattr("app.skill_contract.ExchangeTradingCalendar.normalize", lambda _self, value: value.date())
     policy = FreshnessPolicy(require_same_trading_day=True, require_after_market_open=True)
     before_open = SkillContractValidator._freshness_violations(
         datetime(2026, 8, 10, 1, 29, tzinfo=UTC), policy, datetime(2026, 8, 10, 2, 0, tzinfo=UTC)
@@ -321,28 +328,3 @@ def test_strategy_memory_lifecycle_tracks_consecutive_outcomes(monkeypatch, tmp_
         state = lifecycle.record_outcome_evidence(memory_id, -0.01)
     assert state["status"] == "REVALIDATION_REQUIRED"
     assert state["outcome_failure_count"] == 3
-
-
-def test_exchange_calendar_keeps_future_sessions_out_of_partial_qmt_cache(monkeypatch, tmp_path):
-    configure_test_database(monkeypatch, tmp_path)
-    monkeypatch.setattr(ExchangeTradingCalendar, "_remote_unavailable_until", None)
-
-    class PartialBridge:
-        def get_history(self, **_kwargs):
-            return [{"date": "2026-08-07"}]
-
-    calendar = ExchangeTradingCalendar(bridge=PartialBridge())
-    assert calendar.normalize(date(2026, 8, 10)) == date(2026, 8, 10)
-
-
-def test_exchange_calendar_skips_holiday_inside_qmt_coverage(monkeypatch, tmp_path):
-    configure_test_database(monkeypatch, tmp_path)
-    monkeypatch.setattr(ExchangeTradingCalendar, "_remote_unavailable_until", None)
-
-    class HolidayBridge:
-        def get_history(self, **_kwargs):
-            return [{"date": "2026-09-30"}, {"date": "2026-10-09"}]
-
-    calendar = ExchangeTradingCalendar(bridge=HolidayBridge())
-    assert calendar.is_trading_day(date(2026, 10, 1)) is False
-    assert calendar.advance_sessions(date(2026, 9, 30), 1) == date(2026, 10, 9)

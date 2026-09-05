@@ -5,9 +5,8 @@
 """
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 
-import pytest
 from fastapi.testclient import TestClient
 
 from engines.decision.decision_service import DecisionService
@@ -17,7 +16,7 @@ from engines.portfolio.pipeline import run_portfolio_pipeline
 from engines.versioning import get_version
 from storage.repositories.research_repository import DecisionRepository
 
-AS_OF = datetime(2026, 8, 7, 9, 30)  # naive：与 sqlite DateTime 往返一致
+AS_OF = datetime(2026, 8, 7, 9, 30)  # noqa: DTZ001 - sqlite DateTime contract is naive
 
 # 原始候选（输入形状）；分数拉开使排序结果与录入顺序不同。
 RAW_CANDIDATES = [
