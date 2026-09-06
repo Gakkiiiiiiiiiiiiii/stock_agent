@@ -158,7 +158,6 @@ class DecisionRuntime:
             mode_resolver=self.resolve_runtime_mode,
             clock_now=self._clock_now,
             policy_engine=self.policy_engine,
-            decision_service=self.decision_service,
             tool_results=self.tool_results,
             degraded_mode=RuntimeMode.DEGRADED_AGENT,
             task_graph_type=TaskGraph,

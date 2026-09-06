@@ -5,6 +5,8 @@ import ast
 from pathlib import Path
 from typing import ClassVar
 
+import pytest
+
 from app.agent_orchestrator import AgentOrchestrator
 from app.decision_runtime import DecisionRuntime
 
@@ -102,3 +104,27 @@ def test_fallback_is_also_governed(isolated_database):
     assert result["runtime_mode"] == "DETERMINISTIC_FALLBACK"
     assert result["actionable"] is False
     assert "policy" not in result
+
+
+def test_retained_legacy_pipeline_is_narrative_only() -> None:
+    runtime = DecisionRuntime(claude_agent=_StubClaudeAgent(configured=False), fallback=_StubFallback())
+
+    result = runtime._run_pipeline(
+        task_type="legacy-analysis", role="RESEARCH", objective="legacy", query="legacy",
+        subject="600000.SH", execute=lambda: {"proposal": {"action": "BUY"}},
+    )
+
+    assert result["actionable"] is False
+    assert "decision_id" not in result
+    assert "final_decision" not in result
+
+
+def test_retained_legacy_persistence_hook_fails_closed() -> None:
+    runtime = DecisionRuntime(claude_agent=_StubClaudeAgent(configured=False), fallback=_StubFallback())
+
+    with pytest.raises(RuntimeError, match="LEGACY_DECISION_PERSISTENCE_RETIRED"):
+        runtime._persist(
+            objective="legacy", payload={}, governed={}, mode="DETERMINISTIC_FALLBACK",
+            fallback_reason=None, task_type="legacy-analysis", subject=None,
+            agent_run_id=None, decision_quality=None,
+        )

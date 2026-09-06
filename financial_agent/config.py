@@ -23,6 +23,10 @@ def _expand_env(value: Any) -> Any:
 @lru_cache(maxsize=32)
 def load_yaml_config(name: str) -> dict[str, Any]:
     path = project_root() / "config" / name
+    return load_yaml_path(path)
+
+
+def load_yaml_path(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(path)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}

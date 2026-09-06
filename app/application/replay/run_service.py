@@ -15,6 +15,29 @@ def _digest(value: Any) -> str:
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode()).hexdigest()
 
 
+def _replay_identity(
+    *,
+    decision_snapshot_id: str,
+    snapshot: dict[str, Any],
+    expected_output_hash: str | None,
+) -> str:
+    """Return the immutable identity used for replay idempotency.
+
+    ``snapshot`` is deliberately included as a whole rather than as a short
+    allow-list.  It consequently binds the frozen input and every recorded
+    profile, code, contract, and lock reference, including future reference
+    fields.  The expected hash must also participate: a prior discrepancy for
+    one expectation is not evidence for another expectation.
+    """
+    return _digest(
+        {
+            "decision_snapshot_id": decision_snapshot_id,
+            "snapshot": snapshot,
+            "expected_output_hash": expected_output_hash,
+        }
+    )
+
+
 @dataclass(frozen=True)
 class ReplayRun:
     replay_run_id: str
@@ -37,12 +60,23 @@ class ReplayRunService:
         self.owner_id = f"replay-{uuid4()}"
 
     def run_exact(self, *, decision_snapshot_id: str, snapshot: dict[str, Any], calculator: Callable[[dict[str, Any]], Any], expected_output_hash: str | None = None) -> dict[str, Any]:
-        input_hash = _digest(snapshot)
+        # The existing persistence key remains (snapshot_id, input_hash), but
+        # input_hash now represents the complete immutable replay identity.
+        input_hash = _replay_identity(
+            decision_snapshot_id=decision_snapshot_id,
+            snapshot=snapshot,
+            expected_output_hash=expected_output_hash,
+        )
         key = (decision_snapshot_id, input_hash)
         with self._lock:
             prior = self._runs.get(key)
             if prior is None:
-                prior = self._load_persistent(decision_snapshot_id, input_hash, strict=self.persistent)
+                prior = self._load_persistent(
+                    decision_snapshot_id,
+                    input_hash,
+                    expected_output_hash=expected_output_hash,
+                    strict=self.persistent,
+                )
                 if prior is not None:
                     self._runs[key] = prior
             if prior and prior.status == "SUCCEEDED":
@@ -62,9 +96,13 @@ class ReplayRunService:
         mismatch = expected_output_hash is not None and actual != expected_output_hash
         done = replace(run, actual_output_hash=actual, expected_output_hash=expected_output_hash,
                        status="SUCCEEDED", discrepancy_artifact_id=(str(uuid4()) if mismatch else None))
+        # A fenced write is the authority for success.  In particular, do not
+        # let a process-local cache turn an expired lease or failed transaction
+        # into a success response on this process's retry path.
+        if self.persistent:
+            self._persist(done, strict=True)
         with self._lock:
             self._runs[key] = done
-        self._persist(done, strict=self.persistent)
         return {"replay_run_id": done.replay_run_id, "status": done.status, "match": not mismatch, "actual_output_hash": actual, "discrepancy_artifact_id": done.discrepancy_artifact_id, "output": output}
 
     def run_exact_fixed(
@@ -109,8 +147,10 @@ class ReplayRunService:
             updated = session.execute(text("""UPDATE decision_replay_runs SET status='RUNNING', owner_id=:owner,
                 fencing_token=fencing_token+1, lease_expires_at=:expires
                 WHERE decision_snapshot_id=:snapshot AND input_hash=:input AND status <> 'SUCCEEDED'
+                  AND ((expected_output_hash = :expected) OR (expected_output_hash IS NULL AND :expected IS NULL))
                   AND (lease_expires_at IS NULL OR lease_expires_at <= :now OR owner_id=:owner)"""),
-                {"snapshot": run.decision_snapshot_id, "input": run.input_hash, "owner": run.owner_id, "expires": expires, "now": now})
+                {"snapshot": run.decision_snapshot_id, "input": run.input_hash, "expected": run.expected_output_hash,
+                 "owner": run.owner_id, "expires": expires, "now": now})
             if getattr(updated, "rowcount", 0) == 1:
                 token = int(session.execute(text("""SELECT fencing_token FROM decision_replay_runs
                     WHERE decision_snapshot_id=:snapshot AND input_hash=:input"""), {"snapshot": run.decision_snapshot_id, "input": run.input_hash}).scalar_one())
@@ -122,12 +162,23 @@ class ReplayRunService:
                     {"id": run.replay_run_id, "snapshot": run.decision_snapshot_id, "input": run.input_hash,
                      "expected": run.expected_output_hash, "owner": run.owner_id, "expires": expires}).scalar_one_or_none()
                 if inserted is None:
+                    stored_expected = session.execute(text("""SELECT expected_output_hash FROM decision_replay_runs
+                        WHERE decision_snapshot_id=:snapshot AND input_hash=:input"""),
+                        {"snapshot": run.decision_snapshot_id, "input": run.input_hash}).scalar_one_or_none()
+                    if stored_expected != run.expected_output_hash:
+                        raise RuntimeError("REPLAY_IDENTITY_CONFLICT")
                     return None
                 token = int(inserted)
         return replace(run, fencing_token=token, lease_expires_at=expires, status="RUNNING")
 
     @staticmethod
-    def _load_persistent(snapshot_id: str, input_hash: str, *, strict: bool = False) -> ReplayRun | None:
+    def _load_persistent(
+        snapshot_id: str,
+        input_hash: str,
+        *,
+        expected_output_hash: str | None,
+        strict: bool = False,
+    ) -> ReplayRun | None:
         try:
             from sqlalchemy import text
 
@@ -135,6 +186,8 @@ class ReplayRunService:
             with session_scope() as session:
                 row = session.execute(text("SELECT * FROM decision_replay_runs WHERE decision_snapshot_id=:snapshot_id AND input_hash=:input_hash"), {"snapshot_id": snapshot_id, "input_hash": input_hash}).mappings().first()
             if row:
+                if row.get("expected_output_hash") != expected_output_hash:
+                    raise RuntimeError("REPLAY_IDENTITY_CONFLICT")
                 return ReplayRun(str(row["replay_run_id"]), snapshot_id, input_hash, row.get("expected_output_hash"), row.get("actual_output_hash"), row["status"], row.get("discrepancy_artifact_id"), row.get("owner_id"), int(row.get("fencing_token") or 0), row.get("lease_expires_at"))
         except Exception:
             if strict:

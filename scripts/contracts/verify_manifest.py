@@ -9,12 +9,30 @@ from pathlib import Path
 
 import yaml
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from app.application.readiness.contract_paths import (
+    ContractPathError,
+    resolve_contract_file,
+    resolve_contract_reference,
+)
+
 
 def verify(root: Path, manifest: Path) -> list[str]:
-    data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+    try:
+        manifest_path = resolve_contract_file(root, manifest)
+        data = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
+    except (ContractPathError, OSError, yaml.YAMLError) as exc:
+        return [f"manifest: {exc}"]
     errors: list[str] = []
     for name, item in (data.get("contracts") or {}).items():
-        schema = root / str(item.get("schema", ""))
+        try:
+            schema = resolve_contract_reference(root, item.get("schema", ""))
+        except ContractPathError as exc:
+            errors.append(f"{name}: {exc}")
+            continue
         if not schema.is_file():
             errors.append(f"{name}: schema missing: {schema}")
             continue

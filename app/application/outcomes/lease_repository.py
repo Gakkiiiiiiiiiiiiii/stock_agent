@@ -42,7 +42,13 @@ class OutcomeLeaseRepository:
             current = self._leases.get(lease.decision_snapshot_id)
             if current != lease or current.lease_expires_at <= datetime.now(UTC):
                 raise RuntimeError("OUTCOME_LEASE_FENCED")
-            final = self._results.setdefault(lease.decision_snapshot_id, dict(result))
+            final = self._results.get(lease.decision_snapshot_id)
+            if final is not None:
+                if self._result_hash(final) != self._result_hash(result):
+                    raise RuntimeError("OUTCOME_EVENT_PAYLOAD_CONFLICT")
+                return final
+            final = dict(result)
+            self._results[lease.decision_snapshot_id] = final
             self._persist_result(lease, final)
             return final
 
@@ -112,17 +118,28 @@ class OutcomeLeaseRepository:
         now = datetime.now(UTC)
         with session_scope() as session:
             encoded = json.dumps(result, sort_keys=True, ensure_ascii=False)
+            result_hash = self._result_hash(result)
             updated = session.execute(text("""UPDATE decision_outcome_runs SET status='SUCCEEDED', result_hash=:hash,
                 result_json=:result WHERE decision_snapshot_id=:snapshot AND status='RUNNING'
                 AND owner_id=:owner AND fencing_token=:token AND lease_expires_at > :now"""),
                 {"snapshot": lease.decision_snapshot_id, "owner": lease.owner_id, "token": lease.fencing_token,
-                 "result": encoded, "hash": __import__("hashlib").sha256(encoded.encode()).hexdigest(), "now": now})
+                 "result": encoded, "hash": result_hash, "now": now})
             if getattr(updated, "rowcount", 0) == 0:
-                prior = session.execute(text("SELECT status,result_json FROM decision_outcome_runs WHERE decision_snapshot_id=:snapshot"), {"snapshot": lease.decision_snapshot_id}).mappings().first()
+                prior = session.execute(text("SELECT status,result_json,result_hash FROM decision_outcome_runs WHERE decision_snapshot_id=:snapshot"), {"snapshot": lease.decision_snapshot_id}).mappings().first()
                 if prior and prior["status"] == "SUCCEEDED" and prior["result_json"]:
-                    return json.loads(prior["result_json"])
+                    final = json.loads(prior["result_json"])
+                    if str(prior.get("result_hash") or self._result_hash(final)) != result_hash:
+                        raise RuntimeError("OUTCOME_EVENT_PAYLOAD_CONFLICT")
+                    return final
                 raise RuntimeError("OUTCOME_LEASE_FENCED")
             return dict(result)
+
+    @staticmethod
+    def _result_hash(result: dict) -> str:
+        import hashlib
+        import json
+
+        return hashlib.sha256(json.dumps(result, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
     @staticmethod
     def _persist_lease(lease: OutcomeLease) -> None:

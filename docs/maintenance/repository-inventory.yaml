@@ -8,6 +8,9 @@ entries:
   - {path: app/routers/execution.py, owner: quant, status: out-of-scope, replacement: quant execution authority}
   - {path: app/domain/decision/execution_authorization.py, owner: decision-authority, status: retained-contract-only, replacement: quant execution authority}
   - {path: contracts/execution-authorization.v1.json, owner: decision-authority, status: retained-contract-only, replacement: quant execution authority}
+  - {path: config, owner: financial_agent.config, status: single-yaml-authority, replacement: null}
+  - {path: storage/audit, owner: runtime-local, status: untracked-runtime-data, replacement: null}
+  - {path: storage/chat_sessions, owner: runtime-local, status: untracked-runtime-data, replacement: null}
   - {path: engines/backtest, owner: analysis, status: retained-calculation-only, replacement: null}
   - {path: engines/backtest/execution.py, owner: analysis, status: retained-calculation-only, replacement: null}
   - {path: engines/backtest/execution_model.py, owner: analysis, status: retained-calculation-only, replacement: null}

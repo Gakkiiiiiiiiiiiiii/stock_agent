@@ -10,6 +10,7 @@ from fastapi.routing import APIRoute
 
 from app import dependencies
 from app.api import app
+from app.domain.decision.authority import analysis_response
 from app.tool_policy import PermissionLevel
 from app.tool_registry import ClaudeToolRegistry
 
@@ -42,6 +43,14 @@ FORBIDDEN_IMPORT_PARTS = (
 )
 
 
+def _walk_routes(routes: object):
+    for route in routes:
+        if type(route).__name__ == "_IncludedRouter":
+            yield from _walk_routes(route.original_router.routes)
+        else:
+            yield route
+
+
 def test_decision_registry_exposes_no_external_production_or_order_tools() -> None:
     names = {item["name"] for item in ClaudeToolRegistry().anthropic_tools()}
     assert not {name for name in names if name in FORBIDDEN_TOOL_NAMES or name.startswith(FORBIDDEN_PREFIXES)}
@@ -66,6 +75,107 @@ def test_stock_agent_route_table_has_no_mutating_external_surfaces() -> None:
     assert not any(token in path for path in paths for token in ("/ingest", "/factors/mine", "/cancel", "/knowledge/theme"))
     assert not any("/proposals" in path for path in paths)
     assert not any(route.path.endswith("/admin/skills/{slug}") and "PUT" in route.methods for route in app.routes if isinstance(route, APIRoute))
+
+
+def test_formal_decision_write_route_is_unique() -> None:
+    """Only the formal v2 route may enter the decision write transaction."""
+    formal_routes = [
+        route
+        for route in _walk_routes(app.routes)
+        if isinstance(route, APIRoute)
+        and route.path == "/api/v2/decisions"
+        and "POST" in route.methods
+    ]
+    assert len(formal_routes) == 1
+    assert formal_routes[0].endpoint.__name__ == "create_decision_v2"
+
+    legacy_source = (ROOT / "app" / "routers" / "decision.py").read_text(encoding="utf-8")
+    legacy_tree = ast.parse(legacy_source)
+    legacy_entry = next(
+        node for node in legacy_tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "create_decision"
+    )
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "HTTPException"
+        for node in ast.walk(legacy_entry)
+    )
+
+
+def test_legacy_analysis_producer_is_narrative_only_and_fails_closed_on_persistence() -> None:
+    """No retained compatibility hook may reach the formal persistence port."""
+    source = (ROOT / "app" / "application" / "analysis" / "service.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert "save_decision" not in source
+
+    persist = next(
+        node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "AnalysisApplicationService"
+        for node in node.body if isinstance(node, ast.FunctionDef) and node.name == "_persist"
+    )
+    assert any(
+        isinstance(node, ast.Raise)
+        and isinstance(node.exc, ast.Call)
+        and isinstance(node.exc.func, ast.Name)
+        and node.exc.func.id == "RuntimeError"
+        for node in ast.walk(persist)
+    )
+
+
+def test_analysis_response_is_fail_closed_for_authorization_like_payloads() -> None:
+    response = analysis_response({
+        "summary": "research only",
+        "execution_eligible": True,
+        "authorization_envelope": {"authority": "FORMAL"},
+        "execution_authorization": {"allowed_actions": ["BUY"]},
+        "allowed_actions": ["BUY"],
+        "max_notional": 1_000_000,
+    })
+
+    assert response == {
+        "summary": "research only",
+        "authority": "ANALYSIS_ONLY",
+        "execution_eligible": False,
+    }
+
+
+def test_analysis_route_inventory_uses_the_fail_closed_response_adapter() -> None:
+    """Route inventory prevents a legacy analysis path from bypassing the marker."""
+    expected_routes = {
+        "agent.py": {
+            "/api/v1/analyze/stock", "/api/v1/analyze/theme", "/api/v1/agent/run",
+            "/api/v1/agent/run/stream",
+        },
+        "analysis_v2.py": {"/stock", "/theme"},
+        "compatibility.py": {"/analysis/stock/{symbol}"},
+        "market.py": {"/api/v1/market/daily-scan"},
+        "regime.py": {"/api/v1/market/regime"},
+        "retrieval.py": {"/api/v1/retrieval/context"},
+    }
+    for filename, paths in expected_routes.items():
+        source = (ROOT / "app" / "routers" / filename).read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=filename)
+        endpoints = {
+            decorator.args[0].value: node
+            for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            for decorator in node.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr in {"post", "get"}
+            and decorator.args
+            and isinstance(decorator.args[0], ast.Constant)
+            and isinstance(decorator.args[0].value, str)
+        }
+        assert paths <= endpoints.keys()
+        for path in paths:
+            assert any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "analysis_response"
+                for node in ast.walk(endpoints[path])
+            ), f"{filename}:{path} bypasses analysis_response"
 
 
 def test_main_path_does_not_import_local_fact_producers_or_execution() -> None:

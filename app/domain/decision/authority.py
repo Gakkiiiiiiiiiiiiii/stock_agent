@@ -49,6 +49,11 @@ def analysis_response(payload: dict[str, Any], *, compatibility: bool = False) -
     """Add a non-authoritative marker without leaking execution semantics."""
     result = dict(payload)
     result.pop("execution_eligible", None)
+    # Analysis adapters return narrative payloads.  Authorization is meaningful
+    # only on the formal v2 write path, so do not let an upstream field make an
+    # analysis response a carrier for execution authority.
+    result.pop("authorization_envelope", None)
+    result.pop("execution_authorization", None)
     result.pop("allowed_actions", None)
     result.pop("max_notional", None)
     result["authority"] = (DecisionAuthority.COMPATIBILITY_READ_ONLY if compatibility else DecisionAuthority.ANALYSIS_ONLY).value

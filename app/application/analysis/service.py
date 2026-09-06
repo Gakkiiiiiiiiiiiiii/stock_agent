@@ -1,9 +1,9 @@
 """Application service for compatibility/narrative analysis endpoints.
 
 This service deliberately owns the historical analysis pipeline.  It never
-creates a formal decision; the v2 decision calculator is a separate component.
-The constructor receives the small set of policy, persistence, and clock ports
-needed by the legacy adapter, keeping the public ``DecisionRuntime`` façade
+creates a formal decision; the v2 decision calculator is the only writer.
+The constructor receives only the collaborators needed to produce a
+non-authoritative narrative, keeping the public ``DecisionRuntime`` façade
 free of analysis implementation details.
 """
 from __future__ import annotations
@@ -19,11 +19,10 @@ CONTENT_FACTOR_SIGNAL_VERSION = "content-factor-signal.v3"
 class AnalysisApplicationService:
     """Run non-authoritative analysis with explicitly injected collaborators."""
 
-    def __init__(self, *, mode_resolver: Callable[[], tuple[Any, str | None]], clock_now: Callable[[], datetime], policy_engine: Any, decision_service: Any, tool_results: Any, degraded_mode: Any, task_graph_type: Any, task_type_factory: Any, artifact_factory: Any, success_status: Any, supervisor_type: Any, proposal_type: Any, policy_context_type: Any, profile_type: Any, recommendation_type: Any, suitability_fn: Callable[..., Any], conflict_resolver: Callable[..., Any], runtime_segment_fn: Callable[..., Any]) -> None:
+    def __init__(self, *, mode_resolver: Callable[[], tuple[Any, str | None]], clock_now: Callable[[], datetime], policy_engine: Any, tool_results: Any, degraded_mode: Any, task_graph_type: Any, task_type_factory: Any, artifact_factory: Any, success_status: Any, supervisor_type: Any, proposal_type: Any, policy_context_type: Any, profile_type: Any, recommendation_type: Any, suitability_fn: Callable[..., Any], conflict_resolver: Callable[..., Any], runtime_segment_fn: Callable[..., Any]) -> None:
         self._mode_resolver = mode_resolver
         self._clock_now = clock_now
         self._policy_engine = policy_engine
-        self._decision_service = decision_service
         self._tool_results = tool_results
         self._degraded_mode = degraded_mode
         self._task_graph_type = task_graph_type
@@ -50,15 +49,17 @@ class AnalysisApplicationService:
         return "Analysis produced no narrative output."
 
     def run_pipeline(self, *, task_type: str, role: Any, objective: str, execute: Callable[[], dict], query: str, subject: str | None, as_of: date | None = None, emit: Callable[[str, dict], None] | None = None) -> dict:
-        mode, fallback_reason = self._mode_resolver()
-        supervised = self._run_supervised(task_type=task_type, role=role, objective=objective, execute=execute, as_of=as_of)
-        payload = supervised["payload"]
-        governed = self._govern(payload)
-        persisted = self._persist(objective=query, payload=payload, governed=governed, mode=mode, fallback_reason=fallback_reason, task_type=task_type, subject=subject, agent_run_id=supervised.get("agent_run_id"), decision_quality=supervised.get("decision_quality"))
-        payload.update(self._actionable_segment(governed, persisted, mode))
-        if emit:
-            emit("done", payload)
-        return payload
+        """Deprecated producer entry retained as a narrative-only adapter.
+
+        Historical callers may still invoke this private compatibility hook,
+        but it must not supervise/govern/persist a decision.  Formal writes
+        require the frozen-bundle v2 route.
+        """
+        del subject
+        return self.run_narrative(
+            task_type=task_type, role=role, objective=objective, execute=execute,
+            query=query, subject=None, as_of=as_of, emit=emit,
+        )
 
     def run_narrative(self, *, task_type: str, role: Any, objective: str, execute: Callable[[], dict], query: str, subject: str | None, as_of: date | None = None, emit: Callable[[str, dict], None] | None = None) -> dict:
         mode, fallback_reason = self._mode_resolver()
@@ -122,13 +123,9 @@ class AnalysisApplicationService:
         return {"proposal": proposal, "policy_decision": decision, "resolution": resolution, "suitability": suitability, "final_decision": {"action": action, "approved": approved, "approved_weight": round(float(approved_weight), 6), "vetoed": vetoed, "veto_reasons": list(resolution.get("veto_reasons") or []), "rejections": list(decision.rejections), "adjustments": list(decision.adjustments), "suitability": suitability}}
 
     def _persist(self, *, objective: str, payload: dict, governed: dict, mode: Any, fallback_reason: str | None, task_type: str, subject: str | None, agent_run_id: str | None, decision_quality: str | None) -> dict:
-        proposal, decision, final_decision = governed["proposal"], governed["policy_decision"], governed["final_decision"]
-        market_snapshot_id = payload.get("market_snapshot_id")
-        content_segment, content_snapshot_ids = self._content_lineage(payload)
-        tool_segment = self._record_tool_result(task_type=task_type, objective=objective, payload=payload, agent_run_id=agent_run_id, snapshot_refs=([str(market_snapshot_id)] if market_snapshot_id else []) + content_snapshot_ids)
-        snapshot_segments = {"market": {"snapshot_id": market_snapshot_id, "data_version": payload.get("market_data_version")}, "content": content_segment, "factor": {"factor_set_version": payload.get("factor_set_version"), "research_experiment_id": payload.get("research_experiment_id")}, "strategy": {"strategy_id": payload.get("selected_skill") or task_type, "strategy_version": payload.get("selected_skill") or task_type}, "runtime": self._runtime_segment_fn(mode, fallback_reason=fallback_reason, supervisor_version=DECISION_RUNTIME_VERSION), "proposal": proposal.to_dict(), "policy": {**decision.to_dict(), "risk_veto": final_decision["vetoed"], "veto_reasons": final_decision["veto_reasons"], "final_action": final_decision["action"]}, "tools": tool_segment, "inputs": {"market_snapshot_ids": [market_snapshot_id] if market_snapshot_id else [], "content_snapshot_ids": content_snapshot_ids, "research_experiment_ids": [payload["research_experiment_id"]] if payload.get("research_experiment_id") else [], "factor_set_ids": [payload["factor_set_version"]] if payload.get("factor_set_version") else []}, "output": {"final_decision": final_decision["action"], "approved_weight": final_decision["approved_weight"]}}
-        candidates = [{"symbol": subject, "confidence": proposal.confidence}] if subject and proposal.symbol else []
-        return self._decision_service.save_decision(query=objective, candidates=candidates, themes=[proposal.theme] if proposal.theme else [], sector=proposal.sector, market_regime=payload.get("market_regime"), agent_run_id=agent_run_id, supervisor_version=DECISION_RUNTIME_VERSION, participating_agents=[mode.value], decision_quality=decision_quality, decision_snapshot=snapshot_segments)
+        """Fail closed for callers of the retired analysis persistence hook."""
+        del objective, payload, governed, mode, fallback_reason, task_type, subject, agent_run_id, decision_quality
+        raise RuntimeError("LEGACY_DECISION_PERSISTENCE_RETIRED: use POST /api/v2/decisions")
 
     @staticmethod
     def _content_lineage(payload: dict) -> tuple[dict, list[str]]:

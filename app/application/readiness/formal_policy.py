@@ -7,6 +7,12 @@ from pathlib import Path
 
 import yaml
 
+from app.application.readiness.contract_paths import (
+    ContractPathError,
+    resolve_contract_file,
+    resolve_contract_reference,
+)
+
 
 @dataclass(frozen=True)
 class FormalReadinessPolicy:
@@ -21,7 +27,8 @@ class FormalReadinessPolicy:
 
     @classmethod
     def from_manifest(cls, path: str | Path) -> FormalReadinessPolicy:
-        manifest_path = Path(path)
+        repository_root = Path(__file__).resolve().parents[3]
+        manifest_path = resolve_contract_file(repository_root, path)
         document = yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
         contracts = document.get("contracts") or {}
         expected: dict[str, str] = {}
@@ -31,8 +38,11 @@ class FormalReadinessPolicy:
             item = contracts.get(contract_name)
             if not isinstance(item, dict) or not item.get("schema") or not item.get("checksum"):
                 raise ValueError(f"CONTRACT_MANIFEST_MISSING:{contract_name}")
-            schema_path = manifest_path.parent.parent / str(item["schema"])
-            if not schema_path.exists():
+            try:
+                schema_path = resolve_contract_reference(repository_root, item["schema"])
+            except ContractPathError as exc:
+                raise ValueError(f"{exc}:{contract_name}") from exc
+            if not schema_path.is_file():
                 raise ValueError(f"CONTRACT_SCHEMA_MISSING:{contract_name}")
             digest = "sha256:" + hashlib.sha256(schema_path.read_bytes()).hexdigest()
             if digest != item["checksum"]:

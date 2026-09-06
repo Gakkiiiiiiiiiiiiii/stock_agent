@@ -16,7 +16,11 @@ from app.application.outcomes.lease_repository import OutcomeLeaseRepository
 from app.application.replay.run_service import ReplayRunService
 from app.domain.decision.execution_authorization import FormalDecisionFinalizer
 from app.domain.decision.run import DecisionRun, DecisionRunState
-from app.ports.decision_repository import IdempotencyConflict
+from app.ports.decision_repository import (
+    IdempotencyConflict,
+    InMemoryDecisionRepository,
+)
+from app.ports.outbox import InMemoryOutbox
 from storage.db import SessionLocal
 
 
@@ -43,6 +47,35 @@ def test_uow_idempotency_and_single_finalization_event():
     uow.finalize(final_result={}, snapshot_id="snapshot", event_payload={})
     assert len(uow.outbox.events) == 1
     assert uow.run.execution_eligible
+
+
+def test_uow_reverses_staged_outbox_when_final_save_fails_then_retries():
+    """A failure after outbox staging cannot create a duplicate final effect."""
+    class FailingFinalSaveRepository(InMemoryDecisionRepository):
+        fail_final_save = True
+
+        def save(self, run, *, expected_version=None):
+            if self.fail_final_save and run.state is DecisionRunState.FINALIZED:
+                raise RuntimeError("FINAL_SAVE_FAILED")
+            return super().save(run, expected_version=expected_version)
+
+    repository = FailingFinalSaveRepository()
+    uow = DecisionUnitOfWork(repository, InMemoryOutbox())
+    run = uow.receive(portfolio_id="portfolio", idempotency_key="request", request_hash="payload")
+    uow.freeze_bundle({}, bundle_id="bundle", bundle_hash="hash")
+    for state in (DecisionRunState.SPECIALISTS_COMPLETED, DecisionRunState.FORMAL_CALCULATED, DecisionRunState.GOVERNED):
+        uow.advance(state)
+
+    with pytest.raises(RuntimeError, match="FINAL_SAVE_FAILED"):
+        uow.finalize(final_result={"decision_id": run.decision_id}, snapshot_id="snapshot", event_payload={})
+
+    assert repository.get(run.decision_id).state is DecisionRunState.GOVERNED
+    assert uow.outbox.events == {}
+
+    repository.fail_final_save = False
+    finalized = uow.finalize(final_result={"decision_id": run.decision_id}, snapshot_id="snapshot", event_payload={})
+    assert finalized.state is DecisionRunState.FINALIZED
+    assert len(uow.outbox.events) == 1
 
 
 def test_authorization_requires_finalized_governed_lineage():
@@ -104,7 +137,8 @@ def test_outcome_lease_fencing_and_idempotency():
     assert owner is not None
     assert repository.claim("snapshot", "worker-b", lease_seconds=60) is None
     assert repository.complete(owner, {"result": "ok"}) == {"result": "ok"}
-    assert repository.complete(owner, {"result": "different"}) == {"result": "ok"}
+    with pytest.raises(RuntimeError, match="OUTCOME_EVENT_PAYLOAD_CONFLICT"):
+        repository.complete(owner, {"result": "different"})
 
 
 def test_session_uow_failure_rolls_back_run_and_outbox(isolated_database):
@@ -289,7 +323,7 @@ def test_persistent_replay_claim_is_single_calculator_under_threads(isolated_dat
     assert calls == 1
 
 
-def test_persistent_exact_replay_keeps_mismatch_artifact(isolated_database):
+def test_persistent_exact_replay_keys_expected_hash_and_keeps_each_result(isolated_database):
     snapshot = {"snapshot_version": "fixed-v1", "market": {"close": 10}}
     first = ReplayRunService(persistent=True).run_exact(
         decision_snapshot_id="snapshot-replay", snapshot=snapshot,
@@ -300,10 +334,11 @@ def test_persistent_exact_replay_keeps_mismatch_artifact(isolated_database):
         decision_snapshot_id="snapshot-replay", snapshot=snapshot,
         calculator=lambda _fixed: {"action": "BUY"}, expected_output_hash=None,
     )
-    assert first["replay_run_id"] == second["replay_run_id"]
-    assert first["discrepancy_artifact_id"] == second["discrepancy_artifact_id"]
+    assert first["replay_run_id"] != second["replay_run_id"]
+    assert first["discrepancy_artifact_id"] is not None
+    assert second["discrepancy_artifact_id"] is None
     with isolated_database.connect() as connection:
-        assert connection.execute(text("SELECT COUNT(*) FROM decision_replay_runs WHERE decision_snapshot_id='snapshot-replay'")).scalar_one() == 1
+        assert connection.execute(text("SELECT COUNT(*) FROM decision_replay_runs WHERE decision_snapshot_id='snapshot-replay'")).scalar_one() == 2
 
 
 def test_persistent_replay_claim_precedes_calculator(isolated_database):
@@ -312,10 +347,21 @@ def test_persistent_replay_claim_precedes_calculator(isolated_database):
     second = ReplayRunService(persistent=True)
     calls = []
 
-    from app.application.replay.run_service import ReplayRun, _digest
+    from app.application.replay.run_service import ReplayRun, _replay_identity
 
     # Hold the first owner's lease while the second worker attempts its claim.
-    lease = first._claim_persistent(ReplayRun("run", "claim-snapshot", _digest(snapshot), owner_id=first.owner_id))
+    lease = first._claim_persistent(
+        ReplayRun(
+            "run",
+            "claim-snapshot",
+            _replay_identity(
+                decision_snapshot_id="claim-snapshot",
+                snapshot=snapshot,
+                expected_output_hash=None,
+            ),
+            owner_id=first.owner_id,
+        )
+    )
     assert lease is not None
     # The active row proves the conditional claim implementation is persistent,
     # not process-local.
@@ -365,6 +411,17 @@ def test_formal_route_uses_finalizer_for_positive_approved_action(isolated_datab
     ))
     assert response["status"] == "APPROVED"
     assert response["execution_eligible"] is True
+    assert response["authorization_envelope"] is not None
+    with SessionLocal() as session:
+        finalized = SessionDecisionRepository(session).get(response["decision_id"])
+        assert finalized is not None
+        assert finalized.state is DecisionRunState.FINALIZED
+        assert finalized.final_response_json == response
+        assert finalized.execution_authorization_json == response["authorization_envelope"]
+        assert session.execute(
+            text("SELECT COUNT(*) FROM outbox WHERE aggregate_id=:id"),
+            {"id": response["decision_id"]},
+        ).scalar_one() == 1
 
 
 def test_runtime_frozen_entry_delegates_application_orchestrator():

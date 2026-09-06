@@ -26,6 +26,7 @@ PUBLIC_PATHS = {
 DEPRECATED_ENDPOINTS = {
     "/api/v1/analyze/stock": "/api/v2/analysis/stock",
     "/api/v1/analyze/theme": "/api/v2/analysis/theme",
+    "/api/v1/compatibility/analysis/stock/{symbol}": "/api/v2/analysis/stock",
     "/api/v1/decisions": "/api/v2/decisions",
     "/api/v1/review/trade": "/api/v2/decisions/{decision_id}/review",
 }

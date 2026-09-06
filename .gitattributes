@@ -1,0 +1,3 @@
+# Contract manifests and schemas are attested by their exact checked-out bytes.
+# Keep their checkout representation stable when core.autocrlf is enabled.
+contracts/** text eol=lf

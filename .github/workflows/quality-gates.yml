@@ -4,10 +4,33 @@ on:
   push:
     branches: [main]
 jobs:
+  ci-provenance:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_sha: ${{ steps.provenance.outputs.commit_sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: provenance
+        name: Bind CI evidence to the event commit
+        run: >-
+          python scripts/ci/verify_same_sha.py write
+          --output ci-provenance.json --github-output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ci-provenance-${{ github.sha }}
+          path: ci-provenance.json
+          if-no-files-found: error
   lint:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]" ruff
@@ -19,60 +42,178 @@ jobs:
           scripts/check_repository_boundaries.py scripts/audit_legacy_routes.py
       - run: mypy app/domain app/application
   architecture:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]"
       - run: python scripts/contracts/verify_manifest.py
       - run: pytest -q tests/architecture --basetemp=.pytest_worker
   contract:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]"
       - run: python scripts/contracts/verify_manifest.py
       - run: pytest -q tests/contracts --basetemp=.pytest_worker
   unit-tests:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]"
       - run: pytest -q tests/test_api.py tests/test_migrations.py --basetemp=.pytest_worker
   decision-replay:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]"
       - run: pytest -q tests/test_decision_replay*.py tests/test_runtime_replay_modes.py --basetemp=.pytest_worker
-  integration:
+  safety-closure:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - name: Verify the complete deterministic safety closure
+        run: python scripts/ci/safety_closure.py verify --output safety-closure.json
+      - name: Run the complete deterministic non-integration safety closure
+        run: python scripts/ci/safety_closure.py run --basetemp=.pytest_worker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: safety-closure-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: safety-closure.json
+          if-no-files-found: error
+  postgres-safety-evidence:
+    needs: [ci-provenance]
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:55432/stock_agent
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stock_agent
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stock_agent"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.11"}
+      - run: pip install -e ".[test]"
+      - name: Record PostgreSQL safety environment
+        run: >-
+          python -c "import json, os, pathlib; pathlib.Path('postgres-safety-environment.json').write_text(json.dumps({'database_url': os.environ['DATABASE_URL'], 'github_sha': os.environ['GITHUB_SHA']}, sort_keys=True) + '\\n', encoding='utf-8')"
+      - name: Exercise PostgreSQL replay, outcome lease, and UoW safety evidence
+        run: >-
+          pytest -q -m integration tests/test_postgres_safety_evidence.py
+          --basetemp=.pytest_worker --junitxml=postgres-safety-evidence.xml
+      - name: Reject skipped PostgreSQL safety evidence
+        run: >-
+          python -c "import sys, xml.etree.ElementTree as ET; skipped=ET.parse('postgres-safety-evidence.xml').getroot().findall('.//skipped'); print(f'skipped PostgreSQL safety tests: {len(skipped)}'); sys.exit(bool(skipped))"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postgres-safety-evidence-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: |
+            postgres-safety-evidence.xml
+            postgres-safety-environment.json
+          if-no-files-found: error
+  integration:
+    needs: [ci-provenance]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - uses: actions/setup-python@v5
         with: {python-version: "3.11"}
       - run: pip install -e ".[test]"
       - run: pytest -q tests/test_content_signal_v3_contract.py --basetemp=.pytest_worker
   docker-build:
+    needs: [ci-provenance]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Require this runner to use the provenance commit
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - run: |
           docker build --target api -t stock-agent-api:ci -f Dockerfile .
           docker build --target worker -t stock-agent-worker:ci -f Dockerfile .
           docker build --target analysis -t stock-agent-analysis:ci -f Dockerfile .
   release-gate:
     if: always()
-    needs: [lint, unit-tests, architecture, contract, decision-replay, integration, docker-build]
+    needs: [ci-provenance, lint, unit-tests, architecture, contract, decision-replay, safety-closure, postgres-safety-evidence, integration, docker-build]
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ci-provenance-${{ needs.ci-provenance.outputs.commit_sha }}
+          path: ci-provenance
+      - name: Reject prior-run or other-commit evidence
+        run: python scripts/ci/verify_same_sha.py verify --artifact ci-provenance/ci-provenance.json --expected-sha "${{ github.sha }}"
       - name: Require all blocking contexts
         env:
           LINT: ${{ needs.lint.result }}
@@ -80,6 +221,8 @@ jobs:
           ARCH: ${{ needs.architecture.result }}
           CONTRACT: ${{ needs.contract.result }}
           REPLAY: ${{ needs.decision-replay.result }}
+          SAFETY_CLOSURE: ${{ needs.safety-closure.result }}
+          POSTGRES_SAFETY: ${{ needs.postgres-safety-evidence.result }}
           INTEGRATION: ${{ needs.integration.result }}
           DOCKER: ${{ needs.docker-build.result }}
         run: |
@@ -88,5 +231,7 @@ jobs:
           test "$ARCH" = success
           test "$CONTRACT" = success
           test "$REPLAY" = success
+          test "$SAFETY_CLOSURE" = success
+          test "$POSTGRES_SAFETY" = success
           test "$INTEGRATION" = success
           test "$DOCKER" = success
