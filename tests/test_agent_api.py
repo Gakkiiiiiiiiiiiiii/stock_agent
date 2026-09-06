@@ -1,6 +1,7 @@
 from fastapi.testclient import TestClient
 
 from app.api import app
+from app.security import render_metrics
 
 client = TestClient(app)
 
@@ -41,3 +42,18 @@ def test_agent_session_crud():
     listed = client.get("/api/v1/agent/sessions")
     assert listed.status_code == 200
     assert any(item["session_id"] == session_id for item in listed.json()["items"])
+
+
+def test_retired_writer_and_compatibility_usage_are_auditable(monkeypatch):
+    monkeypatch.setattr("app.dependencies.orchestrator.analyze_stock", lambda symbol: {"symbol": symbol, "summary": "read only"})
+
+    retired = client.post("/api/v1/decisions", json={})
+    compatibility = client.get("/api/v1/compatibility/analysis/stock/600000.SH")
+
+    assert retired.status_code == 410
+    assert compatibility.status_code == 200
+    assert compatibility.json()["authority"] == "COMPATIBILITY_READ_ONLY"
+    assert compatibility.json()["execution_eligible"] is False
+    assert compatibility.headers["deprecation"] == "true"
+    assert "legacy_endpoint_requests_total{endpoint=\"/api/v1/decisions\"}" in render_metrics()
+    assert "legacy_endpoint_requests_total{endpoint=\"/api/v1/compatibility/analysis/stock/{symbol}\"}" in render_metrics()

@@ -2,15 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 from engines.technical.models import IndicatorSpec, TechnicalProfile
-from financial_agent.utils import project_root
+from financial_agent.config import load_yaml_config, load_yaml_path
 
 
 def load_technical_profile(name: str = "core_daily_v1", path: str | Path | None = None) -> TechnicalProfile:
-    cfg_path = Path(path) if path else project_root() / "config" / "technical_profiles.yaml"
-    data = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+    data = load_yaml_path(Path(path)) if path else load_yaml_config("technical_profiles.yaml")
     raw = (data.get("profiles") or {}).get(name)
     if raw is None:
         raise KeyError(f"technical profile not found: {name}")

@@ -22,35 +22,48 @@ jobs:
       - name: Helm lint and render
         run: |
           helm lint deploy/helm/stock-agent
-          helm template "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" > rendered.yaml
+          for render in 1 2 3; do
+            helm template "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" > "rendered-${render}.yaml"
+            kubectl apply --dry-run=client -f "rendered-${render}.yaml"
+          done
+          cmp rendered-1.yaml rendered-2.yaml
+          cmp rendered-2.yaml rendered-3.yaml
+          mv rendered-1.yaml rendered.yaml
           kubectl apply --dry-run=client -f rendered.yaml
-          python scripts/ci/rendered_resources.py rendered.yaml | tee workloads.txt
+          python scripts/ci/rendered_resources.py rendered.yaml --validate | tee workloads.txt
       - name: Build and load image
         run: |
           docker build --target api -t stock-agent-api:ci -f Dockerfile .
           docker build --target worker -t stock-agent-worker:ci -f Dockerfile .
-          docker build --target analysis -t stock-agent-analysis:ci -f Dockerfile .
           kind load docker-image stock-agent-api:ci --name "$KIND_CLUSTER_NAME"
           kind load docker-image stock-agent-worker:ci --name "$KIND_CLUSTER_NAME"
-          kind load docker-image stock-agent-analysis:ci --name "$KIND_CLUSTER_NAME"
       - name: Install and verify manifests
         run: |
-          helm upgrade --install "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" --create-namespace
+          helm upgrade --install "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" --create-namespace --wait --timeout=180s
           while read -r kind_name; do kind=${kind_name%%/*}; name=${kind_name#*/}; [ "$kind" = Deployment ] && kubectl rollout status "$kind/$name" --namespace "$NAMESPACE" --timeout=180s; done < workloads.txt
           kubectl get cronjob --namespace "$NAMESPACE"
+          test "$(kubectl get deployment "$HELM_RELEASE"-stock-agent-api --namespace "$NAMESPACE" -o jsonpath='{.spec.strategy.type}')" = RollingUpdate
+          test "$(kubectl get deployment "$HELM_RELEASE"-stock-agent-worker --namespace "$NAMESPACE" -o jsonpath='{.spec.strategy.type}')" = Recreate
+          test "$(kubectl get cronjob --namespace "$NAMESPACE" -o jsonpath='{.items[0].spec.concurrencyPolicy}')" = Forbid
           kubectl port-forward --namespace "$NAMESPACE" deployment/"$HELM_RELEASE"-stock-agent-api 18000:8000 >/tmp/stock-agent-port-forward.log 2>&1 &
           PF_PID=$!
           trap 'kill "$PF_PID" || true' EXIT
           for attempt in $(seq 1 30); do curl -fsS http://127.0.0.1:18000/health/ready && break || sleep 2; done
-          curl -fsS http://127.0.0.1:18000/health/formal-decision-ready
-          BASE_URL=http://127.0.0.1:18000 sh tests/smoke/test_deployed_decision_api.sh
-          cronjob=$(kubectl get cronjob --namespace "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}')
-          kubectl create job --namespace "$NAMESPACE" --from=cronjob/"$cronjob" "${cronjob}-smoke"
-          kubectl wait --for=condition=complete --timeout=180s job/"${cronjob}-smoke" --namespace "$NAMESPACE"
+          for attempt in 1 2 3; do
+            curl -fsS http://127.0.0.1:18000/health/formal-decision-ready
+            BASE_URL=http://127.0.0.1:18000 sh tests/smoke/test_deployed_decision_api.sh
+            cronjob=$(kubectl get cronjob --namespace "$NAMESPACE" -o jsonpath='{.items[0].metadata.name}')
+            job="${cronjob}-smoke-${attempt}"
+            kubectl create job --namespace "$NAMESPACE" --from=cronjob/"$cronjob" "$job"
+            kubectl wait --for=condition=complete --timeout=180s job/"$job" --namespace "$NAMESPACE"
+          done
       - name: Upgrade and verify singleton rollouts
         run: |
-          helm upgrade "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" --set services.api.image.tag=ci --set services.worker.image.tag=ci --set services.analysis.image.tag=ci --set configRevision=upgrade-$(date +%s)
+          helm upgrade "$HELM_RELEASE" deploy/helm/stock-agent -f deploy/helm/stock-agent/ci-smoke-values.yaml --namespace "$NAMESPACE" --set services.api.image.tag=ci --set services.worker.image.tag=ci --set configRevision=upgrade-$(date +%s) --wait --timeout=180s
           while read -r kind_name; do kind=${kind_name%%/*}; name=${kind_name#*/}; [ "$kind" = Deployment ] && kubectl rollout status "$kind/$name" --namespace "$NAMESPACE" --timeout=180s; done < workloads.txt
+          helm rollback "$HELM_RELEASE" 1 --namespace "$NAMESPACE" --wait --timeout=180s
+          while read -r kind_name; do kind=${kind_name%%/*}; name=${kind_name#*/}; [ "$kind" = Deployment ] && kubectl rollout status "$kind/$name" --namespace "$NAMESPACE" --timeout=180s; done < workloads.txt
+          test "$(kubectl get deployment "$HELM_RELEASE"-stock-agent-api --namespace "$NAMESPACE" -o jsonpath='{.spec.template.metadata.annotations.stock-agent/config-revision}')" = baseline
       - name: Collect smoke diagnostics
         if: failure()
         run: |

@@ -5,7 +5,7 @@ import argparse
 import json
 
 REQUIRED = {
-    "required_status_checks": ["lint", "unit-tests", "architecture", "contract", "decision-replay", "integration", "docker-build", "k8s-smoke"],
+    "required_status_checks": ["lint", "unit-tests", "architecture", "contract", "decision-replay", "integration", "docker-build", "release-gate", "k8s-smoke"],
     "required_approving_review_count": 1,
     "dismiss_stale_reviews": True,
     "enforce_admins": True,

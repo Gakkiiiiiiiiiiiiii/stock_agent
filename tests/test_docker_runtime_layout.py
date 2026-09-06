@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 
 import yaml
@@ -82,6 +83,90 @@ def test_dockerignore_excludes_python_caches_recursively():
     assert "**/__pycache__/" in ignored
     assert "**/*.pyc" in ignored
     assert "**/*.pyo" in ignored
+
+
+def test_runtime_data_is_ignored_and_untracked():
+    """Runtime state stays local; fixtures and source remain the only tracked data."""
+    ignored = set((ROOT / ".gitignore").read_text(encoding="utf-8").splitlines())
+    assert {"data/", "storage/audit/", "storage/chat_sessions/*.json", "storage/runtime/"} <= ignored
+
+    tracked = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    runtime_roots = (
+        "data/",
+        "storage/audit/",
+        "storage/chat_sessions/",
+        "storage/content/",
+        "knowledge_base/video_summaries/",
+    )
+    runtime_files = [
+        path for path in tracked
+        if path.startswith(runtime_roots) or path.endswith((".db", ".sqlite", ".sqlite3"))
+    ]
+    assert runtime_files == []
+    assert [path for path in tracked if path.startswith("storage/runtime/")] == ["storage/runtime/.gitkeep"]
+
+
+def test_config_directory_has_one_yaml_loading_authority():
+    """Manifests may be read locally, but shared YAML configuration has one loader."""
+    expected_yaml_readers = {
+        "financial_agent/config.py",
+        "app/application/readiness/formal_policy.py",
+        "app/routers/decision.py",
+        "app/skill_loader.py",
+        "engines/skill_evolution/candidate_workspace.py",
+        "engines/skill_evolution/golden_executor.py",
+    }
+    roots = (
+        ROOT / "app",
+        ROOT / "agent",
+        ROOT / "clients",
+        ROOT / "engines",
+        ROOT / "financial_agent",
+        ROOT / "services",
+        ROOT / "workers",
+    )
+    yaml_readers = {
+        path.relative_to(ROOT).as_posix()
+        for root in roots
+        for path in root.rglob("*.py")
+        if "yaml.safe_load" in path.read_text(encoding="utf-8")
+    }
+    assert yaml_readers == expected_yaml_readers
+
+    direct_config_roots = {
+        path.relative_to(ROOT).as_posix()
+        for root in roots
+        for path in root.rglob("*.py")
+        if 'project_root() / "config"' in path.read_text(encoding="utf-8")
+    }
+    assert direct_config_roots == {"financial_agent/config.py"}
+
+    inventory = yaml.safe_load(INVENTORY.read_text(encoding="utf-8"))
+    entries = {entry["path"]: entry for entry in inventory["entries"]}
+    assert entries["config"] == {
+        "path": "config",
+        "owner": "financial_agent.config",
+        "status": "single-yaml-authority",
+        "replacement": None,
+    }
+
+
+def test_launchers_do_not_restore_legacy_producers():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    launchers = "\n".join(
+        (ROOT / "scripts" / name).read_text(encoding="utf-8")
+        for name in ("start-api.ps1", "start-docker-stack.ps1")
+    )
+    assert "app.api:app" in dockerfile
+    assert "app.api:app" in launchers
+    for legacy_producer in ("mcp_servers", "engines.execution", "qmt_bridge_client", "app.routers.decision"):
+        assert legacy_producer not in dockerfile
+        assert legacy_producer not in launchers
 
 
 def test_compose_does_not_mount_role_source_trees():

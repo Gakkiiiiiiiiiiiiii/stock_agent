@@ -15,15 +15,36 @@ POST /api/v2/decisions (portfolio_id + idempotency_key)
 ```
 
 正式 POST 缺少幂等键会被拒绝，readiness、契约 checksum、freshness、PIT 和
-质量检查任一失败都会 fail-closed。分析接口请使用 `/api/v2/analysis/*`；它们
-是只读分析，不是决策授权入口。旧 v1 写入端点保留 410/deprecation 标记。
+质量检查任一失败都会 fail-closed。只有 `/health/formal-decision-ready` 返回
+成功后，才可尝试该 Golden Path；若其返回 `503`，必须读取 `reason_codes`，而不
+能以分析结果替代正式结果。分析接口请使用 `/api/v2/analysis/*`；它们是只读
+分析，不是决策授权入口，且即使正式路径未就绪，`/health/analysis-ready` 仍会
+明确报告 `degraded` 和 `ANALYSIS_ONLY`。旧 v1 写入端点保留 410/deprecation
+标记。
 
 架构与契约入口：
 
 - [endpoint inventory](docs/endpoint-inventory.yaml)
 - [v1 → v2 migration](docs/migrations/api-v1-to-v2.md)
 - [runbooks](docs/runbooks/)
+- [formal smoke and verification boundary](docs/runbooks/formal-decision-smoke.md)
 - [platform manifest](contracts/platform-manifest.yaml)
+
+## Evidence and deployment boundary
+
+This repository's current repeatable evidence is local, isolated testing with
+SQLite and deterministic/fake dependencies. It covers fail-closed readiness,
+non-authoritative analysis, snapshot-anchored replay, and replay/outcome lease
+recovery. It does **not** prove a real PostgreSQL migration, real quant/content/
+factor availability or contract handshake, production `.env` correctness, or a
+deployed Compose stack. Those items remain blocked until their owning integration
+or deployment validation runs successfully.
+
+`STOCK_AGENT_DETERMINISTIC_FIXTURE=1` is a CI/test fixture, not a production
+upstream. It may make the formal smoke path return a non-executable `HOLD`; it
+must never be used as evidence that live evidence or execution authorization is
+available. The supported, non-mutating local verification commands and their
+limits are in the [formal smoke runbook](docs/runbooks/formal-decision-smoke.md).
 
 ## 快速开始
 
@@ -41,7 +62,7 @@ docker compose up --build
 - PostgreSQL: `localhost:5433`
 - Redis: `localhost:6379`
 
-本地 Docker 栈把 PostgreSQL、Redis、Qdrant 端口绑定在 `127.0.0.1`，容器间通过服务名访问。首次部署请从 `.env.example` 复制 `.env`，修改密码和模型 API Key；这些组件只支持分析/开发工作流，不改变正式决策授权边界。
+本地 Docker 栈把 PostgreSQL、Redis、Qdrant 端口绑定在 `127.0.0.1`，容器间通过服务名访问。首次部署请从 `.env.example` 复制 `.env`，修改密码和模型 API Key；这些组件只支持分析/开发工作流，不改变正式决策授权边界。该 Compose 文件及其 `.env` 并不是本仓已完成的正式决策部署证明：真实 PostgreSQL、真实上游和跨仓契约握手仍须在受控集成环境单独验证。
 
 基础栈会默认启动 PostgreSQL、Redis、Qdrant、Embedding、Reranker、API、Vector Worker 和 Job Worker：
 
