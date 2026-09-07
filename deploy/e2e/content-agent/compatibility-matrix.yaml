@@ -1,9 +1,9 @@
 matrix_version: 1
 entries:
-  - stock_content_sha: bfc7f9be6b03f3189d2d316934e31a299e36047c
-    stock_agent_sha: 96f63d8a56567ce1b60788f0d59880472268b74c
+  - stock_content_sha: ddd677fdb6931f42709a42c3246871bed13d0eef
+    stock_agent_sha: 93d4701be24da95b17528872a4f49fdcaebc638e
     content_knowledge_bundle: 1.0.0
     content_knowledge_bundle_checksum: sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621
     knowledge_conclusion: 1.0.0
     status: candidate
-    exact_ref_gate: PENDING_UNCOMMITTED
+    exact_ref_gate: PASS

@@ -43,10 +43,10 @@ def test_migration_readiness_profiles_and_shared_token_are_explicit():
     for name in ("content-api", "content-video-worker"):
         environment = services[name]["environment"]
         assert environment["CONTENT_SERVICE_VERSION"] == "${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}"
-        assert environment["CONTENT_GIT_COMMIT"] == "${STOCK_CONTENT_GIT_COMMIT:-bfc7f9be6b03f3189d2d316934e31a299e36047c}"
+        assert environment["CONTENT_GIT_COMMIT"] == "${STOCK_CONTENT_GIT_COMMIT:-ddd677fdb6931f42709a42c3246871bed13d0eef}"
         assert environment["CONTENT_PIPELINE_VERSION"] == "${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}"
         assert environment["CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM"] == "${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}"
-    assert services["agent-api"]["environment"]["AGENT_GIT_COMMIT"] == "${STOCK_AGENT_GIT_COMMIT:-96f63d8a56567ce1b60788f0d59880472268b74c}"
+    assert services["agent-api"]["environment"]["AGENT_GIT_COMMIT"] == "${STOCK_AGENT_GIT_COMMIT:-93d4701be24da95b17528872a4f49fdcaebc638e}"
     assert services["agent-api"]["environment"]["CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM"] == "${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}"
     assert "QDRANT" not in " ".join(services["agent-api"]["environment"])
 

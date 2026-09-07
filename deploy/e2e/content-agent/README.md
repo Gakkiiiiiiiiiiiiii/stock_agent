@@ -20,10 +20,9 @@ this repository (`../../..`) only.
 
 `STOCK_CONTENT_SERVICE_VERSION`, `STOCK_CONTENT_GIT_COMMIT`,
 `STOCK_CONTENT_PIPELINE_VERSION`, and `STOCK_AGENT_GIT_COMMIT` are required
-runtime provenance inputs.  The example values identify the prepared base
-commits and are explicitly candidate metadata while these worktrees are dirty;
-production must override them with immutable image/build metadata.  They do
-not satisfy the exact-ref gate.
+runtime provenance inputs. The example values identify the EPIC-043 functional
+commits. The matrix is still candidate while external release gates remain;
+production must override these defaults with immutable image/build metadata.
 
 `bilibili`, `xiaoe`, and `full-model` are opt-in profiles. They must be invoked
 explicitly and require their respective read-only host secret file overrides;

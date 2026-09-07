@@ -43,11 +43,10 @@ services:
       CONTENT_QDRANT_COLLECTION: knowledge_v3
       CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
       CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
-      # These identify the checked-out producer base, not an uncommitted
-      # EPIC worktree.  A deployment must override them with its pinned image
-      # metadata before it can claim an exact-ref result.
+      # These identify the EPIC-043 producer commit. A deployment must still
+      # override them with its own pinned image metadata.
       CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
-      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-bfc7f9be6b03f3189d2d316934e31a299e36047c}
+      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-ddd677fdb6931f42709a42c3246871bed13d0eef}
       CONTENT_PIPELINE_VERSION: ${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}
       CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
       CONTENT_SERVICE_API_KEY_FILE: /run/secrets/content-service-api-key
@@ -88,7 +87,7 @@ services:
       CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
       CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
       CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
-      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-bfc7f9be6b03f3189d2d316934e31a299e36047c}
+      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-ddd677fdb6931f42709a42c3246871bed13d0eef}
       CONTENT_PIPELINE_VERSION: ${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}
       CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
       CONTENT_WORKER_PROFILE: video
@@ -187,7 +186,7 @@ services:
       KNOWLEDGE_CONCLUSION_MODEL_ADAPTER: fixture
       KNOWLEDGE_CONCLUSION_FIXTURE_MODEL_URL: http://fixture-model:9000/v1/chat/completions
       KNOWLEDGE_CONCLUSION_MODEL_API_KEY_FILE: /run/secrets/agent-model-api-key
-      AGENT_GIT_COMMIT: ${STOCK_AGENT_GIT_COMMIT:-96f63d8a56567ce1b60788f0d59880472268b74c}
+      AGENT_GIT_COMMIT: ${STOCK_AGENT_GIT_COMMIT:-93d4701be24da95b17528872a4f49fdcaebc638e}
       KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK: ${KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK:-true}
     secrets:
       - content-service-api-key

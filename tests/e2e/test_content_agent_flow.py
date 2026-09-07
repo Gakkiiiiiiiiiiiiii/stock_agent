@@ -185,10 +185,12 @@ def test_evidence_guards_and_secret_scanner_never_echo_matches(tmp_path: Path) -
     assert report["result"] == "FAIL" and "never-print-this" not in json.dumps(report)
 
 
-def test_uncommitted_pair_has_candidate_only_compatibility_matrix() -> None:
+def test_exact_epic_pair_keeps_candidate_compatibility_matrix_until_release_gates() -> None:
     matrix = yaml.safe_load((Path(__file__).parents[2] / "deploy/e2e/content-agent/compatibility-matrix.yaml").read_text(encoding="utf-8"))
     entry = matrix["entries"][0]
-    assert entry["status"] == "candidate" and entry["exact_ref_gate"] == "PENDING_UNCOMMITTED"
+    assert entry["stock_content_sha"] == "ddd677fdb6931f42709a42c3246871bed13d0eef"
+    assert entry["stock_agent_sha"] == "93d4701be24da95b17528872a4f49fdcaebc638e"
+    assert entry["status"] == "candidate" and entry["exact_ref_gate"] == "PASS"
     assert "evidence_id" not in entry and "verified_at" not in entry
 
 
