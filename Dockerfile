@@ -4,6 +4,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN pip install --no-cache-dir --prefix=/install \
     "sqlalchemy>=2.0" "pydantic>=2.7" "pyyaml>=6.0" \
     "fastapi>=0.111" "httpx>=0.27" "uvicorn>=0.30" \
+    "jsonschema>=4.23" \
     "filelock>=3.15" "psycopg[binary]>=3.2" "redis>=5.0" \
     "anthropic>=0.67" "pandas>=2.2" "qdrant-client>=1.11" \
     "rich>=13.0" "typer>=0.9"
@@ -65,6 +66,10 @@ CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
 # Explicit database schema owner. Deploy this target as a one-shot job before
 # an API rollout; it is never the API entrypoint.
 FROM api AS migration-owner
+# Running a script by path otherwise places only /app/scripts on sys.path.
+# Keep the repository root available for the storage bootstrap import without
+# relying on a Compose-only environment override.
+ENV PYTHONPATH=/app
 COPY storage/migrations ./storage/migrations
 COPY scripts/migrate_schema.py ./scripts/migrate_schema.py
 CMD ["python", "scripts/migrate_schema.py"]

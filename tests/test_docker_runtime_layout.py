@@ -86,7 +86,17 @@ def test_migration_owner_is_separate_from_the_api_command():
     assert 'CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]' in api
     assert "migrate_schema" not in api
     assert "COPY storage/migrations ./storage/migrations" in owner
+    assert "ENV PYTHONPATH=/app" in owner
     assert 'CMD ["python", "scripts/migrate_schema.py"]' in owner
+
+
+def test_api_image_declares_content_bundle_schema_validator():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+
+    api_deps = dockerfile.split("FROM python:3.11-slim AS api-deps\n", maxsplit=1)[1].split("\nFROM ", maxsplit=1)[0]
+    assert '"jsonschema>=4.23"' in api_deps
+    assert '"jsonschema>=4.23"' in pyproject
 
 
 def test_dockerignore_excludes_python_caches_recursively():
