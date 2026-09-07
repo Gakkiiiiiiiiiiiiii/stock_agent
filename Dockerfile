@@ -52,15 +52,22 @@ COPY services/evidence ./services/evidence
 COPY storage/__init__.py storage/bootstrap.py storage/db.py ./storage/
 COPY storage/models ./storage/models
 COPY storage/repositories ./storage/repositories
-# The API is the only role that applies the current formal-decision schema at
-# startup. Keep this allowlist explicit: historical execution migrations must
-# remain repository history, not runtime image contents.
+# API verifies a schema prepared by the explicit migration-owner target. Keep
+# the legacy formal allowlist available to existing FULL runtime tooling only;
+# the API command itself never executes it.
 COPY storage/migrations/039_decision_unit_of_work.sql \
      storage/migrations/040_replay_outcome_runs.sql \
      storage/migrations/041_decision_run_final_response.sql \
      ./storage/migrations/
 EXPOSE 8000
 CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Explicit database schema owner. Deploy this target as a one-shot job before
+# an API rollout; it is never the API entrypoint.
+FROM api AS migration-owner
+COPY storage/migrations ./storage/migrations
+COPY scripts/migrate_schema.py ./scripts/migrate_schema.py
+CMD ["python", "scripts/migrate_schema.py"]
 
 # Worker role: durable job handlers and retrieval-evaluation dependencies.
 FROM python:3.11-slim AS worker

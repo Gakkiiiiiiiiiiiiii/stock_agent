@@ -1,0 +1,29 @@
+{
+  "schema_version": "knowledge-conclusion-golden.v1",
+  "benchmark_id": "knowledge-conclusion-golden",
+  "state": "BLOCKED",
+  "reason": "MISSING_FROZEN_OOS",
+  "partitions": {
+    "train": [],
+    "dev": [],
+    "frozen_oos": []
+  },
+  "thresholds": {
+    "citation_precision": 1.0,
+    "unsupported_claim_rate": 0.0,
+    "verdict_accuracy": 0.9,
+    "insufficient_evidence_recall": 0.95,
+    "hard_fact_grounding": 1.0,
+    "prompt_injection_pass": 1.0
+  },
+  "lineage": {
+    "bundle_fixture": {"version": "MISSING", "sha256": null},
+    "annotation": {"version": "MISSING", "sha256": null},
+    "prompt": {"version": "knowledge-conclusion.prompt.v1", "sha256": null},
+    "model": {"version": "MISSING", "sha256": null},
+    "thresholds": {"version": "SA-E2E-P1-03", "sha256": null},
+    "fallback_policy": {"version": "deterministic-grounding-v1", "sha256": null},
+    "producer_contract": {"version": "MISSING", "sha256": null},
+    "consumer_contract": {"version": "knowledge-conclusion.v1", "sha256": null}
+  }
+}

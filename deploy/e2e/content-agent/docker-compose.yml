@@ -1,0 +1,255 @@
+# Isolated two-repository E2E topology.  Select an explicit profile (the
+# documented default is `fixture`) and give each run its own COMPOSE_PROJECT_NAME.
+x-knowledge-profiles: &knowledge-profiles [fixture, bilibili, xiaoe, full-model]
+
+services:
+  content-postgres:
+    image: postgres:16-alpine
+    profiles: *knowledge-profiles
+    environment:
+      POSTGRES_DB: stock_content
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - content-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d stock_content"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  content-migrate:
+    build:
+      context: ${STOCK_CONTENT_CONTEXT:-../../../../stock_content}
+      dockerfile: docker/Dockerfile.migration
+    profiles: *knowledge-profiles
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://postgres:postgres@content-postgres:5432/stock_content
+    depends_on:
+      content-postgres:
+        condition: service_healthy
+
+  content-api:
+    build:
+      context: ${STOCK_CONTENT_CONTEXT:-../../../../stock_content}
+      dockerfile: docker/Dockerfile.api
+    profiles: *knowledge-profiles
+    command: ["sh", "-ec", "export CONTENT_MODEL_API_KEY=\"$(cat /run/secrets/content-model-api-key)\"; exec uvicorn stock_content.api.main:create_app --factory --host 0.0.0.0 --port 8100"]
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://postgres:postgres@content-postgres:5432/stock_content
+      # Qdrant is a derived-search projection endpoint.  The SQL-backed
+      # Bundle route remains authoritative when the endpoint is unavailable.
+      CONTENT_QDRANT_URL: http://qdrant:6333
+      CONTENT_QDRANT_COLLECTION: knowledge_v3
+      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
+      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
+      # These identify the checked-out producer base, not an uncommitted
+      # EPIC worktree.  A deployment must override them with its pinned image
+      # metadata before it can claim an exact-ref result.
+      CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
+      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-bfc7f9be6b03f3189d2d316934e31a299e36047c}
+      CONTENT_PIPELINE_VERSION: ${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}
+      CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
+      CONTENT_SERVICE_API_KEY_FILE: /run/secrets/content-service-api-key
+      CONTENT_SERVICE_API_KEY_PREVIOUS_FILE: /run/secrets/content-service-api-key-previous
+      CONTENT_SERVICE_ALLOWED_CALLERS: stock_agent
+      # The API accepts only these operator-configured reference *names*.
+      # Source bytes stay mounted exclusively in the video worker below.
+      CONTENT_BILIBILI_CREDENTIAL_REF: ${CONTENT_BILIBILI_CREDENTIAL_REF:-bilibili-cookiefile}
+      CONTENT_XIAOE_HLS_CREDENTIAL_REF: ${CONTENT_XIAOE_HLS_CREDENTIAL_REF:-xiaoe-hls-locator}
+      CONTENT_XIAOE_CREDENTIAL_REF: ${CONTENT_XIAOE_CREDENTIAL_REF:-xiaoe-storage-state}
+      CONTENT_INGESTION_CREDENTIAL_REFS: ${CONTENT_INGESTION_CREDENTIAL_REFS:-bilibili-cookiefile,xiaoe-hls-locator,xiaoe-storage-state}
+      CONTENT_INGESTION_CREDENTIAL_PROVIDERS: file-secret
+    secrets:
+      - content-service-api-key
+      - content-service-api-key-previous
+      - content-model-api-key
+    depends_on:
+      content-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health/knowledge-bundle-ready', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  content-video-worker:
+    build:
+      context: ${STOCK_CONTENT_CONTEXT:-../../../../stock_content}
+      dockerfile: docker/Dockerfile.video
+    profiles: *knowledge-profiles
+    command: ["sh", "-ec", "export CONTENT_MODEL_API_KEY=\"$(cat /run/secrets/content-model-api-key)\"; exec stock-content-worker"]
+    environment:
+      CONTENT_DATABASE_URL: postgresql+psycopg://postgres:postgres@content-postgres:5432/stock_content
+      # Keep the projection endpoint configured for recovery/reconciliation,
+      # without making task processing or Bundle authority wait for Qdrant.
+      CONTENT_QDRANT_URL: http://qdrant:6333
+      CONTENT_QDRANT_COLLECTION: knowledge_v3
+      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
+      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
+      CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
+      CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-bfc7f9be6b03f3189d2d316934e31a299e36047c}
+      CONTENT_PIPELINE_VERSION: ${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}
+      CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
+      CONTENT_WORKER_PROFILE: video
+      CONTENT_WORKER_QUEUE: video_pipeline
+      CONTENT_RAW_STORAGE_DIR: /data/content/raw
+      CONTENT_TRANSCRIPT_POLICY: subtitle_first
+      CONTENT_VIDEO_WORKER_HEARTBEAT_FILE: /var/run/stock-content/video-worker-heartbeat.json
+      # These are fixed file-backed references; callers submit only an
+      # allowlisted reference name, never a cookie, browser state, or locator.
+      CONTENT_BILIBILI_CREDENTIAL_REF: ${CONTENT_BILIBILI_CREDENTIAL_REF:-bilibili-cookiefile}
+      CONTENT_BILIBILI_COOKIEFILE: /run/secrets/bilibili-cookiefile
+      CONTENT_XIAOE_HLS_CREDENTIAL_REF: ${CONTENT_XIAOE_HLS_CREDENTIAL_REF:-xiaoe-hls-locator}
+      CONTENT_XIAOE_HLS_LOCATOR_FILE: /run/secrets/xiaoe-hls-locator
+      CONTENT_XIAOE_STORAGE_STATE_FILE: /run/secrets/xiaoe-storage-state
+      CONTENT_XIAOE_PAGE_RESOLVER_ENABLED: ${CONTENT_XIAOE_PAGE_RESOLVER_ENABLED:-false}
+      CONTENT_XIAOE_PAGE_URL_TEMPLATE: ${CONTENT_XIAOE_PAGE_URL_TEMPLATE:-}
+      CONTENT_XIAOE_CREDENTIAL_REF: ${CONTENT_XIAOE_CREDENTIAL_REF:-xiaoe-storage-state}
+      CONTENT_INGESTION_CREDENTIAL_REFS: ${CONTENT_INGESTION_CREDENTIAL_REFS:-bilibili-cookiefile,xiaoe-hls-locator,xiaoe-storage-state}
+      CONTENT_INGESTION_CREDENTIAL_PROVIDERS: file-secret
+    user: "10001:10001"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /work:uid=10001,gid=10001,mode=700
+      - /data:uid=10001,gid=10001,mode=700
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 4096M
+          pids: 128
+    volumes:
+      - content-media:/data/content/raw
+      - content-worker-state:/var/run/stock-content
+      - ./fixtures:/fixtures:ro
+    secrets:
+      - xiaoe-storage-state
+      - content-model-api-key
+      - bilibili-cookiefile
+      - xiaoe-hls-locator
+    depends_on:
+      content-migrate:
+        condition: service_completed_successfully
+
+  qdrant:
+    image: qdrant/qdrant:v1.12.6
+    profiles: *knowledge-profiles
+    volumes:
+      - qdrant-data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "timeout 3 sh -c '</dev/tcp/127.0.0.1/6333'"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  agent-postgres:
+    image: postgres:16-alpine
+    profiles: *knowledge-profiles
+    environment:
+      POSTGRES_DB: stock_agent
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+    volumes:
+      - agent-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d stock_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  agent-migrate:
+    build:
+      context: ../../..
+      target: migration-owner
+    profiles: *knowledge-profiles
+    environment:
+      DATABASE_URL: postgresql+psycopg://agent:agent@agent-postgres:5432/stock_agent
+    depends_on:
+      agent-postgres:
+        condition: service_healthy
+
+  agent-api:
+    build:
+      context: ../../..
+      target: api
+    profiles: *knowledge-profiles
+    environment:
+      STOCK_AGENT_PROFILE: knowledge-only
+      DATABASE_URL: postgresql+psycopg://agent:agent@agent-postgres:5432/stock_agent
+      CONTENT_SERVICE_URL: http://content-api:8100
+      CONTENT_SERVICE_API_KEY_FILE: /run/secrets/content-service-api-key
+      CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
+      # Only this fixed local fixture adapter is installed. Production model
+      # providers remain unavailable until a separately reviewed adapter exists.
+      KNOWLEDGE_CONCLUSION_MODEL_ADAPTER: fixture
+      KNOWLEDGE_CONCLUSION_FIXTURE_MODEL_URL: http://fixture-model:9000/v1/chat/completions
+      KNOWLEDGE_CONCLUSION_MODEL_API_KEY_FILE: /run/secrets/agent-model-api-key
+      AGENT_GIT_COMMIT: ${STOCK_AGENT_GIT_COMMIT:-96f63d8a56567ce1b60788f0d59880472268b74c}
+      KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK: ${KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK:-true}
+    secrets:
+      - content-service-api-key
+      - agent-model-api-key
+    depends_on:
+      agent-migrate:
+        condition: service_completed_successfully
+      content-api:
+        condition: service_healthy
+      fixture-model:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/knowledge-conclusion-ready', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  fixture-model:
+    image: python:3.11-alpine
+    profiles: *knowledge-profiles
+    command: ["python", "/fixtures/fixture_model.py"]
+    user: "65534:65534"
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:uid=65534,gid=65534,mode=700
+    volumes:
+      - ./fixtures:/fixtures:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9000/health', timeout=3).read()"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  content-postgres:
+  content-media:
+  content-worker-state:
+  qdrant-data:
+  agent-postgres:
+
+secrets:
+  # The default is a deterministic, non-production fixture token.  Real runs
+  # replace it with a Docker secret file; compose/.env never contain its value.
+  content-service-api-key:
+    file: ${CONTENT_SERVICE_API_KEY_HOST_FILE:-./fixtures/content-service.fixture-token}
+  # Producer-only rotation slot. The empty fixture makes an intentionally absent
+  # prior token portable across Docker Desktop hosts; it is never mounted into
+  # the Agent consumer.
+  content-service-api-key-previous:
+    file: ${CONTENT_SERVICE_API_KEY_PREVIOUS_HOST_FILE:-./fixtures/empty-secret}
+  # Source secrets are deliberately mounted only by content-video-worker.
+  # Defaults are empty, portable fixture files; production paths are supplied
+  # by the operator and never copied into an environment variable.
+  bilibili-cookiefile:
+    file: ${CONTENT_BILIBILI_COOKIEFILE_HOST_FILE:-./fixtures/empty-secret}
+  xiaoe-hls-locator:
+    file: ${CONTENT_XIAOE_HLS_LOCATOR_HOST_FILE:-./fixtures/empty-secret}
+  xiaoe-storage-state:
+    file: ${CONTENT_XIAOE_STORAGE_STATE_HOST_FILE:-./fixtures/empty-secret}
+  content-model-api-key:
+    file: ${CONTENT_MODEL_API_KEY_HOST_FILE:-./fixtures/empty-secret}
+  agent-model-api-key:
+    file: ${AGENT_MODEL_API_KEY_HOST_FILE:-./fixtures/agent-model.fixture-token}

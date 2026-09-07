@@ -1,0 +1,289 @@
+"""Run the fixed, knowledge-only Content -> Agent API flow against a fixture stack.
+
+This is deliberately not a generic HTTP runner: it knows only the six public
+route shapes in the paired contract and writes only redacted, local evidence.
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+import time
+import uuid
+import xml.etree.ElementTree as ET
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from app.ports.content_knowledge import CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM
+from scripts.e2e.common import (
+    E2EError,
+    atomic_json,
+    fixed_base_url,
+    prepare_evidence_dir,
+    read_secret_file,
+    redacted,
+)
+from scripts.e2e.scan_secrets import scan
+from scripts.e2e.verify_knowledge_bundle import verify as verify_bundle
+from scripts.e2e.verify_knowledge_conclusion import verify as verify_conclusion
+
+_TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "CANCELED"}
+
+
+def _json_request(base: str, path: str, *, method: str = "GET", payload: dict[str, Any] | None = None,
+                  headers: dict[str, str] | None = None, timeout: float) -> tuple[int, dict[str, Any]]:
+    # All callers below use literal route fragments.  This helper intentionally
+    # has no user-provided method/path mechanism.
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode() if payload is not None else None
+    request = Request(base + path, data=body, method=method, headers={"Accept": "application/json", **(headers or {})})
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw, status = response.read(), response.status
+    except HTTPError as exc:
+        raw, status = exc.read(), exc.code
+    except (URLError, TimeoutError) as exc:
+        raise E2EError("HTTP_DEPENDENCY_UNAVAILABLE", "http") from exc
+    try:
+        parsed = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise E2EError("HTTP_RESPONSE_INVALID", "http") from exc
+    if not isinstance(parsed, dict):
+        raise E2EError("HTTP_RESPONSE_INVALID", "http")
+    return status, parsed
+
+
+def _require(status: int, payload: dict[str, Any], *, stage: str, accepted: set[int]) -> dict[str, Any]:
+    if status in accepted:
+        return payload
+    detail = payload.get("detail", payload)
+    code = detail.get("code") if isinstance(detail, dict) else None
+    raise E2EError(str(code or "HTTP_STATUS_" + str(status)), stage)
+
+
+def _task_error(task: dict[str, Any]) -> str:
+    error = task.get("error")
+    if isinstance(error, dict) and isinstance(error.get("code"), str):
+        return error["code"]
+    if isinstance(task.get("error_code"), str):
+        return task["error_code"]
+    return "CONTENT_TASK_FAILED"
+
+
+def _poll_task(content_url: str, task_id: str, headers: dict[str, str], *, timeout: float, interval: float) -> dict[str, Any]:
+    deadline = time.monotonic() + timeout
+    delay = max(0.05, interval)
+    while time.monotonic() < deadline:
+        status, task = _json_request(content_url, "/v1/content/ingestions/" + task_id, headers=headers, timeout=min(10.0, timeout))
+        _require(status, task, stage="content-task", accepted={200})
+        task_status = str(task.get("status", "")).upper()
+        if task_status == "SUCCEEDED":
+            return task
+        if task_status in _TERMINAL:
+            raise E2EError(_task_error(task), "content-task")
+        time.sleep(delay)
+        delay = min(delay * 1.5, 2.0)
+    raise E2EError("CONTENT_TASK_TIMEOUT", "content-task")
+
+
+def _snapshot_id(task: dict[str, Any]) -> str:
+    result = task.get("result")
+    value = result.get("content_snapshot_id") if isinstance(result, dict) else task.get("content_snapshot_id")
+    if not isinstance(value, str) or not value.strip():
+        raise E2EError("CONTENT_SNAPSHOT_MISSING", "content-task")
+    return value
+
+
+def _junit(directory: Path, *, name: str, error: E2EError | None) -> None:
+    suite = ET.Element("testsuite", name="content-agent-e2e", tests="1", failures="0" if error is None else "1")
+    case = ET.SubElement(suite, "testcase", name=name)
+    if error is not None:
+        ET.SubElement(case, "failure", type=error.code, message=error.stage)
+    target = directory / "junit.xml"
+    temporary = directory / ".tmp-junit.xml"
+    ET.ElementTree(suite).write(temporary, encoding="utf-8", xml_declaration=True)
+    temporary.replace(target)
+
+
+def _as_of(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("AS_OF_INVALID") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("AS_OF_INVALID")
+    return parsed.astimezone(UTC).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _canonical_hash(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _verify_replay_envelope(mode: str, replay: dict[str, Any], *, conclusion_id: str) -> None:
+    """Validate the API's mode-specific replay envelope without refetching Content."""
+    audit_id, result_hash = replay.get("audit_id"), replay.get("result_hash")
+    if not isinstance(audit_id, str) or not audit_id or not isinstance(result_hash, str) or not result_hash:
+        raise E2EError("REPLAY_ENVELOPE_INVALID", "agent-replay")
+    if mode == "VERIFY_HASH":
+        if replay.get("valid") is not True or "result" in replay:
+            raise E2EError("REPLAY_VERIFY_INVALID", "agent-replay")
+        return
+    result = replay.get("result")
+    if not isinstance(result, dict) or result.get("conclusion_id") != conclusion_id:
+        raise E2EError("REPLAY_DETERMINISTIC_INVALID", "agent-replay")
+    if _canonical_hash(result) != result_hash:
+        raise E2EError("REPLAY_RESULT_HASH_INVALID", "agent-replay")
+
+
+def run(args: argparse.Namespace) -> dict[str, Any]:
+    content_url, agent_url = fixed_base_url(args.content_url, label="CONTENT"), fixed_base_url(args.agent_url, label="AGENT")
+    evidence = prepare_evidence_dir(args.evidence_dir)
+    content_token = read_secret_file(args.content_token_file, code="CONTENT_TOKEN_FILE_INVALID")
+    agent_token = read_secret_file(args.agent_token_file, code="AGENT_TOKEN_FILE_INVALID") if args.agent_token_file else None
+    if args.source_type == "xiaoe":
+        if not args.source_ref_file or args.source_ref:
+            raise ValueError("XIAOE_SOURCE_REF_FILE_REQUIRED")
+        source_ref = read_secret_file(args.source_ref_file, code="SOURCE_REF_FILE_INVALID")
+    elif not args.source_ref or args.source_ref_file:
+        raise ValueError("PUBLIC_SOURCE_REF_REQUIRED")
+    else:
+        source_ref = args.source_ref
+    trace_id, ingestion_key, conclusion_key = args.trace_id or str(uuid.uuid4()), args.ingestion_idempotency_key or str(uuid.uuid4()), args.conclusion_idempotency_key or str(uuid.uuid4())
+    clocks = _as_of(args.as_of)
+    content_headers = {"Authorization": "Bearer " + content_token, "X-Caller-Service": "stock_agent", "X-Trace-Id": trace_id, "Idempotency-Key": ingestion_key}
+    agent_headers = {"X-Trace-Id": trace_id, "Idempotency-Key": conclusion_key}
+    if agent_token:
+        agent_headers["Authorization"] = "Bearer " + agent_token
+    ingestion = {"source_type": args.source_type, "source_ref": source_ref, "part": 1, "transcript_policy": "subtitle_first", "options": {"offline_fixture": True}}
+    safe_ingestion = dict(ingestion)
+    if args.source_type == "xiaoe":
+        safe_ingestion["source_ref"] = "<secret-source-ref-file>"
+    atomic_json(evidence, "ingestion-request.json", redacted(safe_ingestion))
+    try:
+        first_status, first = _json_request(content_url, "/v1/content/ingestions", method="POST", payload=ingestion, headers=content_headers, timeout=args.request_timeout)
+        first = _require(first_status, first, stage="content-ingestion", accepted={200, 201})
+        task_id = first.get("task_id")
+        if not isinstance(task_id, str) or not task_id:
+            raise E2EError("CONTENT_TASK_ID_MISSING", "content-ingestion")
+        duplicate_status, duplicate = _json_request(content_url, "/v1/content/ingestions", method="POST", payload=ingestion, headers=content_headers, timeout=args.request_timeout)
+        duplicate = _require(duplicate_status, duplicate, stage="content-ingestion-idempotency", accepted={200, 201})
+        if duplicate.get("task_id") != task_id:
+            raise E2EError("CONTENT_IDEMPOTENCY_INVALID", "content-ingestion-idempotency")
+        task = _poll_task(content_url, task_id, content_headers, timeout=args.poll_timeout, interval=args.poll_interval)
+        atomic_json(evidence, "task-final.json", redacted(task))
+        snapshot_id = _snapshot_id(task)
+        result = task.get("result") if isinstance(task.get("result"), dict) else {}
+        atomic_json(evidence, "source-public-metadata.json", redacted(result.get("source", result.get("source_public_metadata", {}))))
+        atomic_json(evidence, "transcript-quality.json", redacted(result.get("transcript_quality", {})))
+        atomic_json(evidence, "knowledge-quality.json", redacted(result.get("knowledge_quality", {})))
+        atomic_json(evidence, "snapshot-manifest.json", redacted({"content_snapshot_id": snapshot_id, "task_id": task_id}))
+        bundle_request = {"content_snapshot_id": snapshot_id, "query": args.query, "symbol": args.symbol,
+                          "business_as_of": clocks, "knowledge_as_of": clocks, "availability_as_of": clocks,
+                          "minimum_support_status": "SOURCE_SUPPORTED", "max_items": 20,
+                          "policy": "PUBLIC_STRICT", "policy_version": "content-bundle-policy.v1"}
+        bundle_headers = {**content_headers, "Idempotency-Key": "bundle:" + conclusion_key}
+        bundle_status, bundle = _json_request(content_url, "/v1/content/knowledge-bundles", method="POST", payload=bundle_request, headers=bundle_headers, timeout=args.request_timeout)
+        bundle = _require(bundle_status, bundle, stage="content-bundle", accepted={200, 201})
+        repeat_status, repeated_bundle = _json_request(content_url, "/v1/content/knowledge-bundles", method="POST", payload=bundle_request, headers=bundle_headers, timeout=args.request_timeout)
+        repeated_bundle = _require(repeat_status, repeated_bundle, stage="content-bundle-idempotency", accepted={200, 201})
+        if repeated_bundle.get("bundle_id") != bundle.get("bundle_id") or repeated_bundle.get("bundle_hash") != bundle.get("bundle_hash"):
+            raise E2EError("BUNDLE_IDEMPOTENCY_INVALID", "content-bundle-idempotency")
+        atomic_json(evidence, "knowledge-bundle.json", redacted(bundle))
+        bundle_report = verify_bundle(bundle)
+        atomic_json(evidence, "bundle-validation.json", bundle_report)
+        conclusion_request = {"content_snapshot_id": snapshot_id, "query": args.query, "symbol": args.symbol,
+                              "business_as_of": clocks, "knowledge_as_of": clocks, "availability_as_of": clocks}
+        conclusion_status, conclusion = _json_request(agent_url, "/api/v2/knowledge-conclusions", method="POST", payload=conclusion_request, headers=agent_headers, timeout=args.request_timeout)
+        conclusion = _require(conclusion_status, conclusion, stage="agent-conclusion", accepted={200, 201})
+        conclusion_id = conclusion.get("conclusion_id")
+        if not isinstance(conclusion_id, str) or not conclusion_id:
+            raise E2EError("CONCLUSION_ID_MISSING", "agent-conclusion")
+        duplicate_status, duplicate = _json_request(agent_url, "/api/v2/knowledge-conclusions", method="POST", payload=conclusion_request, headers=agent_headers, timeout=args.request_timeout)
+        duplicate = _require(duplicate_status, duplicate, stage="agent-idempotency", accepted={200, 201})
+        if duplicate.get("conclusion_id") != conclusion_id:
+            raise E2EError("CONCLUSION_IDEMPOTENCY_INVALID", "agent-idempotency")
+        conflict_request = {**conclusion_request, "query": conclusion_request["query"] + "（不同请求）"}
+        conflict_status, _conflict = _json_request(agent_url, "/api/v2/knowledge-conclusions", method="POST", payload=conflict_request, headers=agent_headers, timeout=args.request_timeout)
+        if conflict_status != 409:
+            raise E2EError("CONCLUSION_IDEMPOTENCY_CONFLICT_NOT_ENFORCED", "agent-idempotency-conflict")
+        get_status, stored = _json_request(agent_url, "/api/v2/knowledge-conclusions/" + conclusion_id, headers=agent_headers, timeout=args.request_timeout)
+        stored = _require(get_status, stored, stage="agent-status", accepted={200})
+        if stored.get("conclusion_id") != conclusion_id:
+            raise E2EError("CONCLUSION_STATUS_INVALID", "agent-status")
+        lineage_status, lineage = _json_request(agent_url, "/api/v2/knowledge-conclusions/" + conclusion_id + "/lineage", headers=agent_headers, timeout=args.request_timeout)
+        lineage = _require(lineage_status, lineage, stage="agent-lineage", accepted={200})
+        atomic_json(evidence, "conclusion.json", redacted(conclusion))
+        conclusion_report = verify_conclusion(conclusion, bundle, lineage)
+        atomic_json(evidence, "citation-validation.json", conclusion_report)
+        for mode in ("VERIFY_HASH", "RECOMPUTE_DETERMINISTIC"):
+            replay_status, replay = _json_request(agent_url, "/api/v2/knowledge-conclusions/" + conclusion_id + "/replay", method="POST", payload={"mode": mode}, headers=agent_headers, timeout=args.request_timeout)
+            replay = _require(replay_status, replay, stage="agent-replay-" + mode.lower(), accepted={200})
+            _verify_replay_envelope(mode, replay, conclusion_id=conclusion_id)
+        provenance = {"run_kind": "fixture-api-e2e", "trace_id": trace_id, "content_snapshot_id": snapshot_id,
+                      "bundle_id": bundle["bundle_id"], "bundle_hash": bundle["bundle_hash"], "conclusion_id": conclusion_id,
+                      "content_contract_checksum": CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM, "stock_content_sha": args.content_sha,
+                      "stock_agent_sha": args.agent_sha, "exact_ref_gate": "PENDING_UNCOMMITTED", "execution_eligible": False,
+                      "citation_precision": 1.0, "hard_fact_grounding": 1.0, "timeout_seconds": args.poll_timeout}
+        atomic_json(evidence, "provenance.json", provenance)
+        _junit(evidence, name="content_agent_fixture_flow", error=None)
+        secret_report = scan(evidence)
+        atomic_json(evidence, "secret-scan.json", secret_report)
+        if secret_report["result"] != "PASS":
+            raise E2EError("SECRET_SCAN_FAILED", "secret-scan")
+        return {"result": "PASS", "evidence_dir": str(evidence), "conclusion_id": conclusion_id,
+                "bundle_id": bundle["bundle_id"]}
+    except E2EError as exc:
+        atomic_json(evidence, "failure.json", {"stage": exc.stage, "code": exc.code})
+        _junit(evidence, name="content_agent_fixture_flow", error=exc)
+        raise
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser(description=__doc__)
+    value.add_argument("--content-url", required=True)
+    value.add_argument("--agent-url", required=True)
+    value.add_argument("--content-token-file", required=True)
+    value.add_argument("--agent-token-file")
+    value.add_argument("--source-type", choices=("bilibili", "xiaoe"), required=True)
+    value.add_argument("--source-ref")
+    value.add_argument("--source-ref-file")
+    value.add_argument("--query", required=True)
+    value.add_argument("--symbol", default="UNSPECIFIED")
+    value.add_argument("--evidence-dir", required=True)
+    value.add_argument("--as-of", default="2026-09-06T00:00:00Z")
+    value.add_argument("--trace-id")
+    value.add_argument("--ingestion-idempotency-key")
+    value.add_argument("--conclusion-idempotency-key")
+    value.add_argument("--content-sha", default="bfc7f9be6b03f3189d2d316934e31a299e36047c")
+    value.add_argument("--agent-sha", default="96f63d8a56567ce1b60788f0d59880472268b74c")
+    value.add_argument("--request-timeout", type=float, default=10.0)
+    value.add_argument("--poll-timeout", type=float, default=900.0)
+    value.add_argument("--poll-interval", type=float, default=0.2)
+    return value
+
+
+def main() -> int:
+    args = parser().parse_args()
+    try:
+        report = run(args)
+    except (E2EError, ValueError) as exc:
+        code = exc.code if isinstance(exc, E2EError) else str(exc)
+        sys.stderr.write("E2E_FAILED " + code + "\n")
+        return 1
+    sys.stdout.write(json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

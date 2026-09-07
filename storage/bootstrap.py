@@ -1,23 +1,38 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-from storage.models import chat  # noqa: F401
-from storage.models import market_feature  # noqa: F401
-from storage.models import p2  # noqa: F401
-from storage.db import Base, get_engine
-from storage.models import vector  # noqa: F401
-from storage.models import research  # noqa: F401
-from storage.models import tool_result  # noqa: F401
-from storage.models import decision_input  # noqa: F401
 from financial_agent.utils import project_root
+from storage.db import Base, get_engine
+from storage.models import (
+    chat,  # noqa: F401
+    decision_input,  # noqa: F401
+    market_feature,  # noqa: F401
+    p2,  # noqa: F401
+    research,  # noqa: F401
+    tool_result,  # noqa: F401
+    vector,  # noqa: F401
+)
 
 
 def create_all() -> None:
     Base.metadata.create_all(bind=get_engine())
     apply_sql_migrations()
+
+
+def verify_schema() -> None:
+    """Check that a migration owner prepared the database without issuing DDL."""
+
+    try:
+        with get_engine().connect() as conn:
+            conn.execute(text("SELECT 1"))
+            conn.execute(text("SELECT version FROM schema_migration LIMIT 1"))
+    except SQLAlchemyError as exc:
+        raise RuntimeError("SCHEMA_NOT_MIGRATED: run python scripts/migrate_schema.py before starting the API") from exc
 
 
 def apply_sql_migrations() -> None:
@@ -39,14 +54,14 @@ def apply_sql_migrations() -> None:
                 continue
             sql = path.read_text(encoding="utf-8")
             _ensure_migration_sql_compatible(path, sql, backend)
-            for statement in [part.strip() for part in sql.split(";") if part.strip()]:
+            for statement in _migration_statements(sql, backend):
                 # 每条语句独立 savepoint：Postgres 中任何语句失败都会中止当前事务，
                 # 必须先回滚 savepoint 才能继续（SQLite 无此问题，语义一致）。
                 savepoint = conn.begin_nested()
                 try:
                     conn.exec_driver_sql(statement)
                     savepoint.commit()
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     savepoint.rollback()
                     message = str(exc).lower()
                     if "duplicate column" in message or ("already exists" in message and "column" in message):
@@ -85,3 +100,21 @@ def _ensure_migration_sql_compatible(path: Path, sql: str, backend: str) -> None
         raise RuntimeError(
             f"migration {path.name} contains SQLite AUTOINCREMENT but no {backend} variant was selected"
         )
+
+
+def _migration_statements(sql: str, backend: str) -> list[str]:
+    """Keep SQLite trigger bodies whole; prior migrations remain semicolon-delimited."""
+    if backend != "sqlite":
+        return [part.strip() for part in sql.split(";") if part.strip()]
+    statements: list[str] = []
+    pending = ""
+    for line in sql.splitlines(keepends=True):
+        pending += line
+        if sqlite3.complete_statement(pending):
+            statement = pending.strip()
+            if statement:
+                statements.append(statement)
+            pending = ""
+    if pending.strip():
+        raise RuntimeError("incomplete SQLite migration statement")
+    return statements

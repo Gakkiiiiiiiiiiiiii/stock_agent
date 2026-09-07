@@ -78,6 +78,17 @@ def test_api_runtime_contains_only_current_formal_decision_migrations():
     ]
 
 
+def test_migration_owner_is_separate_from_the_api_command():
+    dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+    api = _target_block(dockerfile, "api")
+    owner = dockerfile.split("FROM api AS migration-owner\n", maxsplit=1)[1].split("\nFROM ", maxsplit=1)[0]
+
+    assert 'CMD ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]' in api
+    assert "migrate_schema" not in api
+    assert "COPY storage/migrations ./storage/migrations" in owner
+    assert 'CMD ["python", "scripts/migrate_schema.py"]' in owner
+
+
 def test_dockerignore_excludes_python_caches_recursively():
     ignored = DOCKERIGNORE.read_text(encoding="utf-8").splitlines()
     assert "**/__pycache__/" in ignored

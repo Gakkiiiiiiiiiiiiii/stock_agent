@@ -20,12 +20,35 @@ def test_sqlite_agent_migrations_apply_once(tmp_path, monkeypatch):
     assert "032_decision_input_bundle.sql" in versions
     assert "034_decision_input_bundle_patch.sql" in versions
     assert "038_decision_binding_constraints.sql" in versions
-    assert not any("knowledge" in version or "content" in version or "video" in version for version in versions)
+    assert "042_knowledge_conclusion_runs.sql" in versions
+    assert "043_knowledge_conclusion_lineage_audit.sql" in versions
+    assert "045_knowledge_conclusion_citation_quote_provenance.sql" in versions
+    with engine.connect() as conn:
+        citation_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(knowledge_conclusion_citation)"))}
+    assert "quote_hash_provenance" in citation_columns
 
 
 def test_postgres_agent_migration_selection_uses_backend_variants():
     paths = bootstrap._migration_paths_for_backend(project_root() / "storage" / "migrations", "postgres")
-    assert not any("knowledge" in path.name or "content" in path.name or "video" in path.name for path in paths)
+    assert any(path.name == "042_knowledge_conclusion_runs.sql" for path in paths)
+    assert any(path.name == "043_knowledge_conclusion_lineage_audit.sql" for path in paths)
+
+
+def test_043_lineage_audit_rows_are_append_only(tmp_path, monkeypatch):
+    engine = create_engine(f"sqlite:///{tmp_path / 'lineage-audit.db'}", future=True)
+    monkeypatch.setattr(bootstrap, "get_engine", lambda: engine)
+    bootstrap.apply_sql_migrations()
+    with engine.begin() as conn:
+        conn.execute(text("""INSERT INTO knowledge_conclusion_run(
+            conclusion_id,idempotency_key,request_hash,request_json,policy_version,state,version,created_at,updated_at)
+            VALUES ('conclusion-1','key-1','request-hash','{}','policy','SUCCEEDED',1,'2026-09-06T00:00:00Z','2026-09-06T00:00:00Z')"""))
+        conn.execute(text("""INSERT INTO knowledge_conclusion_lineage_audit(
+            audit_id,conclusion_id,audit_hash,payload_json,created_at)
+            VALUES ('audit-1','conclusion-1','audit-hash','{}','2026-09-06T00:00:00Z')"""))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("UPDATE knowledge_conclusion_lineage_audit SET payload_json='tampered' WHERE audit_id='audit-1'"))
+    with pytest.raises(IntegrityError), engine.begin() as conn:
+        conn.execute(text("DELETE FROM knowledge_conclusion_lineage_audit WHERE audit_id='audit-1'"))
 
 
 def test_postgres_autoincrement_migration_is_rejected_when_no_variant(tmp_path):

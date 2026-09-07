@@ -2,9 +2,6 @@
 from __future__ import annotations
 
 import os
-from clients.content_client import RemoteContentClient
-from clients.factor_client import RemoteFactorClient
-from clients.quant_client import RemoteQuantClient
 
 
 def content_backend() -> str:
@@ -16,14 +13,26 @@ def factor_backend() -> str:
 
 
 def build_content_client():
+    from clients.content_client import RemoteContentClient
+
     return RemoteContentClient(os.getenv("CONTENT_SERVICE_URL", "http://stock-content:8100"))
 
 
+def build_content_knowledge_bundle_client():
+    from clients.content_client import build_content_knowledge_bundle_client
+
+    return build_content_knowledge_bundle_client(base_url=os.getenv("CONTENT_SERVICE_URL", "http://stock-content:8100"))
+
+
 def build_factor_client():
+    from clients.factor_client import RemoteFactorClient
+
     return RemoteFactorClient(os.getenv("FACTOR_SERVICE_URL", "http://stock-factor:8200"))
 
 
 def build_quant_client():
+    from clients.quant_client import RemoteQuantClient
+
     # §85：quant 是市场数据/回测唯一事实源（§12/§65）。
     return RemoteQuantClient(os.getenv("QUANT_SERVICE_URL") or os.getenv("MARKET_DATA_SERVICE_URL", "http://quant:8011"))
 
@@ -34,6 +43,10 @@ def get_factor_client():
 
 def get_content_client():
     return build_content_client()
+
+
+def get_content_knowledge_bundle_client():
+    return build_content_knowledge_bundle_client()
 
 
 def get_quant_client():

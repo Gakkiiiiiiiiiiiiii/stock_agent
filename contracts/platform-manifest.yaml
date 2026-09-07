@@ -16,6 +16,14 @@ contracts:
     compatibility: backward
     deprecated_at: null
     sunset_at: null
+  knowledge-conclusion.v1:
+    producer: stock_agent
+    schema: contracts/knowledge-conclusion.v1.json
+    checksum: sha256:8710ef8216dd0399f99e8cbba522b01aa7f51e6419ddd337eb041b80f216dba9
+    consumers: [stock_agent]
+    compatibility: none
+    deprecated_at: null
+    sunset_at: null
   execution-authorization.v1:
     producer: stock_agent
     schema: contracts/execution-authorization.v1.json
@@ -46,6 +54,15 @@ contracts:
     checksum: sha256:43c339cb2b2c7a632ef3d0ccc384cd34e54b842b0535a065fb58557bb6a9b51b
     consumers: [stock_agent]
     compatibility: backward
+    deprecated_at: null
+    sunset_at: null
+  content-knowledge-bundle.v1:
+    producer: stock_content
+    schema: contracts/fixtures/content-knowledge-bundle.v1.json
+    checksum: sha256:ebfd13b78622c3846890438a4fb3cb858278f571fdab247cdd72ef18ca211621
+    consumers: [stock_agent]
+    compatibility: locked
+    canonicalization_version: content-bundle-c14n-v1
     deprecated_at: null
     sunset_at: null
   replay.v2:

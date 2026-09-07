@@ -14,42 +14,54 @@ import os
 from contextlib import asynccontextmanager
 
 import httpx
-from fastapi import FastAPI, Response
-from fastapi.responses import PlainTextResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse, PlainTextResponse
 from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
-from app.dependencies import (  # noqa: F401  (re-export，兼容旧引用)
-    admin_service,
-    chat_history_service,
-    init_application,
-    orchestrator,
-)
-from app.routers import (
-    admin,
-    agent,
-    analysis_v2,
-    audit,
-    compatibility,
-    content,
-    decision,
-    factor,
-    market,
-    portfolio,
-    readiness,
-    regime,
-    retrieval,
-)
-from app.routers._shared import (  # noqa: F401  (re-export，兼容旧引用)
-    MAX_API_LIST_LIMIT,
-    VALID_KNOWLEDGE_KINDS,
-    VALID_LIFECYCLE_STATUSES,
-    VALID_TEMPORAL_CLASSES,
-    VALID_VERIFICATION_STATUSES,
-)
+from app.domain.capability_profile import CapabilityProfile, resolve_capability_profile
 from app.security import render_metrics, security_and_trace_middleware
 from storage.db import session_scope
 
 logger = logging.getLogger(__name__)
+capability_profile = resolve_capability_profile()
+
+# Profile selection precedes every formal router/dependency import. Keep these
+# imports inside the FULL branch so an unavailable Quant/Factor deployment can
+# still import and start the knowledge-only health surface.
+from app.dependencies import init_application
+
+if capability_profile is CapabilityProfile.FULL:
+    from app.dependencies import (  # noqa: F401
+        admin_service,
+        chat_history_service,
+        orchestrator,
+    )
+    from app.routers import (
+        admin,
+        agent,
+        analysis_v2,
+        audit,
+        compatibility,
+        content,
+        decision,
+        factor,
+        market,
+        portfolio,
+        readiness,
+        regime,
+        retrieval,
+    )
+else:
+    from app.routers import knowledge_conclusion
+    from app.routers._shared import (  # noqa: F401
+        MAX_API_LIST_LIMIT,
+        VALID_KNOWLEDGE_KINDS,
+        VALID_LIFECYCLE_STATUSES,
+        VALID_TEMPORAL_CLASSES,
+        VALID_VERIFICATION_STATUSES,
+    )
 
 
 @asynccontextmanager
@@ -61,23 +73,39 @@ async def lifespan(_: FastAPI):
 app = FastAPI(title="Stock Agent Investment Decision Authority", version="0.2.0", lifespan=lifespan)
 app.middleware("http")(security_and_trace_middleware)
 
-# 域路由挂载（§28）：routers 只做 参数解析 → 前置校验 → 调服务 → HTTP 响应。
-for _router in (
-    agent.router,
-    market.router,
-    regime.router,
-    retrieval.router,
-    portfolio.router,
-    decision.router,
-    factor.router,
-    content.router,
-    admin.router,
-    analysis_v2.router,
-    compatibility.router,
-    readiness.router,
-    audit.router,
-):
-    app.include_router(_router)
+if capability_profile is CapabilityProfile.KNOWLEDGE_ONLY:
+    @app.exception_handler(RequestValidationError)
+    async def _knowledge_validation_error(request: Request, _exc: RequestValidationError) -> JSONResponse:
+        if request.url.path.startswith("/api/v2/knowledge-conclusions"):
+            return JSONResponse(status_code=422, content={
+                "code": "INVALID_REQUEST", "message": "knowledge conclusion request is invalid",
+                "trace_id": getattr(request.state, "trace_id", "unknown"), "retryable": False,
+            })
+        return JSONResponse(status_code=422, content={"detail": "request validation failed"})
+
+# 域路由挂载（§28）：knowledge-only does not expose an analysis or formal
+# decision surface. Its conclusion router is intentionally added by SA-02.
+if capability_profile is CapabilityProfile.FULL:
+    for _router in (
+        agent.router,
+        market.router,
+        regime.router,
+        retrieval.router,
+        portfolio.router,
+        decision.router,
+        factor.router,
+        content.router,
+        admin.router,
+        analysis_v2.router,
+        compatibility.router,
+        readiness.router,
+        audit.router,
+    ):
+        app.include_router(_router)
+else:
+    # Keep the knowledge-only route inventory flat: authority-boundary checks
+    # inspect every path and this router has no prefix/dependency transform.
+    app.router.routes.extend(knowledge_conclusion.router.routes)
 
 
 @app.get("/health")
@@ -87,13 +115,15 @@ def health() -> dict:
 
 SERVICE_NAME = "stock_agent"
 SERVICE_VERSION = "0.2.0"
-CONTRACT_VERSIONS = [
+FULL_CONTRACT_VERSIONS = [
     "evidence.v1", "decision-input.v1", "investment-proposal.v2", "investment-decision.v2",
     "decision.snapshot.v3", "replay.v1", "replay.v2", "decision-outcome.v1", "decision-review.v1",
     "decision-memory.v1", "market-data.v1", "factor.v1", "content.v1", "backtest.v1",
     "specialist-artifact.v2", "evidence-synthesis.v1", "decision-quality.v2",
     "formal-decision.v2", "execution-authorization.v1", "decision-lineage.v1",
 ]
+
+CONTRACT_VERSIONS = FULL_CONTRACT_VERSIONS if capability_profile is CapabilityProfile.FULL else []
 
 
 @app.get("/health/version")
@@ -103,6 +133,7 @@ def health_version() -> dict:
         "service": SERVICE_NAME,
         "service_version": SERVICE_VERSION,
         "git_commit": os.getenv("AGENT_GIT_COMMIT", "unknown"),
+        "profile": capability_profile.value,
         "contract_versions": CONTRACT_VERSIONS,
     }
 
@@ -120,6 +151,7 @@ def health_ready(response: Response) -> dict:
     if not ready:
         response.status_code = 503
     return {"status": "ok" if ready else "degraded", "checks": checks}
+
 
 
 @app.get("/metrics")
@@ -150,8 +182,19 @@ def _check_postgres() -> str:
         with session_scope() as session:
             session.execute(text("SELECT 1"))
         return "ok"
-    except Exception as exc:  # noqa: BLE001
+    except SQLAlchemyError as exc:
         logger.warning("ready check failed: postgres: %s", exc)
+        return "failed"
+
+
+def _check_schema() -> str:
+    try:
+        from storage.bootstrap import verify_schema
+
+        verify_schema()
+        return "ok"
+    except (OSError, RuntimeError, SQLAlchemyError) as exc:
+        logger.warning("ready check failed: schema: %s", exc)
         return "failed"
 
 
@@ -161,7 +204,7 @@ def _check_http(url: str, api_key: str | None = None) -> str:
         response = httpx.get(url, headers=headers, timeout=3)
         response.raise_for_status()
         return "ok"
-    except Exception as exc:  # noqa: BLE001
+    except httpx.HTTPError as exc:
         logger.warning("ready check failed: http endpoint %s: %s", _redact_url(url), exc)
         return "failed"
 
@@ -177,10 +220,13 @@ def _check_redis(redis_url: str) -> str:
         return "skipped"
     try:
         import redis
-
+    except ImportError as exc:
+        logger.warning("ready check failed: redis import: %s", exc)
+        return "failed"
+    try:
         client = redis.Redis.from_url(redis_url, socket_connect_timeout=3, socket_timeout=3)
         return "ok" if client.ping() else "failed"
-    except Exception as exc:  # noqa: BLE001
+    except (OSError, redis.RedisError) as exc:
         logger.warning("ready check failed: redis: %s", exc)
         return "failed"
 

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from clients._http import SubsystemHttpClient
 from app.model_gateway.metrics import TraceContext
+from clients._http import SubsystemHttpClient
 
 
 def _data(payload: dict[str, Any]) -> dict[str, Any]:
@@ -53,3 +53,12 @@ class RemoteContentClient(SubsystemHttpClient):
 
     def __getattr__(self, name: str):
         raise AttributeError(f"content.v1 no longer exposes legacy operation: {name}")
+
+
+def build_content_knowledge_bundle_client(*, base_url: str | None = None):
+    """Keep conclusion's bundle boundary distinct from browse/Search content.v1."""
+    from app.adapters.http.content_knowledge_client import (
+        RemoteContentKnowledgeBundleClient,
+    )
+
+    return RemoteContentKnowledgeBundleClient(base_url)
