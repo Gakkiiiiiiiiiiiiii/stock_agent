@@ -270,6 +270,60 @@ def _database_readback(
     return {"content": content, "agent": agent}
 
 
+def _reference_validation(
+    *,
+    agent_url: str,
+    expected_content_sha: str,
+    expected_agent_sha: str,
+    bundle: dict[str, Any],
+    timeout: float,
+) -> dict[str, Any]:
+    """Record the refs the public boundary can actually observe.
+
+    The runner can bind a Content Bundle to its producer ref and query the
+    Agent runtime version endpoint.  It has no authority to inspect either
+    repository's commit graph or deployment branch, so those facts remain
+    explicitly unverified rather than being inferred from command-line input.
+    """
+    producer = bundle.get("producer")
+    observed_content_sha = producer.get("git_commit") if isinstance(producer, dict) else None
+    content_state = (
+        "MATCH" if isinstance(observed_content_sha, str) and observed_content_sha == expected_content_sha
+        else "MISMATCH" if isinstance(observed_content_sha, str) and observed_content_sha
+        else "UNAVAILABLE"
+    )
+    observed_agent_sha: str | None = None
+    try:
+        status, version = _json_request(agent_url, "/health/version", timeout=timeout)
+        value = version.get("git_commit") if status == 200 and version.get("service") == "stock_agent" else None
+        observed_agent_sha = value if isinstance(value, str) and value else None
+    except E2EError:
+        # The E2E result remains useful when an older Agent does not expose
+        # version provenance; the evidence must say that the ref was not seen.
+        observed_agent_sha = None
+    agent_state = (
+        "MATCH" if observed_agent_sha == expected_agent_sha
+        else "MISMATCH" if observed_agent_sha is not None
+        else "UNAVAILABLE"
+    )
+    match_gate = (
+        "PASS" if content_state == agent_state == "MATCH"
+        else "FAIL" if "MISMATCH" in {content_state, agent_state}
+        else "UNVERIFIED"
+    )
+    return {
+        "method": "content_bundle.producer.git_commit + agent_health_version.git_commit",
+        "requested": {"stock_content_sha": expected_content_sha, "stock_agent_sha": expected_agent_sha},
+        "observed": {"stock_content_bundle_producer_git_commit": observed_content_sha,
+                     "stock_agent_runtime_git_commit": observed_agent_sha},
+        "content_bundle_producer_ref": content_state,
+        "agent_runtime_ref": agent_state,
+        "runtime_ref_match_gate": match_gate,
+        "repository_commit_state": "NOT_VERIFIED",
+        "main_merge_state": "NOT_VERIFIED",
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     content_url, agent_url = fixed_base_url(args.content_url, label="CONTENT"), fixed_base_url(args.agent_url, label="AGENT")
     evidence = prepare_evidence_dir(args.evidence_dir)
@@ -454,6 +508,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             )
             atomic_json(evidence, "database-readback.json", database_readback)
         model = conclusion.get("model") if isinstance(conclusion.get("model"), dict) else {}
+        reference_validation = _reference_validation(
+            agent_url=agent_url,
+            expected_content_sha=args.content_sha,
+            expected_agent_sha=args.agent_sha,
+            bundle=bundle,
+            timeout=args.request_timeout,
+        )
         provenance = {"run_kind": args.run_profile + "-api-e2e", "trace_id": trace_id, "content_snapshot_id": snapshot_id,
                       "source_snapshot_id": source_snapshot_id,
                       "content_replay": {
@@ -464,8 +525,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                       "bundle_id": bundle["bundle_id"], "bundle_hash": bundle["bundle_hash"], "conclusion_id": conclusion_id,
                       "content_bundle_contract": args.content_bundle_contract,
                       "content_contract_checksum": bundle.get("producer", {}).get("contract_checksum", CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM), "stock_content_sha": args.content_sha,
-                      "stock_agent_sha": args.agent_sha, "exact_ref_gate": "PENDING_UNCOMMITTED", "execution_eligible": False,
-                      "citation_precision": 1.0, "hard_fact_grounding": 1.0, "timeout_seconds": args.poll_timeout,
+                      "stock_agent_sha": args.agent_sha,
+                      # Kept as a scalar for existing evidence readers.  It
+                      # only means that the two observable runtime refs match;
+                      # repository commit and main-merge state are not claimed.
+                      "exact_ref_gate": reference_validation["runtime_ref_match_gate"],
+                      "reference_validation": reference_validation,
+                      "execution_eligible": False,
+                      "evidence_validation": {
+                          "bundle_hash_integrity": bundle_report["bundle_hash_integrity"],
+                          "citation_reference_integrity": conclusion_report["citation_reference_integrity"],
+                          "conclusion_lineage_hash_integrity": conclusion_report["conclusion_lineage_hash_integrity"],
+                          "external_fact_verification": "NOT_PERFORMED",
+                      },
+                      "citation_precision": conclusion_report["citation_precision"],
+                      "external_fact_verification": "NOT_PERFORMED", "timeout_seconds": args.poll_timeout,
                       "frozen_clocks": {"business_as_of": clocks, "knowledge_as_of": clocks,
                                         "availability_as_of": clocks, "source": clock_source},
                       "agent_model_mode": model.get("mode", "UNKNOWN"),

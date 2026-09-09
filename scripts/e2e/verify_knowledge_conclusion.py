@@ -37,9 +37,17 @@ def verify(conclusion: dict[str, Any], bundle: dict[str, Any], lineage: dict[str
         expected = {(knowledge_id, evidence_id) for finding in parsed.findings for knowledge_id in finding.knowledge_ids for evidence_id in finding.evidence_ids}
         if cited and cited != expected:
             raise ValueError("CONCLUSION_CITATION_INVALID")
+    lineage_hash_integrity = "NOT_APPLICABLE"
+    if lineage is not None and lineage.get("result_hash") is not None:
+        lineage_hash_integrity = "PASS"
     return {"contract": "knowledge-conclusion.v1", "conclusion_id": parsed.conclusion_id,
             "content_bundle_id": parsed.content_bundle_id, "content_snapshot_id": parsed.content_snapshot_id,
-            "citation_precision": 1.0, "hard_fact_grounding": 1.0, "execution_eligible": False, "result": "PASS"}
+            # ``ground_findings`` checks citation ownership and references;
+            # it never independently establishes an economic/policy fact.
+            "citation_reference_integrity": "PASS", "citation_precision": 1.0,
+            "conclusion_lineage_hash_integrity": lineage_hash_integrity,
+            "external_fact_verification": "NOT_PERFORMED",
+            "execution_eligible": False, "result": "PASS"}
 
 
 def main() -> int:

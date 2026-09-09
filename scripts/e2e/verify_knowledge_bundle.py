@@ -24,7 +24,12 @@ def verify(payload: dict[str, Any]) -> dict[str, Any]:
         raise BundleValidationError("CONTENT_SCHEMA_INVALID")
     return {"contract": contract, "bundle_id": bundle.bundle_id, "bundle_hash": bundle.bundle_hash,
             "content_snapshot_id": bundle.content_snapshot_id, "contract_checksum": bundle.contract_checksum,
-            "citation_precision": 1.0, "hard_fact_grounding": 1.0, "result": "PASS"}
+            # This verifier proves the Bundle's self-contained contract and
+            # hash/evidence references.  It does not consult an independent
+            # issuer, market feed, or policy source, so it cannot verify facts.
+            "bundle_hash_integrity": "PASS", "citation_reference_integrity": "PASS",
+            "citation_precision": 1.0, "external_fact_verification": "NOT_PERFORMED",
+            "result": "PASS"}
 
 
 def main() -> int:

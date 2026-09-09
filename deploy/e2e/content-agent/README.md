@@ -122,9 +122,15 @@ python scripts/e2e/run_content_agent_flow.py `
 
 The runner proves duplicate and conflicting idempotency behavior for ingestion,
 Bundle, and conclusion; immutable Bundle GET readback; conclusion GET/lineage;
-both replay modes; and aggregate Content/Agent PostgreSQL readback. A successful
-Agent result still reports `model.mode=FALLBACK` until a reviewed Agent model
-adapter exists. That is an analysis-only conclusion, never an execution signal.
+both replay modes; and aggregate Content/Agent PostgreSQL readback. Its
+`provenance.json` distinguishes Bundle/hash and citation-reference integrity
+from `external_fact_verification`, which is `NOT_PERFORMED` unless a separate
+independent verification workflow supplies that evidence. It also records the
+requested refs alongside the Content Bundle producer ref and Agent
+`/health/version` ref; it does not assert that either ref is committed or
+merged to `main`. A successful Agent result still reports `model.mode=FALLBACK`
+until a reviewed Agent model adapter exists. That is an analysis-only
+conclusion, never an execution signal.
 
 ## Ordering and readiness
 

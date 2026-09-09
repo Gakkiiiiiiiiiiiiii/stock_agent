@@ -195,6 +195,10 @@ class _FixtureServer:
                     outer._reply(self, 422, {"code": "INVALID_REPLAY_MODE"}); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
             def do_GET(self):
+                if self.path == "/health/version":
+                    outer._reply(self, 200, {
+                        "service": "stock_agent", "git_commit": "agent-runtime-sha",
+                    }); return
                 if self.path.endswith("/lineage"):
                     outer._reply(self, 200, {"bundle_id": outer.active_bundle["bundle_id"], "snapshot_id": outer.active_bundle["content_snapshot_id"], "result_hash": canonical_hash(outer.active_conclusion), "findings": [{"knowledge_id": "k-1", "evidence_id": "e-1"}]}); return
                 if self.path.endswith("/conclusion-1"):
@@ -221,6 +225,49 @@ def test_fixture_flow_has_redacted_evidence_and_no_content_replay(tmp_path: Path
     assert {"provenance.json", "ingestion-request.json", "task-final.json", "source-public-metadata.json", "transcript-quality.json", "knowledge-quality.json", "snapshot-manifest.json", "knowledge-bundle.json", "conclusion.json", "citation-validation.json", "secret-scan.json", "junit.xml"} <= {item.name for item in evidence.iterdir()}
     assert "?token" not in (evidence / "source-public-metadata.json").read_text(encoding="utf-8")
     assert scan(evidence)["result"] == "PASS"
+
+
+def test_provenance_separates_runtime_refs_from_external_fact_verification(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    args = _args(tmp_path, stack)
+    args.content_sha, args.agent_sha = "producer-sha", "agent-runtime-sha"
+    try:
+        run(args)
+    finally:
+        stack.close()
+    provenance = json.loads((tmp_path / "evidence" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["exact_ref_gate"] == "PASS"
+    assert provenance["reference_validation"] == {
+        "method": "content_bundle.producer.git_commit + agent_health_version.git_commit",
+        "requested": {"stock_content_sha": "producer-sha", "stock_agent_sha": "agent-runtime-sha"},
+        "observed": {
+            "stock_content_bundle_producer_git_commit": "producer-sha",
+            "stock_agent_runtime_git_commit": "agent-runtime-sha",
+        },
+        "content_bundle_producer_ref": "MATCH", "agent_runtime_ref": "MATCH",
+        "runtime_ref_match_gate": "PASS", "repository_commit_state": "NOT_VERIFIED",
+        "main_merge_state": "NOT_VERIFIED",
+    }
+    assert provenance["evidence_validation"] == {
+        "bundle_hash_integrity": "PASS", "citation_reference_integrity": "PASS",
+        "conclusion_lineage_hash_integrity": "PASS",
+        "external_fact_verification": "NOT_PERFORMED",
+    }
+    assert provenance["citation_precision"] == 1.0
+    assert "hard_fact_grounding" not in provenance
+
+
+def test_provenance_marks_unmatched_runtime_refs_without_claiming_merge(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    try:
+        run(_args(tmp_path, stack))
+    finally:
+        stack.close()
+    provenance = json.loads((tmp_path / "evidence" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["exact_ref_gate"] == "FAIL"
+    assert provenance["reference_validation"]["content_bundle_producer_ref"] == "MISMATCH"
+    assert provenance["reference_validation"]["agent_runtime_ref"] == "MISMATCH"
+    assert provenance["reference_validation"]["main_merge_state"] == "NOT_VERIFIED"
 
 
 @pytest.mark.parametrize("mutation", ("bundle", "citation", "action"))
