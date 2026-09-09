@@ -114,6 +114,51 @@ def _snapshot_id(task: dict[str, Any]) -> str:
     return value
 
 
+def _replay_candidate_snapshot_id(
+    replay: dict[str, Any], *, source_snapshot_id: str, mode: str
+) -> str:
+    """Bind a replay response to its requested source before consuming it."""
+    if replay.get("mode") != mode or replay.get("source_snapshot_id") != source_snapshot_id:
+        raise E2EError("CONTENT_REPLAY_RESPONSE_INVALID", "content-snapshot-replay")
+    candidate_snapshot_id = replay.get("candidate_snapshot_id")
+    if not isinstance(candidate_snapshot_id, str) or not candidate_snapshot_id.strip():
+        raise E2EError("CONTENT_REPLAY_CANDIDATE_SNAPSHOT_MISSING", "content-snapshot-replay")
+    if candidate_snapshot_id == source_snapshot_id:
+        raise E2EError("CONTENT_REPLAY_CANDIDATE_SNAPSHOT_INVALID", "content-snapshot-replay")
+    return candidate_snapshot_id
+
+
+def _validate_replay_snapshot_lineage(
+    snapshot: dict[str, Any], lineage: dict[str, Any], *, source_snapshot_id: str,
+    candidate_snapshot_id: str, mode: str,
+) -> None:
+    """Validate only public candidate snapshot/lineage identifiers and kind."""
+    expected_kind = "MIGRATION" if mode == "MIGRATION_REPLAY" else "REPROCESS"
+    if not isinstance(snapshot, dict) or any(snapshot.get(field) != value for field, value in {
+        "content_snapshot_id": candidate_snapshot_id,
+        "snapshot_kind": expected_kind,
+        "parent_snapshot_id": source_snapshot_id,
+        "supersedes_snapshot_id": source_snapshot_id,
+    }.items()):
+        raise E2EError("CONTENT_REPLAY_SNAPSHOT_READBACK_INVALID", "content-replay-snapshot-readback")
+    snapshot_lineage = lineage.get("snapshot_lineage") if isinstance(lineage, dict) else None
+    if lineage.get("lineage_complete") is not True or not isinstance(snapshot_lineage, dict):
+        raise E2EError("CONTENT_REPLAY_LINEAGE_INVALID", "content-replay-lineage")
+    if any(snapshot_lineage.get(field) != value for field, value in {
+        "content_snapshot_id": candidate_snapshot_id,
+        "snapshot_kind": expected_kind,
+        "parent_snapshot_id": source_snapshot_id,
+        "supersedes_snapshot_id": source_snapshot_id,
+    }.items()):
+        raise E2EError("CONTENT_REPLAY_LINEAGE_INVALID", "content-replay-lineage")
+    parents = snapshot_lineage.get("parents")
+    if not isinstance(parents, list) or not any(
+        isinstance(parent, dict) and parent.get("content_snapshot_id") == source_snapshot_id
+        for parent in parents
+    ):
+        raise E2EError("CONTENT_REPLAY_LINEAGE_INVALID", "content-replay-lineage")
+
+
 def _junit(directory: Path, *, name: str, error: E2EError | None) -> None:
     suite = ET.Element("testsuite", name="content-agent-e2e", tests="1", failures="0" if error is None else "1")
     case = ET.SubElement(suite, "testcase", name=name)
@@ -242,6 +287,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("REAL_DATABASE_READBACK_URLS_REQUIRED")
     if args.run_profile == "real" and args.source_type == "xiaoe" and not args.credential_ref:
         raise ValueError("XIAOE_CREDENTIAL_REF_REQUIRED")
+    if args.content_replay_mode == "MIGRATION_REPLAY" and not args.content_replay_pipeline_version:
+        raise ValueError("MIGRATION_REPLAY_PIPELINE_VERSION_REQUIRED")
+    if args.content_replay_mode is None and args.content_replay_pipeline_version:
+        raise ValueError("CONTENT_REPLAY_MODE_REQUIRED")
     trace_id, ingestion_key, conclusion_key = args.trace_id or str(uuid.uuid4()), args.ingestion_idempotency_key or str(uuid.uuid4()), args.conclusion_idempotency_key or str(uuid.uuid4())
     content_headers = {"Authorization": "Bearer " + content_token, "X-Caller-Service": "stock_agent", "X-Trace-Id": trace_id, "Idempotency-Key": ingestion_key}
     agent_headers = {"X-Trace-Id": trace_id, "Idempotency-Key": conclusion_key}
@@ -275,12 +324,59 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         task = _poll_task(content_url, task_id, content_headers, timeout=args.poll_timeout, interval=args.poll_interval)
         atomic_json(evidence, "task-final.json", redacted(task))
         snapshot_id = _snapshot_id(task)
-        clocks, clock_source = _freeze_clocks(args.as_of)
         result = task.get("result") if isinstance(task.get("result"), dict) else {}
         atomic_json(evidence, "source-public-metadata.json", redacted(result.get("source", result.get("source_public_metadata", {}))))
         atomic_json(evidence, "transcript-quality.json", redacted(result.get("transcript_quality", {})))
         atomic_json(evidence, "knowledge-quality.json", redacted(result.get("knowledge_quality", {})))
         atomic_json(evidence, "snapshot-manifest.json", redacted({"content_snapshot_id": snapshot_id, "task_id": task_id}))
+        source_snapshot_id = snapshot_id
+        content_replay: dict[str, Any] | None = None
+        if args.content_replay_mode is not None:
+            replay_request: dict[str, str] = {"mode": args.content_replay_mode}
+            if args.content_replay_mode == "MIGRATION_REPLAY":
+                replay_request["pipeline_version"] = args.content_replay_pipeline_version
+            replay_status, replay_response = _json_request(
+                content_url,
+                "/api/v1/content-snapshots/" + source_snapshot_id + "/replay",
+                method="POST", payload=replay_request, headers=content_headers,
+                timeout=args.request_timeout,
+            )
+            content_replay = _require(
+                replay_status, replay_response, stage="content-snapshot-replay", accepted={200}
+            )
+            atomic_json(evidence, "content-snapshot-replay.json", redacted(content_replay))
+            snapshot_id = _replay_candidate_snapshot_id(
+                content_replay, source_snapshot_id=source_snapshot_id,
+                mode=args.content_replay_mode,
+            )
+            candidate_status, candidate_response = _json_request(
+                content_url, "/api/v1/content-snapshots/" + snapshot_id,
+                headers=content_headers, timeout=args.request_timeout,
+            )
+            candidate_response = _require(
+                candidate_status, candidate_response, stage="content-replay-snapshot-readback", accepted={200}
+            )
+            candidate_snapshot = candidate_response.get("data")
+            lineage_status, lineage_response = _json_request(
+                content_url, "/api/v1/content-snapshots/" + snapshot_id + "/lineage",
+                headers=content_headers, timeout=args.request_timeout,
+            )
+            lineage_response = _require(
+                lineage_status, lineage_response, stage="content-replay-lineage", accepted={200}
+            )
+            candidate_lineage = lineage_response.get("data")
+            _validate_replay_snapshot_lineage(
+                candidate_snapshot, candidate_lineage, source_snapshot_id=source_snapshot_id,
+                candidate_snapshot_id=snapshot_id, mode=args.content_replay_mode,
+            )
+            atomic_json(evidence, "candidate-snapshot-manifest.json", redacted({
+                "source_snapshot_id": source_snapshot_id,
+                "candidate_snapshot_id": snapshot_id,
+                "mode": args.content_replay_mode,
+                "snapshot": candidate_snapshot,
+                "lineage": candidate_lineage,
+            }))
+        clocks, clock_source = _freeze_clocks(args.as_of)
         bundle_request = {"content_snapshot_id": snapshot_id, "query": args.query, "symbol": args.symbol,
                           "business_as_of": clocks, "knowledge_as_of": clocks, "availability_as_of": clocks,
                           "minimum_support_status": "SOURCE_SUPPORTED", "max_items": 20,
@@ -359,6 +455,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             atomic_json(evidence, "database-readback.json", database_readback)
         model = conclusion.get("model") if isinstance(conclusion.get("model"), dict) else {}
         provenance = {"run_kind": args.run_profile + "-api-e2e", "trace_id": trace_id, "content_snapshot_id": snapshot_id,
+                      "source_snapshot_id": source_snapshot_id,
+                      "content_replay": {
+                          "mode": args.content_replay_mode,
+                          "pipeline_version": args.content_replay_pipeline_version,
+                          "candidate_snapshot_id": snapshot_id if content_replay is not None else None,
+                      },
                       "bundle_id": bundle["bundle_id"], "bundle_hash": bundle["bundle_hash"], "conclusion_id": conclusion_id,
                       "content_bundle_contract": args.content_bundle_contract,
                       "content_contract_checksum": bundle.get("producer", {}).get("contract_checksum", CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM), "stock_content_sha": args.content_sha,
@@ -402,6 +504,8 @@ def parser() -> argparse.ArgumentParser:
     value.add_argument("--run-profile", choices=("fixture", "real"), default="fixture")
     value.add_argument("--content-database-url")
     value.add_argument("--agent-database-url")
+    value.add_argument("--content-replay-mode", choices=("REPROCESS", "MIGRATION_REPLAY"))
+    value.add_argument("--content-replay-pipeline-version")
     value.add_argument("--as-of", help="Explicit historical/as-of UTC instant; omit to freeze after Content succeeds")
     value.add_argument("--trace-id")
     value.add_argument("--ingestion-idempotency-key")

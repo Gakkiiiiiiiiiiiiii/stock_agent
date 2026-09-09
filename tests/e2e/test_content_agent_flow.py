@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+from copy import deepcopy
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -48,16 +49,33 @@ def _bundle() -> dict[str, Any]:
 
 def _conclusion(bundle: dict[str, Any]) -> dict[str, Any]:
     return {"contract": "knowledge-conclusion.v1", "conclusion_id": "conclusion-1", "scope": "CONTENT_ONLY_RESEARCH", "execution_eligible": False,
-            "query": bundle["query"], "content_bundle_id": bundle["bundle_id"], "content_snapshot_id": "snapshot-1",
+            "query": bundle["query"], "content_bundle_id": bundle["bundle_id"], "content_snapshot_id": bundle["content_snapshot_id"],
             "verdict": "SUPPORTED", "market_stance": "NEUTRAL", "summary": "收入增长12。",
             "findings": [{"text": "收入增长12。", "knowledge_ids": ["k-1"], "evidence_ids": ["e-1"], "confidence": 0.9}],
             "conditions": [], "risks": [], "contradictions": [], "limitations": [],
             "model": {"mode": "FALLBACK", "provider": "deterministic", "model": "fixture", "prompt_version": "knowledge-conclusion.prompt.v1"}, "created_at": "2026-09-06T00:00:00Z"}
 
 
+def _bundle_for_snapshot(bundle: dict[str, Any], snapshot_id: str) -> dict[str, Any]:
+    candidate = deepcopy(bundle)
+    candidate["content_snapshot_id"] = snapshot_id
+    candidate["request"]["content_snapshot_id"] = snapshot_id
+    validator = ContentKnowledgeBundleValidator()
+    candidate["request_hash"] = validator.request_hash(candidate["request"])
+    material = {key: value for key, value in candidate.items() if key not in {"bundle_id", "bundle_hash"}}
+    digest = hashlib.sha256(canonical_json(material)).hexdigest()
+    candidate["bundle_id"], candidate["bundle_hash"] = "ckb_" + digest, "sha256:" + digest
+    return candidate
+
+
 class _FixtureServer:
     def __init__(self, bundle: dict[str, Any], conclusion: dict[str, Any]) -> None:
         self.bundle, self.conclusion, self.content_bundle_calls = bundle, conclusion, 0
+        self.active_bundle, self.active_conclusion = bundle, conclusion
+        self.candidate_snapshot_id = "snapshot-replay-2"
+        self.replay_mode: str | None = None
+        self.replay_requests: list[dict[str, Any]] = []
+        self.replay_failure: tuple[int, str] | None = None
         self.bundle_calls_at_replay: list[int] = []
         self.bundle_requests: list[dict[str, Any]] = []
         self.conclusion_requests: list[dict[str, Any]] = []
@@ -105,7 +123,28 @@ class _FixtureServer:
                     outer.bundle_requests.append(body)
                     if body.get("max_items") == 19:
                         outer._reply(self, 409, {"code": "IDEMPOTENCY_KEY_CONFLICT"}); return
-                    outer._reply(self, 200, outer.bundle); return
+                    outer._reply(self, 200, outer.active_bundle); return
+                if self.path == "/api/v1/content-snapshots/snapshot-1/replay":
+                    assert self.headers["Authorization"] == "Bearer fixture-token"
+                    assert self.headers["X-Caller-Service"] == "stock_agent"
+                    assert self.headers["X-Trace-Id"] == "trace-fixture"
+                    body = outer._body(self)
+                    outer.replay_requests.append(body)
+                    if outer.replay_failure:
+                        outer._reply(self, outer.replay_failure[0], {"detail": {"code": outer.replay_failure[1]}}); return
+                    mode = body.get("mode")
+                    if mode not in {"REPROCESS", "MIGRATION_REPLAY"}:
+                        outer._reply(self, 422, {"detail": {"code": "INVALID_REPLAY_MODE"}}); return
+                    if mode == "MIGRATION_REPLAY" and not body.get("pipeline_version"):
+                        outer._reply(self, 422, {"detail": {"code": "INVALID_REPLAY_REQUEST"}}); return
+                    outer.replay_mode = mode
+                    outer.active_bundle = _bundle_for_snapshot(outer.bundle, outer.candidate_snapshot_id)
+                    outer.active_conclusion = _conclusion(outer.active_bundle)
+                    outer._reply(self, 200, {
+                        "mode": mode, "source_snapshot_id": "snapshot-1",
+                        "candidate_snapshot_id": outer.candidate_snapshot_id,
+                        "comparison": {}, "differences": [],
+                    }); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
             def do_GET(self):
                 if self.path == "/v1/content/ingestions/task-1":
@@ -113,8 +152,24 @@ class _FixtureServer:
                         outer._reply(self, 200, {"task_id": "task-1", "status": "FAILED", "error": {"code": outer.task_failure}}); return
                     outer.task_succeeded_served = True
                     outer._reply(self, 200, {"task_id": "task-1", "status": "SUCCEEDED", "result": {"content_snapshot_id": "snapshot-1", "video_id": "video-1", "source": {"canonical_url": "https://example.test/video?token=hidden"}, "transcript_quality": {"status": "PASS"}, "knowledge_quality": {"status": "PASS"}}}); return
-                if self.path == "/v1/content/knowledge-bundles/" + outer.bundle["bundle_id"]:
-                    outer._reply(self, 200, outer.bundle); return
+                if self.path == "/v1/content/knowledge-bundles/" + outer.active_bundle["bundle_id"]:
+                    outer._reply(self, 200, outer.active_bundle); return
+                if self.path == "/api/v1/content-snapshots/" + outer.candidate_snapshot_id:
+                    outer._reply(self, 200, {"data": {
+                        "content_snapshot_id": outer.candidate_snapshot_id,
+                        "snapshot_kind": "MIGRATION" if outer.replay_mode == "MIGRATION_REPLAY" else "REPROCESS",
+                        "parent_snapshot_id": "snapshot-1", "supersedes_snapshot_id": "snapshot-1",
+                    }}); return
+                if self.path == "/api/v1/content-snapshots/" + outer.candidate_snapshot_id + "/lineage":
+                    outer._reply(self, 200, {"data": {
+                        "lineage_complete": True,
+                        "snapshot_lineage": {
+                            "content_snapshot_id": outer.candidate_snapshot_id,
+                            "snapshot_kind": "MIGRATION" if outer.replay_mode == "MIGRATION_REPLAY" else "REPROCESS",
+                            "parent_snapshot_id": "snapshot-1", "supersedes_snapshot_id": "snapshot-1",
+                            "parents": [{"content_snapshot_id": "snapshot-1"}],
+                        },
+                    }}); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
         return Handler
 
@@ -126,24 +181,24 @@ class _FixtureServer:
                 if self.path == "/api/v2/knowledge-conclusions":
                     body = outer._body(self)
                     outer.conclusion_requests.append(body)
-                    if body["query"] != outer.conclusion["query"]: outer._reply(self, 409, {"code": "IDEMPOTENCY_CONFLICT"}); return
-                    outer._reply(self, 201, outer.conclusion); return
+                    if body["query"] != outer.active_conclusion["query"]: outer._reply(self, 409, {"code": "IDEMPOTENCY_CONFLICT"}); return
+                    outer._reply(self, 201, outer.active_conclusion); return
                 if self.path.endswith("/replay"):
                     body = outer._body(self)
                     outer.bundle_calls_at_replay.append(outer.content_bundle_calls)
                     if body["mode"] == "VERIFY_HASH":
-                        outer._reply(self, 200, {"audit_id": "audit-verify", "valid": True, "result_hash": canonical_hash(outer.conclusion)})
+                        outer._reply(self, 200, {"audit_id": "audit-verify", "valid": True, "result_hash": canonical_hash(outer.active_conclusion)})
                         return
                     if body["mode"] == "RECOMPUTE_DETERMINISTIC":
-                        outer._reply(self, 200, {"audit_id": "audit-deterministic", "result": outer.conclusion, "result_hash": canonical_hash(outer.conclusion)})
+                        outer._reply(self, 200, {"audit_id": "audit-deterministic", "result": outer.active_conclusion, "result_hash": canonical_hash(outer.active_conclusion)})
                         return
                     outer._reply(self, 422, {"code": "INVALID_REPLAY_MODE"}); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
             def do_GET(self):
                 if self.path.endswith("/lineage"):
-                    outer._reply(self, 200, {"bundle_id": outer.bundle["bundle_id"], "snapshot_id": "snapshot-1", "result_hash": canonical_hash(outer.conclusion), "findings": [{"knowledge_id": "k-1", "evidence_id": "e-1"}]}); return
+                    outer._reply(self, 200, {"bundle_id": outer.active_bundle["bundle_id"], "snapshot_id": outer.active_bundle["content_snapshot_id"], "result_hash": canonical_hash(outer.active_conclusion), "findings": [{"knowledge_id": "k-1", "evidence_id": "e-1"}]}); return
                 if self.path.endswith("/conclusion-1"):
-                    outer._reply(self, 200, outer.conclusion); return
+                    outer._reply(self, 200, outer.active_conclusion); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
         return Handler
 
@@ -303,3 +358,69 @@ def test_v2_runner_keeps_producer_scope_and_consumer_contract_selection_aligned(
     assert producer_body["contract_version"] == "content-knowledge-bundle.v2"
     assert producer_body["subject_scope"] == "ALL_SUBJECTS"
     assert consumer_payload["content_bundle_contract"] == producer_body["contract_version"]
+
+
+def test_migration_replay_uses_candidate_snapshot_for_bundle_conclusion_and_lineage(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    args = _args(tmp_path, stack)
+    args.content_replay_mode = "MIGRATION_REPLAY"
+    args.content_replay_pipeline_version = "pipeline.v4"
+    try:
+        report = run(args)
+    finally:
+        stack.close()
+    evidence = Path(report["evidence_dir"])
+    assert stack.replay_requests == [{"mode": "MIGRATION_REPLAY", "pipeline_version": "pipeline.v4"}]
+    assert stack.bundle_requests[0]["content_snapshot_id"] == stack.candidate_snapshot_id
+    assert stack.conclusion_requests[0]["content_snapshot_id"] == stack.candidate_snapshot_id
+    replay = json.loads((evidence / "content-snapshot-replay.json").read_text(encoding="utf-8"))
+    candidate = json.loads((evidence / "candidate-snapshot-manifest.json").read_text(encoding="utf-8"))
+    provenance = json.loads((evidence / "provenance.json").read_text(encoding="utf-8"))
+    assert replay["candidate_snapshot_id"] == stack.candidate_snapshot_id
+    assert candidate["snapshot"]["snapshot_kind"] == "MIGRATION"
+    assert candidate["lineage"]["snapshot_lineage"]["parent_snapshot_id"] == "snapshot-1"
+    assert provenance["source_snapshot_id"] == "snapshot-1"
+    assert provenance["content_replay"] == {
+        "mode": "MIGRATION_REPLAY", "pipeline_version": "pipeline.v4",
+        "candidate_snapshot_id": stack.candidate_snapshot_id,
+    }
+
+
+def test_reprocess_replay_uses_candidate_snapshot_without_a_pipeline_override(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    args = _args(tmp_path, stack)
+    args.content_replay_mode = "REPROCESS"
+    try:
+        run(args)
+    finally:
+        stack.close()
+    candidate = json.loads((tmp_path / "evidence" / "candidate-snapshot-manifest.json").read_text(encoding="utf-8"))
+    assert stack.replay_requests == [{"mode": "REPROCESS"}]
+    assert stack.bundle_requests[0]["content_snapshot_id"] == stack.candidate_snapshot_id
+    assert candidate["snapshot"]["snapshot_kind"] == "REPROCESS"
+
+
+def test_replay_rejects_missing_migration_version_before_http(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    args = _args(tmp_path, stack)
+    args.content_replay_mode = "MIGRATION_REPLAY"
+    try:
+        with pytest.raises(ValueError, match="MIGRATION_REPLAY_PIPELINE_VERSION_REQUIRED"):
+            run(args)
+    finally:
+        stack.close()
+    assert stack.replay_requests == []
+
+
+def test_replay_failure_has_stable_content_stage_and_code(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    stack.replay_failure = (409, "REPLAY_ARTIFACT_HASH_MISMATCH")
+    args = _args(tmp_path, stack)
+    args.content_replay_mode = "REPROCESS"
+    try:
+        with pytest.raises(E2EError, match="REPLAY_ARTIFACT_HASH_MISMATCH"):
+            run(args)
+    finally:
+        stack.close()
+    failure = json.loads((tmp_path / "evidence" / "failure.json").read_text(encoding="utf-8"))
+    assert failure == {"code": "REPLAY_ARTIFACT_HASH_MISMATCH", "stage": "content-snapshot-replay"}
