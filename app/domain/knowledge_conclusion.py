@@ -195,6 +195,12 @@ class KnowledgeConclusionRequest(_FrozenModel):
     business_as_of: datetime | None = None
     knowledge_as_of: datetime | None = None
     availability_as_of: datetime | None = None
+    # This selects the producer contract before the Bundle is fetched.  It is
+    # retained on the durable run so recovery never needs to infer a contract
+    # from a later Content response.
+    content_bundle_contract: Literal[
+        "content-knowledge-bundle.v1", "content-knowledge-bundle.v2"
+    ] = "content-knowledge-bundle.v1"
 
     @field_validator("content_snapshot_id")
     @classmethod

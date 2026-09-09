@@ -1,6 +1,8 @@
-# Isolated two-repository E2E topology.  Select an explicit profile (the
-# documented default is `fixture`) and give each run its own COMPOSE_PROJECT_NAME.
-x-knowledge-profiles: &knowledge-profiles [fixture, bilibili, xiaoe, full-model]
+# Isolated two-repository E2E topology.  `fixture` is hermetic only; `xiaoe`
+# and `xiaoe-hybrid` are real HTTP/queue/PostgreSQL profiles.  Give each run
+# its own COMPOSE_PROJECT_NAME.
+x-knowledge-profiles: &knowledge-profiles [fixture, bilibili, xiaoe, full-model, xiaoe-hybrid]
+x-video-worker-profiles: &video-worker-profiles [fixture, bilibili, xiaoe, full-model]
 
 services:
   content-postgres:
@@ -12,6 +14,8 @@ services:
       POSTGRES_PASSWORD: postgres
     volumes:
       - content-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${CONTENT_POSTGRES_HOST_PORT:-15432}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d stock_content"]
       interval: 5s
@@ -41,8 +45,8 @@ services:
       # Bundle route remains authoritative when the endpoint is unavailable.
       CONTENT_QDRANT_URL: http://qdrant:6333
       CONTENT_QDRANT_COLLECTION: knowledge_v3
-      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
-      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
+      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:?CONTENT_MODEL_URL_REQUIRED}
+      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:?CONTENT_MODEL_NAME_REQUIRED}
       # These identify the EPIC-043 producer commit. A deployment must still
       # override them with its own pinned image metadata.
       CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
@@ -57,12 +61,23 @@ services:
       CONTENT_BILIBILI_CREDENTIAL_REF: ${CONTENT_BILIBILI_CREDENTIAL_REF:-bilibili-cookiefile}
       CONTENT_XIAOE_HLS_CREDENTIAL_REF: ${CONTENT_XIAOE_HLS_CREDENTIAL_REF:-xiaoe-hls-locator}
       CONTENT_XIAOE_CREDENTIAL_REF: ${CONTENT_XIAOE_CREDENTIAL_REF:-xiaoe-storage-state}
+      CONTENT_XIAOE_PAGE_RESOLVER_ENABLED: ${CONTENT_XIAOE_PAGE_RESOLVER_ENABLED:-false}
+      CONTENT_XIAOE_PAGE_URL_TEMPLATE: ${CONTENT_XIAOE_PAGE_URL_TEMPLATE:-}
       CONTENT_INGESTION_CREDENTIAL_REFS: ${CONTENT_INGESTION_CREDENTIAL_REFS:-bilibili-cookiefile,xiaoe-hls-locator,xiaoe-storage-state}
       CONTENT_INGESTION_CREDENTIAL_PROVIDERS: file-secret
+      CONTENT_VIDEO_WORKER_HEARTBEAT_FILE: /var/run/stock-content/video-worker-heartbeat.json
+      CONTENT_OCR_HEARTBEAT_FILE: /var/run/stock-content/ocr-heartbeat.json
     secrets:
       - content-service-api-key
       - content-service-api-key-previous
       - content-model-api-key
+    volumes:
+      # Bind-mounting the heartbeat is required for the Windows hybrid profile:
+      # the host OCR worker writes the same non-secret readiness record the API
+      # checks.  It is ignored runtime state, never an image artifact.
+      - ${CONTENT_OCR_HEARTBEAT_HOST_DIR:-./runtime/ocr}:/var/run/stock-content:ro
+    ports:
+      - "127.0.0.1:${CONTENT_API_HOST_PORT:-18100}:8100"
     depends_on:
       content-migrate:
         condition: service_completed_successfully
@@ -76,7 +91,7 @@ services:
     build:
       context: ${STOCK_CONTENT_CONTEXT:-../../../../stock_content}
       dockerfile: docker/Dockerfile.video
-    profiles: *knowledge-profiles
+    profiles: *video-worker-profiles
     command: ["sh", "-ec", "export CONTENT_MODEL_API_KEY=\"$(cat /run/secrets/content-model-api-key)\"; exec stock-content-worker"]
     environment:
       CONTENT_DATABASE_URL: postgresql+psycopg://postgres:postgres@content-postgres:5432/stock_content
@@ -84,8 +99,8 @@ services:
       # without making task processing or Bundle authority wait for Qdrant.
       CONTENT_QDRANT_URL: http://qdrant:6333
       CONTENT_QDRANT_COLLECTION: knowledge_v3
-      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:-http://fixture-model:9000/v1/chat/completions}
-      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:-fixture-structured-model}
+      CONTENT_MODEL_URL: ${CONTENT_MODEL_URL:?CONTENT_MODEL_URL_REQUIRED}
+      CONTENT_MODEL_NAME: ${CONTENT_MODEL_NAME:?CONTENT_MODEL_NAME_REQUIRED}
       CONTENT_SERVICE_VERSION: ${STOCK_CONTENT_SERVICE_VERSION:-0.0.0-candidate}
       CONTENT_GIT_COMMIT: ${STOCK_CONTENT_GIT_COMMIT:-ddd677fdb6931f42709a42c3246871bed13d0eef}
       CONTENT_PIPELINE_VERSION: ${STOCK_CONTENT_PIPELINE_VERSION:-video-knowledge-pipeline.v1}
@@ -95,6 +110,14 @@ services:
       CONTENT_RAW_STORAGE_DIR: /data/content/raw
       CONTENT_TRANSCRIPT_POLICY: subtitle_first
       CONTENT_VIDEO_WORKER_HEARTBEAT_FILE: /var/run/stock-content/video-worker-heartbeat.json
+      # GPU OCR is a hard readiness gate.  Content rejects work if the OCR
+      # doctor/heartbeat reports anything other than the actual `gpu:0`.
+      CONTENT_OCR_DEVICE: gpu:0
+      CONTENT_OCR_REQUIRE_GPU: "true"
+      CONTENT_OCR_PYTHON: ${CONTENT_OCR_PYTHON:-/opt/ocr/bin/python}
+      CONTENT_OCR_RUNTIME_PATH: ${CONTENT_OCR_RUNTIME_PATH:-}
+      CONTENT_OCR_LIBRARY_PATH: ${CONTENT_OCR_LIBRARY_PATH:-}
+      CONTENT_OCR_HEARTBEAT_FILE: /var/run/stock-content/ocr-heartbeat.json
       # These are fixed file-backed references; callers submit only an
       # allowlisted reference name, never a cookie, browser state, or locator.
       CONTENT_BILIBILI_CREDENTIAL_REF: ${CONTENT_BILIBILI_CREDENTIAL_REF:-bilibili-cookiefile}
@@ -114,6 +137,7 @@ services:
     tmpfs:
       - /work:uid=10001,gid=10001,mode=700
       - /data:uid=10001,gid=10001,mode=700
+    gpus: all
     deploy:
       resources:
         limits:
@@ -122,7 +146,7 @@ services:
           pids: 128
     volumes:
       - content-media:/data/content/raw
-      - content-worker-state:/var/run/stock-content
+      - ${CONTENT_OCR_HEARTBEAT_HOST_DIR:-./runtime/ocr}:/var/run/stock-content
       - ./fixtures:/fixtures:ro
     secrets:
       - xiaoe-storage-state
@@ -153,6 +177,8 @@ services:
       POSTGRES_PASSWORD: agent
     volumes:
       - agent-postgres:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${AGENT_POSTGRES_HOST_PORT:-15433}:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent -d stock_agent"]
       interval: 5s
@@ -181,10 +207,11 @@ services:
       CONTENT_SERVICE_URL: http://content-api:8100
       CONTENT_SERVICE_API_KEY_FILE: /run/secrets/content-service-api-key
       CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM: ${CONTENT_KNOWLEDGE_BUNDLE_CHECKSUM:-sha256:EBFD13B78622C3846890438A4FB3CB858278F571FDAB247CDD72EF18CA211621}
-      # Only this fixed local fixture adapter is installed. Production model
-      # providers remain unavailable until a separately reviewed adapter exists.
-      KNOWLEDGE_CONCLUSION_MODEL_ADAPTER: fixture
-      KNOWLEDGE_CONCLUSION_FIXTURE_MODEL_URL: http://fixture-model:9000/v1/chat/completions
+      # The real profile intentionally has no ambient provider adapter.  Its
+      # conclusion persists as deterministic FALLBACK until a reviewed model
+      # adapter exists; the E2E report records that fact.
+      KNOWLEDGE_CONCLUSION_MODEL_ADAPTER: ${KNOWLEDGE_CONCLUSION_MODEL_ADAPTER:-unavailable}
+      KNOWLEDGE_CONCLUSION_FIXTURE_MODEL_URL: ${KNOWLEDGE_CONCLUSION_FIXTURE_MODEL_URL:-}
       KNOWLEDGE_CONCLUSION_MODEL_API_KEY_FILE: /run/secrets/agent-model-api-key
       AGENT_GIT_COMMIT: ${STOCK_AGENT_GIT_COMMIT:-93d4701be24da95b17528872a4f49fdcaebc638e}
       KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK: ${KNOWLEDGE_CONCLUSION_DETERMINISTIC_FALLBACK:-true}
@@ -196,8 +223,8 @@ services:
         condition: service_completed_successfully
       content-api:
         condition: service_healthy
-      fixture-model:
-        condition: service_healthy
+    ports:
+      - "127.0.0.1:${AGENT_API_HOST_PORT:-18000}:8000"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/knowledge-conclusion-ready', timeout=3).read()"]
       interval: 5s
@@ -206,7 +233,7 @@ services:
 
   fixture-model:
     image: python:3.11-alpine
-    profiles: *knowledge-profiles
+    profiles: [fixture]
     command: ["python", "/fixtures/fixture_model.py"]
     user: "65534:65534"
     read_only: true
@@ -225,7 +252,6 @@ services:
 volumes:
   content-postgres:
   content-media:
-  content-worker-state:
   qdrant-data:
   agent-postgres:
 

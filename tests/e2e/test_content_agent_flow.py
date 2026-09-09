@@ -59,6 +59,10 @@ class _FixtureServer:
     def __init__(self, bundle: dict[str, Any], conclusion: dict[str, Any]) -> None:
         self.bundle, self.conclusion, self.content_bundle_calls = bundle, conclusion, 0
         self.bundle_calls_at_replay: list[int] = []
+        self.bundle_requests: list[dict[str, Any]] = []
+        self.conclusion_requests: list[dict[str, Any]] = []
+        self.last_ingestion: dict[str, Any] | None = None
+        self.task_succeeded_served = False
         self.ingestion_failure: tuple[int, str] | None = None
         self.task_failure: str | None = None
         self.content = self._start(self._content_handler())
@@ -90,15 +94,27 @@ class _FixtureServer:
                     assert self.headers["Authorization"] == "Bearer fixture-token" and self.headers["X-Caller-Service"] == "stock_agent"
                     if outer.ingestion_failure:
                         outer._reply(self, outer.ingestion_failure[0], {"code": outer.ingestion_failure[1]}); return
-                    outer._body(self); outer._reply(self, 200, {"task_id": "task-1", "status": "PENDING"}); return
+                    body = outer._body(self)
+                    if body.get("part") == 2:
+                        outer._reply(self, 409, {"code": "IDEMPOTENCY_KEY_CONFLICT"}); return
+                    outer.last_ingestion = body
+                    outer._reply(self, 200, {"task_id": "task-1", "status": "PENDING"}); return
                 if self.path == "/v1/content/knowledge-bundles":
-                    outer.content_bundle_calls += 1; outer._body(self); outer._reply(self, 200, outer.bundle); return
+                    outer.content_bundle_calls += 1
+                    body = outer._body(self)
+                    outer.bundle_requests.append(body)
+                    if body.get("max_items") == 19:
+                        outer._reply(self, 409, {"code": "IDEMPOTENCY_KEY_CONFLICT"}); return
+                    outer._reply(self, 200, outer.bundle); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
             def do_GET(self):
                 if self.path == "/v1/content/ingestions/task-1":
                     if outer.task_failure:
                         outer._reply(self, 200, {"task_id": "task-1", "status": "FAILED", "error": {"code": outer.task_failure}}); return
-                    outer._reply(self, 200, {"task_id": "task-1", "status": "SUCCEEDED", "result": {"content_snapshot_id": "snapshot-1", "source": {"canonical_url": "https://example.test/video?token=hidden"}, "transcript_quality": {"status": "PASS"}, "knowledge_quality": {"status": "PASS"}}}); return
+                    outer.task_succeeded_served = True
+                    outer._reply(self, 200, {"task_id": "task-1", "status": "SUCCEEDED", "result": {"content_snapshot_id": "snapshot-1", "video_id": "video-1", "source": {"canonical_url": "https://example.test/video?token=hidden"}, "transcript_quality": {"status": "PASS"}, "knowledge_quality": {"status": "PASS"}}}); return
+                if self.path == "/v1/content/knowledge-bundles/" + outer.bundle["bundle_id"]:
+                    outer._reply(self, 200, outer.bundle); return
                 outer._reply(self, 404, {"code": "NOT_FOUND"})
         return Handler
 
@@ -109,6 +125,7 @@ class _FixtureServer:
             def do_POST(self):
                 if self.path == "/api/v2/knowledge-conclusions":
                     body = outer._body(self)
+                    outer.conclusion_requests.append(body)
                     if body["query"] != outer.conclusion["query"]: outer._reply(self, 409, {"code": "IDEMPOTENCY_CONFLICT"}); return
                     outer._reply(self, 201, outer.conclusion); return
                 if self.path.endswith("/replay"):
@@ -143,8 +160,9 @@ def test_fixture_flow_has_redacted_evidence_and_no_content_replay(tmp_path: Path
     finally:
         stack.close()
     evidence = Path(report["evidence_dir"])
-    assert report["result"] == "PASS" and stack.content_bundle_calls == 2
-    assert stack.bundle_calls_at_replay == [2, 2], "replay must use the frozen bundle and not call Content"
+    assert report["result"] == "PASS" and stack.content_bundle_calls == 3
+    assert stack.bundle_calls_at_replay == [3, 3], "replay must use the frozen bundle and not call Content"
+    assert stack.last_ingestion and stack.last_ingestion["options"] == {"offline_fixture": True}
     assert {"provenance.json", "ingestion-request.json", "task-final.json", "source-public-metadata.json", "transcript-quality.json", "knowledge-quality.json", "snapshot-manifest.json", "knowledge-bundle.json", "conclusion.json", "citation-validation.json", "secret-scan.json", "junit.xml"} <= {item.name for item in evidence.iterdir()}
     assert "?token" not in (evidence / "source-public-metadata.json").read_text(encoding="utf-8")
     assert scan(evidence)["result"] == "PASS"
@@ -199,3 +217,89 @@ def test_replay_driver_rejects_shape_without_mode_specific_envelope() -> None:
 
     with pytest.raises(E2EError, match="REPLAY_ENVELOPE_INVALID"):
         _verify_replay_envelope("VERIFY_HASH", {"conclusion_id": "conclusion-1"}, conclusion_id="conclusion-1")
+
+
+def test_real_profile_omits_fixture_options_and_requires_persisted_readback(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    source_ref = tmp_path / "xiaoe-ref"; source_ref.write_text("p_demo/v_demo", encoding="utf-8")
+    content_db, agent_db = "postgresql+psycopg://readonly:readonly@127.0.0.1:15432/content", "postgresql+psycopg://readonly:readonly@127.0.0.1:15433/agent"
+    monkeypatch.setattr(
+        "scripts.e2e.run_content_agent_flow._database_readback",
+        lambda **_kwargs: {"content": {"task": 1}, "agent": {"run": 1}},
+    )
+    args = parser().parse_args([
+        "--content-url", f"http://127.0.0.1:{stack.content.server_port}",
+        "--agent-url", f"http://127.0.0.1:{stack.agent.server_port}",
+        "--content-token-file", str(tmp_path / "content.token"),
+        "--source-type", "xiaoe", "--source-ref-file", str(source_ref),
+        "--credential-ref", "xiaoe-storage-state", "--query", "核心逻辑、条件和风险是什么？",
+        "--evidence-dir", str(tmp_path / "real-evidence"), "--run-profile", "real",
+        "--content-database-url", content_db, "--agent-database-url", agent_db,
+        "--trace-id", "trace-real", "--ingestion-idempotency-key", "ingestion-real",
+        "--conclusion-idempotency-key", "conclusion-real",
+    ])
+    (tmp_path / "content.token").write_text("fixture-token", encoding="utf-8")
+    try:
+        report = run(args)
+    finally:
+        stack.close()
+    assert report["run_profile"] == "real"
+    assert stack.last_ingestion and "options" not in stack.last_ingestion
+    assert stack.last_ingestion["credential_ref"] == {"credential_ref": "xiaoe-storage-state", "provider": "file-secret"}
+    provenance = json.loads((tmp_path / "real-evidence" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["run_kind"] == "real-api-e2e" and provenance["database_readback"] == "PASS"
+
+
+def test_default_clocks_are_observed_only_after_content_snapshot_succeeds(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    observed = "2026-09-09T12:34:56Z"
+
+    def _clock_after_success() -> str:
+        assert stack.task_succeeded_served
+        return observed
+
+    monkeypatch.setattr("scripts.e2e.run_content_agent_flow._observed_as_of", _clock_after_success)
+    try:
+        run(_args(tmp_path, stack))
+    finally:
+        stack.close()
+    assert stack.bundle_requests[0]["business_as_of"] == observed
+    assert stack.bundle_requests[0]["knowledge_as_of"] == observed
+    assert stack.bundle_requests[0]["availability_as_of"] == observed
+    assert stack.conclusion_requests[0]["business_as_of"] == observed
+    provenance = json.loads((tmp_path / "evidence" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["frozen_clocks"] == {
+        "business_as_of": observed, "knowledge_as_of": observed,
+        "availability_as_of": observed, "source": "observed_after_content_success",
+    }
+
+
+def test_explicit_historical_as_of_is_preserved_for_pit_tests(tmp_path: Path, monkeypatch) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    monkeypatch.setattr("scripts.e2e.run_content_agent_flow._observed_as_of", lambda: pytest.fail("historical clock must not be replaced"))
+    args = _args(tmp_path, stack)
+    args.as_of = "2024-01-02T03:04:05+08:00"
+    try:
+        run(args)
+    finally:
+        stack.close()
+    expected = "2024-01-01T19:04:05Z"
+    assert stack.bundle_requests[0]["business_as_of"] == expected
+    assert stack.conclusion_requests[0]["availability_as_of"] == expected
+    provenance = json.loads((tmp_path / "evidence" / "provenance.json").read_text(encoding="utf-8"))
+    assert provenance["frozen_clocks"]["source"] == "operator_supplied"
+
+
+def test_v2_runner_keeps_producer_scope_and_consumer_contract_selection_aligned(tmp_path: Path) -> None:
+    bundle = _bundle(); stack = _FixtureServer(bundle, _conclusion(bundle))
+    args = _args(tmp_path, stack)
+    args.content_bundle_contract = "content-knowledge-bundle.v2"
+    try:
+        run(args)
+    finally:
+        stack.close()
+    producer_body = stack.bundle_requests[0]
+    consumer_payload = stack.conclusion_requests[0]
+    assert producer_body["contract_version"] == "content-knowledge-bundle.v2"
+    assert producer_body["subject_scope"] == "ALL_SUBJECTS"
+    assert consumer_payload["content_bundle_contract"] == producer_body["contract_version"]

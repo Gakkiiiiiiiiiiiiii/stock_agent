@@ -19,7 +19,10 @@ from app.application.knowledge_conclusion.bundle_validator import (
 
 def verify(payload: dict[str, Any]) -> dict[str, Any]:
     bundle = ContentKnowledgeBundleValidator().validate(payload)
-    return {"contract": "content-knowledge-bundle.v1", "bundle_id": bundle.bundle_id, "bundle_hash": bundle.bundle_hash,
+    contract = payload.get("contract")
+    if not isinstance(contract, str):
+        raise BundleValidationError("CONTENT_SCHEMA_INVALID")
+    return {"contract": contract, "bundle_id": bundle.bundle_id, "bundle_hash": bundle.bundle_hash,
             "content_snapshot_id": bundle.content_snapshot_id, "contract_checksum": bundle.contract_checksum,
             "citation_precision": 1.0, "hard_fact_grounding": 1.0, "result": "PASS"}
 

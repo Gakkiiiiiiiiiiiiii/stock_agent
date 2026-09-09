@@ -83,7 +83,7 @@ class KnowledgeConclusionRunService:
         # Do not use the resolved clock form for idempotency.  In particular,
         # omitted and explicitly-null clocks are a caller-visible raw input
         # and must stay reproducible after effective clocks are frozen.
-        raw_request = request.model_dump(mode="json")
+        raw_request = self._idempotency_request(request)
         raw_hash = canonical_hash({"request": raw_request, "conclusion_policy_version": policy_version})
         now = self.clock()
         effective = request.model_copy(update={
@@ -92,7 +92,7 @@ class KnowledgeConclusionRunService:
             "availability_as_of": request.availability_as_of or now,
         })
         effective_hash = canonical_hash({
-            "request": effective.model_dump(mode="json"),
+            "request": self._idempotency_request(effective),
             "conclusion_policy_version": policy_version,
         })
         return self.repository.reserve(KnowledgeConclusionRun(
@@ -102,6 +102,21 @@ class KnowledgeConclusionRunService:
             policy_version=policy_version, audit_metadata=audit_metadata,
             created_at=now, updated_at=now,
         ))
+
+    @staticmethod
+    def _idempotency_request(request: KnowledgeConclusionRequest) -> dict[str, Any]:
+        """Return the caller identity without breaking persisted v1 retries.
+
+        The v1 contract was implicit before this field existed.  Keeping that
+        default omitted makes a retry of an already frozen v1 run hash exactly
+        as it did at creation, while a v2 selection is explicit and therefore
+        cannot share an idempotency key with v1.  The fully typed request (with
+        its v1 default) is persisted independently for recovery.
+        """
+        payload = request.model_dump(mode="json")
+        if request.content_bundle_contract == "content-knowledge-bundle.v1":
+            payload.pop("content_bundle_contract", None)
+        return payload
 
     def request_bundle(self, conclusion_id: str) -> KnowledgeConclusionRun:
         run = self._run(conclusion_id)

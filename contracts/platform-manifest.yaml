@@ -65,6 +65,15 @@ contracts:
     canonicalization_version: content-bundle-c14n-v1
     deprecated_at: null
     sunset_at: null
+  content-knowledge-bundle.v2:
+    producer: stock_content
+    schema: contracts/fixtures/content-knowledge-bundle.v2.json
+    checksum: sha256:23c1d9c6be131cba8f270f01f7f45eb5d3148ee219edf43d689f1c5707115800
+    consumers: [stock_agent]
+    compatibility: locked
+    canonicalization_version: content-bundle-c14n-v2
+    deprecated_at: null
+    sunset_at: null
   replay.v2:
     producer: stock_agent
     schema: contracts/replay.py

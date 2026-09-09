@@ -92,12 +92,34 @@ def _text(record: Mapping[str, Any]) -> str:
 
 
 def _knowledge_text(record: Mapping[str, Any]) -> str:
-    """Producer claim fields available to a cited finding, in source order."""
-    values = [_text(record)]
+    """Producer claim fields available to a cited finding, in source order.
+
+    v2 distinguishes a factual claim from an attributed source opinion.  The
+    rendering keeps the proposition compact (no repeated ``课程提出`` framing),
+    but never strips the source attribution from opinions or forecasts.
+    """
+    statement = _text(record)
+    nature = str(record.get("claim_nature") or "").upper()
+    attribution = record.get("attribution")
+    if _requires_source_attribution(record) and isinstance(attribution, Mapping):
+        label = attribution.get("source_label")
+        if isinstance(label, str) and label.strip():
+            statement = f"{label.strip()}的{'预测' if 'FORECAST' in nature else '观点'}：{statement}"
+    values = [statement]
     for name in ("condition", "invalidation"):
         value = record.get(name)
         if isinstance(value, str) and value.strip():
             values.append(value)
+    detail = record.get("detail")
+    if isinstance(detail, Mapping):
+        values.extend(value.strip() for value in detail.values() if isinstance(value, str) and value.strip())
+    temporal = record.get("temporal")
+    if isinstance(temporal, Mapping):
+        if temporal.get("kind") == "FORECAST_TARGET":
+            label = temporal.get("label")
+            values.append(f"预测目标：{label}" if isinstance(label, str) and label.strip() else "预测目标时间未明确")
+        elif temporal.get("kind") == "UNKNOWN" and temporal.get("explicitly_unknown") is True:
+            values.append("时间未明确")
     return "\n".join(dict.fromkeys(value for value in values if value))
 
 
@@ -134,6 +156,7 @@ def bundle_graph(bundle: Mapping[str, Any]) -> tuple[KnowledgeRecord, ...]:
     flat = _as_records(bundle, "evidence", "evidences")
     bundle_source = bundle.get("source") if isinstance(bundle.get("source"), Mapping) else None
     result: list[KnowledgeRecord] = []
+    v2 = bundle.get("contract") == "content-knowledge-bundle.v2"
     for knowledge in _as_records(bundle, "knowledge", "knowledge_items", "items"):
         knowledge_id = _identifier(knowledge, "knowledge_id", "id")
         if not knowledge_id:
@@ -145,15 +168,21 @@ def bundle_graph(bundle: Mapping[str, Any]) -> tuple[KnowledgeRecord, ...]:
             evidence_id = _identifier(row, "evidence_id", "id")
             owner = _identifier(row, "knowledge_id", "owner_knowledge_id") or knowledge_id
             if evidence_id and owner == knowledge_id:
+                item_confidence = _number(knowledge, ("confidence",), 0.0) if v2 else 1.0
+                extraction = _number(row, ("extraction_confidence", "confidence"), item_confidence if v2 else 1.0)
+                verification = _number(row, ("verification_weight",), 0.0 if v2 else 1.0)
+                quality = _number(row, ("quality", "quality_score"), 0.0 if v2 else 1.0)
+                # A declared secondary source may be useful context, but it
+                # cannot be silently counted as a full independent support.
+                if v2 and row.get("ownership") == "SECONDARY":
+                    verification *= 0.5
                 evidence.append(EvidenceRecord(
                     evidence_id=evidence_id, knowledge_id=knowledge_id, text=_text(row),
                     source_identity=_source_identity(
                         row,
                         {**(bundle_source or {}), **knowledge},
                     ),
-                    extraction_confidence=_number(row, ("extraction_confidence", "confidence"), 1.0),
-                    verification_weight=_number(row, ("verification_weight", "verification"), 1.0),
-                    quality=_number(row, ("quality", "quality_score"), 1.0), raw=row,
+                    extraction_confidence=extraction, verification_weight=verification, quality=quality, raw=row,
                 ))
         result.append(KnowledgeRecord(knowledge_id, _knowledge_text(knowledge), tuple(evidence), knowledge))
     return tuple(result)
@@ -176,6 +205,7 @@ def ground_finding(bundle: Mapping[str, Any], finding: Finding) -> GroundedFindi
     if any(identifier not in by_knowledge for identifier in finding.knowledge_ids):
         raise GroundingError(GroundingReason.CITATION_INVALID, "cited knowledge is absent")
     cited_knowledge = tuple(by_knowledge[identifier] for identifier in finding.knowledge_ids)
+    _validate_cited_semantics(cited_knowledge, finding)
     by_evidence = {row.evidence_id: row for knowledge in cited_knowledge for row in knowledge.evidence}
     if any(identifier not in by_evidence for identifier in finding.evidence_ids):
         raise GroundingError(GroundingReason.CITATION_INVALID, "evidence is absent or owned by uncited knowledge")
@@ -194,6 +224,36 @@ def ground_finding(bundle: Mapping[str, Any], finding: Finding) -> GroundedFindi
     if extra:
         raise GroundingError(GroundingReason.CONCLUSION_UNGROUNDED, "unsupported hard facts: " + ", ".join(sorted(extra)))
     return GroundedFinding(finding, cited_knowledge, cited_evidence, stated)
+
+
+def _validate_cited_semantics(knowledge: Sequence[KnowledgeRecord], finding: Finding) -> None:
+    """Do not turn source views or future/unknown timing into settled facts."""
+    rendered = finding.text
+    for item in knowledge:
+        attribution = item.raw.get("attribution")
+        if _requires_source_attribution(item.raw):
+            label = attribution.get("source_label") if isinstance(attribution, Mapping) else None
+            if not isinstance(label, str) or not label.strip() or label.strip() not in rendered:
+                raise GroundingError(GroundingReason.CONCLUSION_UNGROUNDED, "attributed source claim lost its attribution")
+        temporal = item.raw.get("temporal")
+        if isinstance(temporal, Mapping):
+            kind = temporal.get("kind")
+            if kind == "UNKNOWN" and temporal.get("explicitly_unknown") is not True:
+                raise GroundingError(GroundingReason.CONCLUSION_UNGROUNDED, "unknown time was not explicit")
+            if kind == "FORECAST_TARGET":
+                label = temporal.get("label")
+                if not ("预测" in rendered or (isinstance(label, str) and label and label in rendered)):
+                    raise GroundingError(GroundingReason.CONCLUSION_UNGROUNDED, "forecast target rendered as a settled fact")
+
+
+def _requires_source_attribution(record: Mapping[str, Any]) -> bool:
+    nature = str(record.get("claim_nature") or "").upper()
+    if nature in {"OPINION", "FORECAST", "CAUSAL_THESIS", "SOURCE_OPINION", "SOURCE_FORECAST"}:
+        return True
+    return (
+        record.get("source_grade") in {"SECONDARY", "UNKNOWN"}
+        and record.get("external_truth_status") != "EXTERNALLY_VERIFIED"
+    )
 
 
 def ground_findings(bundle: Mapping[str, Any], findings: Sequence[Finding]) -> tuple[GroundedFinding, ...]:
@@ -290,6 +350,8 @@ def _producer_quote(evidence: EvidenceRecord) -> str:
     quote = evidence.raw.get("quote")
     if not isinstance(quote, str) or not quote:
         quote = evidence.raw.get("text")
+    if not isinstance(quote, str) or not quote:
+        quote = evidence.raw.get("content")
     if not isinstance(quote, str) or not quote:
         raise GroundingError(GroundingReason.CITATION_INVALID, "producer evidence quote missing")
     return quote

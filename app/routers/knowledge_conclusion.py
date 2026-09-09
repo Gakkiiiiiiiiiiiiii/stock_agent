@@ -28,7 +28,10 @@ from app.domain.knowledge_conclusion import (
     revalidate_public_conclusion,
 )
 from app.domain.knowledge_conclusion_run import KnowledgeConclusionAuditMetadata
-from app.ports.content_knowledge import KnowledgeBundleRequest
+from app.ports.content_knowledge import (
+    CONTENT_KNOWLEDGE_CONTRACT,
+    KnowledgeBundleRequest,
+)
 from app.ports.knowledge_conclusion_repository import (
     KnowledgeConclusionIdempotencyConflict,
 )
@@ -44,6 +47,13 @@ class _Request(BaseModel):
     business_as_of: datetime | None = None
     knowledge_as_of: datetime | None = None
     availability_as_of: datetime | None = None
+    # Keep v1 as the public default for existing callers.  Callers that need
+    # the reviewed multi-topic, multimodal projection opt into v2 explicitly;
+    # the selection is frozen in the upstream request and therefore in the
+    # returned Bundle identity, rather than inferred after Content replies.
+    content_bundle_contract: Literal[
+        "content-knowledge-bundle.v1", "content-knowledge-bundle.v2"
+    ] = CONTENT_KNOWLEDGE_CONTRACT
 
 
 class _ReplayRequest(BaseModel):
@@ -141,6 +151,10 @@ def create_conclusion(
                 content_snapshot_id=effective.content_snapshot_id, query=effective.query,
                 symbol=effective.symbol or "UNSPECIFIED", business_as_of=effective.business_as_of,
                 knowledge_as_of=effective.knowledge_as_of, availability_as_of=effective.availability_as_of,
+                # The contract selection is part of the persisted request.
+                # Retried work therefore uses the original selection rather
+                # than a newly supplied body field or a refetched default.
+                contract_version=effective.content_bundle_contract,
             ), trace=_trace(request))
             runs.freeze_bundle(run.conclusion_id, ContentKnowledgeBundleValidator().freeze_for_conclusion(bundle))
         if not _fallback_enabled() and getattr(model, "is_available", False) is not True:

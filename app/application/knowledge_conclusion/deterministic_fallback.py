@@ -17,6 +17,7 @@ from app.domain.knowledge_conclusion import (
     KnowledgeConclusion,
     KnowledgeConclusionRequest,
     ModelIdentity,
+    prohibited_action_language,
 )
 
 
@@ -33,8 +34,20 @@ def aggregate_bundle_findings(bundle: dict[str, object]) -> tuple[Finding, ...]:
         if not knowledge.evidence or not knowledge.text.strip():
             continue
         try:
+            # Keep source detail when it is display-safe.  Procedural source
+            # language that would read as a trading instruction remains in the
+            # immutable cited Bundle but cannot become an Agent conclusion.
+            display = "\n".join(
+                line for line in knowledge.text.splitlines() if prohibited_action_language(line) is None
+            ).strip()
+            if not display:
+                continue
             findings.append(Finding(
-                text=knowledge.text.split("\n", 1)[0],
+                # Retain producer-provided explanation/procedure/conditions in
+                # the cited finding.  The compact atomic proposition remains
+                # first, while v2 attribution is already rendered by the
+                # grounding projection rather than invented by the Agent.
+                text=display,
                 knowledge_ids=(knowledge.knowledge_id,),
                 evidence_ids=tuple(item.evidence_id for item in knowledge.evidence),
                 confidence=min(1.0, max(0.0, _raw_confidence(knowledge))),

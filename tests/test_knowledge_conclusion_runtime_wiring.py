@@ -40,6 +40,7 @@ from app.domain.knowledge_conclusion import KnowledgeConclusionRequest
 from app.domain.knowledge_conclusion_run import FrozenBundle
 from app.ports.content_knowledge import (
     CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM,
+    CONTENT_KNOWLEDGE_V2_SCHEMA_CHECKSUM,
     ContentKnowledgeBundle,
 )
 from app.ports.knowledge_conclusion_model import (
@@ -76,6 +77,16 @@ def test_content_readiness_accepts_only_an_explicit_checksum_value() -> None:
     assert _content_contract_checksum({"components": {"contract_checksum": {"ready": True}}}) is None
     assert _content_contract_checksum({"ready": True}) is None
     assert _content_contract_checksum({"contract_checksum": "sha256:CC9C3D52602D83A7D77800F4E18162D2066D727E27D3925A0A8789181929D198"}) != CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM
+
+
+def test_content_readiness_accepts_the_locked_v2_checksum_during_v1_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+    readiness = KnowledgeConclusionReadiness(probes={
+        "profile": lambda: "ok", "schema": lambda: "ok", "repository": lambda: "ok",
+        "content_service": lambda: "ok", "model": lambda: "degraded", "clock": lambda: "ok",
+    })
+    monkeypatch.setattr(readiness, "_content_health", lambda: {"contract_checksum": CONTENT_KNOWLEDGE_V2_SCHEMA_CHECKSUM})
+    _ready, checks = readiness.report()
+    assert checks["content_contract"] == "ok"
 
 
 def test_content_readiness_mismatch_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

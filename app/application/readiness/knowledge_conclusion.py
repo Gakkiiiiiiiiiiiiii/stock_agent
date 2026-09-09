@@ -10,7 +10,10 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.domain.capability_profile import CapabilityProfile, resolve_capability_profile
-from app.ports.content_knowledge import CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM
+from app.ports.content_knowledge import (
+    CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM,
+    CONTENT_KNOWLEDGE_V2_SCHEMA_CHECKSUM,
+)
 from storage.db import session_scope
 
 
@@ -70,7 +73,13 @@ class KnowledgeConclusionReadiness:
     def _content_contract(self) -> str:
         payload = self._content_health()
         checksum = _content_contract_checksum(payload)
-        return "ok" if checksum == CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM else "failed"
+        # Content v2 is an explicitly locked, stricter bundle projection.
+        # Keep v1 deployments ready during the compatibility window; the
+        # conclusion request itself freezes which version was actually used.
+        return "ok" if checksum in {
+            CONTENT_KNOWLEDGE_SCHEMA_CHECKSUM,
+            CONTENT_KNOWLEDGE_V2_SCHEMA_CHECKSUM,
+        } else "failed"
 
     @staticmethod
     def _model() -> str:

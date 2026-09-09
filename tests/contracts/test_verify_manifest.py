@@ -77,3 +77,16 @@ def test_current_contract_manifest_verifies() -> None:
     manifest = REPOSITORY_ROOT / "contracts" / "platform-manifest.yaml"
 
     assert verify(REPOSITORY_ROOT, manifest) == []
+
+
+def test_content_knowledge_bundle_v2_consumer_manifest_is_checksum_locked() -> None:
+    manifest = yaml.safe_load((REPOSITORY_ROOT / "contracts" / "platform-manifest.yaml").read_text(encoding="utf-8"))
+    entry = manifest["contracts"]["content-knowledge-bundle.v2"]
+
+    assert entry["producer"] == "stock_content"
+    assert entry["consumers"] == ["stock_agent"]
+    assert entry["canonicalization_version"] == "content-bundle-c14n-v2"
+    # This is the upstream Content schema lock.  The local vendored consumer
+    # schema is synchronized in a separate packet, so do not accidentally
+    # rewrite the producer declaration to match an older local copy here.
+    assert entry["checksum"].casefold() == "sha256:23c1d9c6be131cba8f270f01f7f45eb5d3148ee219edf43d689f1c5707115800"

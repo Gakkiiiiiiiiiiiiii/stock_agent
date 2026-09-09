@@ -86,9 +86,28 @@ def test_reserve_freezes_default_clocks_before_retry_hashing() -> None:
     assert first.request.knowledge_as_of == NOW
     assert first.request.availability_as_of == NOW
     assert first.raw_request["business_as_of"] is None
+    assert "content_bundle_contract" not in first.raw_request
     assert first.raw_request_hash != first.effective_request_hash
     assert first.raw_request_hash == canonical_hash({"request": first.raw_request, "conclusion_policy_version": first.policy_version})
-    assert first.effective_request_hash == canonical_hash({"request": first.request.model_dump(mode="json"), "conclusion_policy_version": first.policy_version})
+    # v1 was implicit before the contract selector was added.  Its default is
+    # intentionally omitted from the identity so N-1 frozen rows can retry.
+    effective_identity = first.request.model_dump(mode="json")
+    effective_identity.pop("content_bundle_contract")
+    assert first.effective_request_hash == canonical_hash({"request": effective_identity, "conclusion_policy_version": first.policy_version})
+
+
+def test_reserve_rejects_a_contract_switch_but_retries_v2() -> None:
+    service, _ = _service()
+    v2 = KnowledgeConclusionRequest(
+        content_snapshot_id="snapshot-1",
+        query="内容支持什么研究结论？",
+        content_bundle_contract="content-knowledge-bundle.v2",
+    )
+    first = service.reserve(request=v2, idempotency_key="bundle-contract")
+    assert service.reserve(request=v2, idempotency_key="bundle-contract") == first
+    assert first.raw_request["content_bundle_contract"] == "content-knowledge-bundle.v2"
+    with pytest.raises(KnowledgeConclusionIdempotencyConflict, match="IDEMPOTENCY_KEY_CONFLICT"):
+        service.reserve(request=_request(), idempotency_key="bundle-contract")
 
 
 def test_crash_seams_resume_without_refetch_or_second_result_effect() -> None:
